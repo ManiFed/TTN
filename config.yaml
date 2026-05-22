@@ -1,0 +1,31 @@
+alpaca:
+  discovery_port: 32227        # UDP broadcast port defined by ALPACA spec
+  discovery_timeout: 5         # seconds to wait for discovery responses
+  api_version: 1
+
+devices:
+  telescope:
+    enabled: true
+    device_number: 0
+  camera:
+    enabled: true
+    device_number: 0
+  focuser:
+    enabled: false
+    device_number: 0
+  filterwheel:
+    enabled: false
+    device_number: 0
+
+telescope:
+  slew_ra: 10.6833             # RA in decimal hours  (example: Andromeda)
+  slew_dec: 41.2692            # Dec in decimal degrees
+  tracking_rate: 0             # 0=Sidereal, 1=Lunar, 2=Solar, 3=King
+
+camera:
+  exposure_duration: 1.0       # seconds
+  binning: 1
+
+logging:
+  level: INFO
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
