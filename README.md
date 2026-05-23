@@ -88,40 +88,52 @@ logging:
   format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 ```
 
-### 3. Run the Skeleton
+### 3. Run Commands
+
+`main.py` is a CLI — each invocation runs one command and exits. Commands are mutually exclusive.
 
 ```bash
-python main.py
+# Scan for ALPACA servers on the LAN
+python main.py --discover
+
+# Connect to all enabled devices and confirm they respond
+python main.py --activate
+
+# Print current telescope position and state
+python main.py --status
+
+# Slew to RA (decimal hours) and Dec (decimal degrees)
+python main.py --slew 8.13 70.37
+
+# Park the telescope
+python main.py --park
+
+# Take a camera exposure (seconds)
+python main.py --expose 5.0
 ```
 
-**What happens:**
+**What each command does:**
 
-1. **Discovery**: Broadcasts `alpacadiscovery1` on port 32227 (UDP) and waits up to 5 seconds for responses.
-2. **Server selection**: Uses the first responding server (e.g., `192.168.1.100:11111`).
-3. **Connection**: Connects to each enabled device (telescope, camera, etc.) in sequence.
-4. **Smoke test**:
-   - Unparks the telescope (if enabled)
-   - Enables tracking (sidereal rate)
-   - Slews to the RA/Dec from `config.yaml`
-   - Takes a short exposure with the camera
-   - Parks the telescope
-5. **Cleanup**: Disconnects all devices gracefully, even on error or Ctrl-C.
+| Command | Behavior |
+|---|---|
+| `--discover` | Broadcasts discovery, prints all found servers. No device connections. |
+| `--activate` | Connects to all enabled devices, confirms they respond, then disconnects. |
+| `--status` | Connects to the telescope, prints RA/Dec/tracking/parked/slewing state. |
+| `--slew RA DEC` | Unparks, enables tracking, slews to the given coordinates, then disconnects. |
+| `--park` | Connects to the telescope and parks it. |
+| `--expose N` | Connects to the camera and takes an N-second light exposure. |
 
-**Sample output:**
+Every command discovers the server automatically, connects only what it needs, and disconnects cleanly on exit or error.
+
+**Sample output (`--slew 8.13 70.37`):**
 ```
 2026-05-22 14:35:22,123 [INFO] alpaca.discovery: Broadcasting ALPACA discovery on port 32227
 2026-05-22 14:35:24,456 [INFO] alpaca.discovery: Discovered ALPACA server at 192.168.1.100:11111
 2026-05-22 14:35:24,500 [INFO] main: Using server 192.168.1.100:11111
 2026-05-22 14:35:24,700 [INFO] alpaca.telescope: Telescope connected: Simulator Telescope
-2026-05-22 14:35:24,850 [INFO] alpaca.camera: Camera connected: Simulator Camera
 2026-05-22 14:35:25,100 [INFO] alpaca.telescope: Telescope unparked
-2026-05-22 14:35:25,300 [INFO] alpaca.telescope: Slewing to RA=10.6833 h  Dec=41.2692 °
-2026-05-22 14:35:27,500 [INFO] alpaca.telescope: Slew complete — RA=10.6833 h  Dec=41.2692 °
-2026-05-22 14:35:27,700 [INFO] alpaca.camera: Starting 1.00 s light exposure
-2026-05-22 14:35:28,900 [INFO] alpaca.camera: Exposure complete — image ready for download
-2026-05-22 14:35:29,100 [INFO] alpaca.telescope: Parking telescope…
-2026-05-22 14:35:31,300 [INFO] alpaca.telescope: Telescope parked
-2026-05-22 14:35:31,400 [INFO] main: Done.
+2026-05-22 14:35:25,300 [INFO] alpaca.telescope: Slewing to RA=8.1300 h  Dec=70.3700 °
+2026-05-22 14:35:27,500 [INFO] alpaca.telescope: Slew complete — RA=8.1300 h  Dec=70.3700 °
 ```
 
 ---
@@ -193,18 +205,15 @@ Owns all device objects and their lifecycle:
 - `disconnect_all()`: gracefully disconnects each device, catches exceptions so one failure doesn't break cleanup
 
 #### `main.py`
-Orchestrates the full session:
-1. Load `config.yaml`
-2. Set up logging
-3. Broadcast discovery; fail with a clear message if no servers respond
-4. Build DeviceManager with the first server
-5. Call `connect_all()` to establish connections
-6. Run `run_smoke_test()`: unpark → track → slew → expose → park
-7. Catch `KeyboardInterrupt` (Ctrl-C) and unhandled exceptions gracefully
-8. Always call `disconnect_all()` in the `finally` block
+CLI entry point built with `argparse`. Each flag maps to a single command function:
+- `--discover` → `cmd_discover()`: runs discovery only, no device connections
+- `--activate` → `cmd_activate()`: connects all enabled devices and disconnects
+- `--status` → `cmd_status()`: prints telescope RA/Dec/tracking/parked state
+- `--slew RA DEC` → `cmd_slew()`: unpark → tracking on → slew → disconnect
+- `--park` → `cmd_park()`: connects telescope and parks it
+- `--expose N` → `cmd_expose()`: connects camera and takes an N-second exposure
 
-**Why `finally`?**  
-Ensures devices are disconnected even if the user hits Ctrl-C or an exception occurs. This prevents dangling connections that could lock the server.
+Every command calls `disconnect_all()` in a `finally` block so devices are never left dangling, even on error or Ctrl-C.
 
 ---
 
@@ -264,13 +273,13 @@ Most ALPACA servers have only one of each device (number 0). If yours supports m
 2. Subclass or wrap `AlpacaClient` with your device-specific methods
 3. Add it to `DeviceManager.connect_all()` and `disconnect_all()`
 4. Add a config entry in `config.yaml`
-5. Use it in `run_smoke_test()` in `main.py`
+5. Add a `--mydevice-action` flag and `cmd_mydevice_action()` function in `main.py`
 
 ### Adding Error Recovery
 Wrap device calls in try-except blocks and retry with exponential backoff. The `AlpacaClient.wait_for()` method is a good model.
 
 ### Adding Automated Sequences
-Replace `run_smoke_test()` with your own function, e.g., `run_imaging_sequence()` that coordinates the telescope, camera, focuser, and filter wheel for a full observation.
+Add a new `--sequence` flag and a `cmd_sequence()` function in `main.py` that coordinates multiple devices — e.g., slew, focus, filter change, then expose.
 
 ### Adding a Web Dashboard
 Use Flask or FastAPI to wrap `DeviceManager` and expose its state via REST or WebSocket. The discovery and device modules are already modular enough for this.

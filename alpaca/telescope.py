@@ -63,32 +63,35 @@ class Telescope:
 
         self._c._put("slewtocoordinatesasync", timeout=120, RightAscension=ra, Declination=dec)
 
-        # Some drivers return from the async PUT before the mount has begun
-        # moving, so is_slewing() may read False for a brief window right after
-        # the command is accepted.  Wait up to 5 s for slewing to go True first;
-        # if it never does the mount either didn't move or was already there.
-        slew_started = self._c.wait_for_either(
-            lambda: self.is_slewing(), timeout=5, label="slew start"
-        )
-        if not slew_started:
-            end_ra, end_dec = self.ra(), self.dec()
-            logger.warning(
-                "Mount never reported Slewing=True — it may not have moved. "
-                "Position after command: RA=%.4f h  Dec=%.4f °", end_ra, end_dec
-            )
-            return
+        # Two driver behaviours exist:
+        #   Blocking PUT  — server holds the connection open until the mount
+        #                   stops, then responds.  is_slewing() is already False
+        #                   when we reach here; nothing more to wait for.
+        #   Truly-async   — server responds immediately and the mount starts
+        #                   moving.  is_slewing() is True; wait for it to clear.
+        if self.is_slewing():
+            self._c.wait_for(lambda: not self.is_slewing(), timeout=120, label="slew complete")
 
-        self._c.wait_for(lambda: not self.is_slewing(), timeout=120, label="slew complete")
         end_ra, end_dec = self.ra(), self.dec()
-        logger.info(
-            "Slew complete — RA=%.4f h  Dec=%.4f °  (ΔRA=%.4f h  ΔDec=%.4f °)",
-            end_ra, end_dec, end_ra - start_ra, end_dec - start_dec,
-        )
+        delta_ra, delta_dec = end_ra - start_ra, end_dec - start_dec
+
+        # Warn if position barely changed (threshold: ~4 arcsec in RA, 0.01° in Dec)
+        if abs(delta_ra) < 0.001 and abs(delta_dec) < 0.01:
+            logger.warning(
+                "Slew reported complete but position barely changed "
+                "(ΔRA=%+.4f h  ΔDec=%+.4f °) — target may already have been reached.",
+                delta_ra, delta_dec,
+            )
+        else:
+            logger.info(
+                "Slew complete — RA=%.4f h  Dec=%.4f °  (ΔRA=%+.4f h  ΔDec=%+.4f °)",
+                end_ra, end_dec, delta_ra, delta_dec,
+            )
 
     def park(self) -> None:
         logger.info("Parking telescope…")
-        self._c._put("park", timeout=180)
-        self._c.wait_for(self.is_parked, timeout=180, label="park complete")
+        self._c._put("park", timeout=300)
+        self._c.wait_for(self.is_parked, timeout=300, label="park complete")
         logger.info("Telescope parked")
 
     def unpark(self) -> None:

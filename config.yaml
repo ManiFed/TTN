@@ -18,8 +18,8 @@ devices:
     device_number: 0
 
 telescope:
-  slew_ra: 23.6833             # RA in decimal hours  (example: Andromeda)
-  slew_dec: 80.2692            # Dec in decimal degrees
+  slew_ra: 4.6833             # RA in decimal hours  (example: Andromeda)
+  slew_dec: 48.2692            # Dec in decimal degrees
   tracking_rate: 0             # 0=Sidereal, 1=Lunar, 2=Solar, 3=King
 
 camera:
