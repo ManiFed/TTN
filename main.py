@@ -8,6 +8,7 @@ smoke-test sequence (slew + short exposure), then disconnects cleanly.
 
 import logging
 import sys
+import time
 
 import yaml
 
@@ -40,6 +41,9 @@ def run_smoke_test(manager: DeviceManager, cfg: dict) -> None:
             ra=tel_cfg.get("slew_ra", 0.0),
             dec=tel_cfg.get("slew_dec", 0.0),
         )
+        logger.info("Holding at destination for 3 minutes — check your pier cam…")
+        time.sleep(180)
+        logger.info("Hold complete, continuing.")
 
     if cam is not None:
         cam_cfg = cfg.get("camera", {})
