@@ -674,10 +674,22 @@ body {
 .main {
   flex: 1;
   display: grid;
-  grid-template-rows: auto 1fr auto 180px;
+  grid-template-rows: auto 1fr auto;
   grid-template-columns: 1fr 1fr;
   gap: 1px;
   background: var(--border);
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Log footer (pinned to bottom) ── */
+.log-footer {
+  flex-shrink: 0;
+  height: 200px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   min-height: 0;
 }
@@ -794,12 +806,11 @@ body {
 }
 .img-meta span { color: var(--text); }
 
-/* ── Log panel (row 4, full width) ── */
+/* ── Log panel (inside footer) ── */
 .log-panel {
-  grid-column: 1 / -1;
-  background: var(--surface);
   display: flex; flex-direction: column;
   overflow: hidden; min-height: 0;
+  flex: 1;
 }
 .log-hdr {
   padding: 6px 20px; border-bottom: 1px solid var(--border);
@@ -964,7 +975,11 @@ body {
     </div>
   </div>
 
-  <!-- Log panel -->
+
+</div><!-- /main -->
+
+<!-- Log footer (pinned to bottom) -->
+<div class="log-footer">
   <div class="log-panel">
     <div class="log-hdr">
       <div class="panel-label" style="margin:0">Live Log</div>
@@ -975,8 +990,7 @@ body {
     </div>
     <div class="log-body" id="logBody"></div>
   </div>
-
-</div><!-- /main -->
+</div>
 
 <!-- Discovery overlay -->
 <div class="overlay hidden" id="overlay">
