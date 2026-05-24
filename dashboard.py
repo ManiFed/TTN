@@ -513,12 +513,25 @@ def api_discover():
     return jsonify({"servers": servers})
 
 
+_SEESTAR_AP_IP = "192.168.4.1"
+
+
 @app.route("/api/connect", methods=["POST"])
 def api_connect():
     global _tel, _cam
     data    = request.get_json(force=True) or {}
     host    = data.get("host", "")
     port    = int(data.get("port", 11111))
+
+    if host == _SEESTAR_AP_IP:
+        return jsonify({
+            "error": (
+                "Seestar is in Access Point (hotspot) mode — ALPACA is not active. "
+                "Connect the Seestar to your home Wi-Fi via Station Mode in the Seestar "
+                "App, then reconnect your computer to the same network and try again."
+            )
+        }), 400
+
     cfg     = _load_config()
     api_ver = cfg.get("alpaca", {}).get("api_version", 1)
     devices = cfg.get("devices", {})
