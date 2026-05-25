@@ -1891,7 +1891,7 @@ async function apiSlew() {
   const ra  = parseFloat(document.getElementById("slewRA").value);
   const dec = parseFloat(document.getElementById("slewDec").value);
   if (isNaN(ra) || isNaN(dec)) { alert("Enter valid RA (h) and Dec (°) values."); return; }
-  const btn = document.getElementById("btnSlew");
+  const btn = document.getElementById("btnModalSlew");
   btn.disabled = true; btn.textContent = "Slewing…";
   try {
     const r = await fetch("/api/slew", {
