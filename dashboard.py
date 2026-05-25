@@ -1506,6 +1506,9 @@ body {
 </div>
 
 <script>
+
+let _nudgeStep = 60;
+
 // ── Status polling ──────────────────────────────────────────────────────────
 
 async function poll() {
