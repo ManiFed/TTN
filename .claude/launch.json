@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "dashboard",
-      "runtimeExecutable": "python3",
+      "runtimeExecutable": "venv/bin/python3",
       "runtimeArgs": ["dashboard.py"],
       "port": 5173
     }
