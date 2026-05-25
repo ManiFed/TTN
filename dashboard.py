@@ -1871,11 +1871,8 @@ async function apiTracking(enabled) {
   } catch (e) { alert("Set tracking failed: " + e.message); }
 }
 
-<<<<<<< HEAD
-=======
 let _nudgeStep = 60;
 
->>>>>>> 4ad6ebf9b141057b9d8ba8c958a59cf40c931c1a
 function setNudgeStep(arcsec) {
   _nudgeStep = arcsec;
   ["10","60","300","900"].forEach(v => {
