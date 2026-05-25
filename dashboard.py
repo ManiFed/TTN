@@ -1977,7 +1977,7 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
 
 // ── Discovery overlay ────────────────────────────────────────────────────────
 
-function showDiscover()  { document.getElementById("overlay").classList.remove("hidden"); }
+function showDiscover()  { document.getElementById("overlay").classList.remove("hidden"); doScan(); }
 function hideDiscover()  { document.getElementById("overlay").classList.add("hidden"); }
 
 async function doScan() {
