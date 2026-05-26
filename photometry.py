@@ -204,7 +204,8 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
 
     # ── Step 5: Aperture photometry ───────────────────────────────────────────
     positions = [(tx, ty)] + [(cs["x_px"], cs["y_px"]) for cs in comp_in_field]
-    fluxes, flux_errors = _aperture_photometry(data, positions, ap_r, ann_in, ann_out)
+    read_noise = float(phot_cfg.get("read_noise", header.get("RDNOISE", 5.0)))
+    fluxes, flux_errors = _aperture_photometry(data, positions, ap_r, ann_in, ann_out, read_noise)
     if fluxes is None:
         logger.error("Aperture photometry failed")
         return None
@@ -580,6 +581,7 @@ def _aperture_photometry(
     ap_radius: float,
     ann_inner: float,
     ann_outer: float,
+    read_noise: float = 5.0,
 ) -> tuple:
     """
     Measure background-subtracted flux at each position.
@@ -614,7 +616,7 @@ def _aperture_photometry(
         net_flux   = raw_sum - bkg_per_px * ap_area
 
         # Noise model: shot noise (net signal + sky) + read noise per pixel
-        read_noise_adu = 5.0  # conservative Seestar estimate
+        read_noise_adu = read_noise
         flux_var = (
             np.maximum(net_flux, 0)               # shot noise from source
             + ap_area * bkg_per_px                # shot noise from sky

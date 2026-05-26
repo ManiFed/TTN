@@ -45,11 +45,23 @@ image_watcher:
   watch_path: "/mnt/seestar"      # local mount point of the SMB share
   debounce_delay: 2.0             # seconds to wait after last write before processing
 
+observatory:
+  name: ""                        # e.g. "Boundless Skies Node 001"
+  latitude: ~                     # decimal degrees N  (also used by safety.observer)
+  longitude: ~                    # decimal degrees E  (negative = West)
+  elevation: 0.0                  # metres above sea level
+  telescope: "ZWO Seestar S50"
+  instrument: "ZWO Seestar S50 IMX462"
+  observer: ""                    # AAVSO observer code or full name
+
 photometry:
   enabled: false                  # set true to run pipeline on each new FITS file
 
   node_id: "node_001"             # unique identifier for this node (set before joining network)
   filter_name: "CV"               # AAVSO filter code: CV=broadband, V=Johnson-V, B=Johnson-B
+
+  gain: 1.0                       # detector gain e-/ADU  (Seestar S50 ≈ 1.0)
+  read_noise: 5.0                 # read noise ADU  (conservative Seestar estimate)
 
   # Target override — if set, overrides FITS header OBJECT/RA/DEC
   # Leave blank to use the header values (normal operation once Seestar is scheduled)
@@ -76,6 +88,11 @@ photometry:
   snr_threshold:        20        # minimum signal-to-noise ratio
   max_uncertainty:      0.3       # maximum magnitude uncertainty
   max_airmass:          3.0
+
+  # FITS export — save enhanced copies with full observatory/processing headers
+  fits_export:
+    enabled: true                 # write exported FITS after each successful photometry run
+    export_dir: "fits_export"     # directory for exported files (created automatically)
 
 aavso:
   observer_code: ""             # AAVSO observer code (OBSCODE), e.g. "MXYZ"  ← required
