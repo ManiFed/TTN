@@ -2101,9 +2101,9 @@ body {
         <input class="inp" id="catalogSearch" type="text" placeholder="Search M42, Andromeda, nebula…"
           autocomplete="off" spellcheck="false"
           oninput="catalogFilter()" onfocus="catalogFilter()" onkeydown="catalogKeyNav(event)">
-        <div id="catalogDropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:200;
-          background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;
-          max-height:200px;overflow-y:auto;margin-top:2px;box-shadow:0 4px 16px rgba(0,0,0,0.5);"></div>
+        <div id="catalogDropdown" style="display:none;position:fixed;z-index:9999;
+          background:#161b22;border:1px solid var(--border);border-radius:6px;
+          max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,0.7);"></div>
       </div>
     </div>
 
@@ -3363,8 +3363,9 @@ const MESSIER_CATALOG = [
 let _catalogIdx = -1;
 
 function catalogFilter() {
-  const q   = document.getElementById("catalogSearch").value.trim().toLowerCase();
-  const dd  = document.getElementById("catalogDropdown");
+  const input = document.getElementById("catalogSearch");
+  const q     = input.value.trim().toLowerCase();
+  const dd    = document.getElementById("catalogDropdown");
   _catalogIdx = -1;
 
   const matches = q.length === 0 ? [] : MESSIER_CATALOG.filter(o => {
@@ -3373,6 +3374,11 @@ function catalogFilter() {
   }).slice(0, 30);
 
   if (matches.length === 0) { dd.style.display = "none"; return; }
+
+  const r = input.getBoundingClientRect();
+  dd.style.top   = (r.bottom + 2) + "px";
+  dd.style.left  = r.left + "px";
+  dd.style.width = r.width + "px";
 
   dd.innerHTML = matches.map((o, i) => {
     const label = o.name ? `${o.id} — ${o.name}` : o.id;
