@@ -2094,6 +2094,19 @@ body {
       </div>
     </div>
 
+    <!-- Object Catalog Search -->
+    <div class="ctrl-group">
+      <div class="panel-label">Object Catalog</div>
+      <div style="position:relative;">
+        <input class="inp" id="catalogSearch" type="text" placeholder="Search M42, Andromeda, nebula…"
+          autocomplete="off" spellcheck="false"
+          oninput="catalogFilter()" onfocus="catalogFilter()" onkeydown="catalogKeyNav(event)">
+        <div id="catalogDropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:200;
+          background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;
+          max-height:200px;overflow-y:auto;margin-top:2px;box-shadow:0 4px 16px rgba(0,0,0,0.5);"></div>
+      </div>
+    </div>
+
     <!-- Slew -->
     <div class="ctrl-group">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -3231,6 +3244,193 @@ function apiMoveAxis(ra_rate, dec_rate) {
     body: JSON.stringify({ ra_rate, dec_rate }),
   }).catch(() => {});
 }
+
+// ── Object Catalog ───────────────────────────────────────────────────────────
+
+const MESSIER_CATALOG = [
+  {id:"M1",  name:"Crab Nebula",          type:"SNR",               ra:5.5755,  dec:22.015  },
+  {id:"M2",  name:"",                      type:"Globular Cluster",  ra:21.5578, dec:-0.823  },
+  {id:"M3",  name:"",                      type:"Globular Cluster",  ra:13.7028, dec:28.378  },
+  {id:"M4",  name:"",                      type:"Globular Cluster",  ra:16.3928, dec:-26.526 },
+  {id:"M5",  name:"",                      type:"Globular Cluster",  ra:15.3094, dec:2.081   },
+  {id:"M6",  name:"Butterfly Cluster",     type:"Open Cluster",      ra:17.6694, dec:-32.217 },
+  {id:"M7",  name:"Ptolemy Cluster",       type:"Open Cluster",      ra:17.8978, dec:-34.841 },
+  {id:"M8",  name:"Lagoon Nebula",         type:"Emission Nebula",   ra:18.0628, dec:-24.384 },
+  {id:"M9",  name:"",                      type:"Globular Cluster",  ra:17.3194, dec:-18.516 },
+  {id:"M10", name:"",                      type:"Globular Cluster",  ra:16.9528, dec:-4.101  },
+  {id:"M11", name:"Wild Duck Cluster",     type:"Open Cluster",      ra:18.8511, dec:-6.271  },
+  {id:"M12", name:"",                      type:"Globular Cluster",  ra:16.7872, dec:-1.949  },
+  {id:"M13", name:"Hercules Cluster",      type:"Globular Cluster",  ra:16.6944, dec:36.461  },
+  {id:"M14", name:"",                      type:"Globular Cluster",  ra:17.6261, dec:-3.247  },
+  {id:"M15", name:"",                      type:"Globular Cluster",  ra:21.4994, dec:12.167  },
+  {id:"M16", name:"Eagle Nebula",          type:"Emission Nebula",   ra:18.3128, dec:-13.791 },
+  {id:"M17", name:"Omega Nebula",          type:"Emission Nebula",   ra:18.3461, dec:-16.177 },
+  {id:"M18", name:"",                      type:"Open Cluster",      ra:18.3319, dec:-17.100 },
+  {id:"M19", name:"",                      type:"Globular Cluster",  ra:17.0444, dec:-26.269 },
+  {id:"M20", name:"Trifid Nebula",         type:"Emission Nebula",   ra:18.0428, dec:-23.032 },
+  {id:"M21", name:"",                      type:"Open Cluster",      ra:18.0772, dec:-22.493 },
+  {id:"M22", name:"Sagittarius Cluster",   type:"Globular Cluster",  ra:18.6072, dec:-23.905 },
+  {id:"M23", name:"",                      type:"Open Cluster",      ra:17.9478, dec:-18.986 },
+  {id:"M24", name:"Sagittarius Star Cloud",type:"Star Cloud",        ra:18.2836, dec:-18.553 },
+  {id:"M25", name:"",                      type:"Open Cluster",      ra:18.5272, dec:-19.250 },
+  {id:"M26", name:"",                      type:"Open Cluster",      ra:18.7544, dec:-9.384  },
+  {id:"M27", name:"Dumbbell Nebula",       type:"Planetary Nebula",  ra:19.9936, dec:22.721  },
+  {id:"M28", name:"",                      type:"Globular Cluster",  ra:18.4094, dec:-24.870 },
+  {id:"M29", name:"",                      type:"Open Cluster",      ra:20.3986, dec:38.524  },
+  {id:"M30", name:"",                      type:"Globular Cluster",  ra:21.6722, dec:-23.180 },
+  {id:"M31", name:"Andromeda Galaxy",      type:"Galaxy",            ra:0.7122,  dec:41.269  },
+  {id:"M32", name:"",                      type:"Galaxy",            ra:0.7119,  dec:40.866  },
+  {id:"M33", name:"Triangulum Galaxy",     type:"Galaxy",            ra:1.5644,  dec:30.660  },
+  {id:"M34", name:"",                      type:"Open Cluster",      ra:2.7019,  dec:42.748  },
+  {id:"M35", name:"",                      type:"Open Cluster",      ra:6.1486,  dec:24.333  },
+  {id:"M36", name:"",                      type:"Open Cluster",      ra:5.6028,  dec:34.134  },
+  {id:"M37", name:"",                      type:"Open Cluster",      ra:5.8719,  dec:32.551  },
+  {id:"M38", name:"",                      type:"Open Cluster",      ra:5.4786,  dec:35.852  },
+  {id:"M39", name:"",                      type:"Open Cluster",      ra:21.5297, dec:48.427  },
+  {id:"M40", name:"Winnecke 4",            type:"Double Star",       ra:12.3672, dec:58.085  },
+  {id:"M41", name:"",                      type:"Open Cluster",      ra:6.7769,  dec:-20.721 },
+  {id:"M42", name:"Orion Nebula",          type:"Emission Nebula",   ra:5.5881,  dec:-5.391  },
+  {id:"M43", name:"De Mairan's Nebula",    type:"Emission Nebula",   ra:5.5931,  dec:-5.271  },
+  {id:"M44", name:"Beehive Cluster",       type:"Open Cluster",      ra:8.6719,  dec:19.994  },
+  {id:"M45", name:"Pleiades",              type:"Open Cluster",      ra:3.7908,  dec:24.117  },
+  {id:"M46", name:"",                      type:"Open Cluster",      ra:7.6961,  dec:-14.816 },
+  {id:"M47", name:"",                      type:"Open Cluster",      ra:7.6094,  dec:-14.490 },
+  {id:"M48", name:"",                      type:"Open Cluster",      ra:8.2297,  dec:-5.717  },
+  {id:"M49", name:"",                      type:"Galaxy",            ra:12.4961, dec:8.000   },
+  {id:"M50", name:"",                      type:"Open Cluster",      ra:7.0461,  dec:-8.366  },
+  {id:"M51", name:"Whirlpool Galaxy",      type:"Galaxy",            ra:13.4978, dec:47.195  },
+  {id:"M52", name:"",                      type:"Open Cluster",      ra:23.4019, dec:61.593  },
+  {id:"M53", name:"",                      type:"Globular Cluster",  ra:13.2156, dec:18.169  },
+  {id:"M54", name:"",                      type:"Globular Cluster",  ra:18.9178, dec:-30.478 },
+  {id:"M55", name:"Summer Rose Star",      type:"Globular Cluster",  ra:19.6667, dec:-30.964 },
+  {id:"M56", name:"",                      type:"Globular Cluster",  ra:19.2767, dec:30.185  },
+  {id:"M57", name:"Ring Nebula",           type:"Planetary Nebula",  ra:18.8933, dec:33.028  },
+  {id:"M58", name:"",                      type:"Galaxy",            ra:12.6278, dec:11.818  },
+  {id:"M59", name:"",                      type:"Galaxy",            ra:12.7003, dec:11.647  },
+  {id:"M60", name:"",                      type:"Galaxy",            ra:12.7272, dec:11.553  },
+  {id:"M61", name:"",                      type:"Galaxy",            ra:12.3656, dec:4.474   },
+  {id:"M62", name:"",                      type:"Globular Cluster",  ra:17.0194, dec:-30.112 },
+  {id:"M63", name:"Sunflower Galaxy",      type:"Galaxy",            ra:13.2636, dec:42.029  },
+  {id:"M64", name:"Black Eye Galaxy",      type:"Galaxy",            ra:12.9461, dec:21.683  },
+  {id:"M65", name:"",                      type:"Galaxy",            ra:11.3172, dec:13.092  },
+  {id:"M66", name:"",                      type:"Galaxy",            ra:11.3367, dec:12.991  },
+  {id:"M67", name:"",                      type:"Open Cluster",      ra:8.8544,  dec:11.816  },
+  {id:"M68", name:"",                      type:"Globular Cluster",  ra:12.6572, dec:-26.746 },
+  {id:"M69", name:"",                      type:"Globular Cluster",  ra:18.5231, dec:-32.348 },
+  {id:"M70", name:"",                      type:"Globular Cluster",  ra:18.7217, dec:-32.294 },
+  {id:"M71", name:"",                      type:"Globular Cluster",  ra:19.8961, dec:18.779  },
+  {id:"M72", name:"",                      type:"Globular Cluster",  ra:20.8911, dec:-12.537 },
+  {id:"M73", name:"",                      type:"Asterism",          ra:20.9839, dec:-12.633 },
+  {id:"M74", name:"",                      type:"Galaxy",            ra:1.6111,  dec:15.783  },
+  {id:"M75", name:"",                      type:"Globular Cluster",  ra:20.1014, dec:-21.921 },
+  {id:"M76", name:"Little Dumbbell Nebula",type:"Planetary Nebula",  ra:1.7031,  dec:51.575  },
+  {id:"M77", name:"",                      type:"Galaxy",            ra:2.7119,  dec:-0.013  },
+  {id:"M78", name:"",                      type:"Reflection Nebula", ra:5.7786,  dec:0.078   },
+  {id:"M79", name:"",                      type:"Globular Cluster",  ra:5.4047,  dec:-24.523 },
+  {id:"M80", name:"",                      type:"Globular Cluster",  ra:16.2856, dec:-22.976 },
+  {id:"M81", name:"Bode's Galaxy",         type:"Galaxy",            ra:9.9258,  dec:69.065  },
+  {id:"M82", name:"Cigar Galaxy",          type:"Galaxy",            ra:9.9256,  dec:69.680  },
+  {id:"M83", name:"Southern Pinwheel",     type:"Galaxy",            ra:13.6169, dec:-29.866 },
+  {id:"M84", name:"",                      type:"Galaxy",            ra:12.4183, dec:12.887  },
+  {id:"M85", name:"",                      type:"Galaxy",            ra:12.4228, dec:18.191  },
+  {id:"M86", name:"",                      type:"Galaxy",            ra:12.4353, dec:12.946  },
+  {id:"M87", name:"Virgo A",               type:"Galaxy",            ra:12.5136, dec:12.391  },
+  {id:"M88", name:"",                      type:"Galaxy",            ra:12.5319, dec:14.420  },
+  {id:"M89", name:"",                      type:"Galaxy",            ra:12.5944, dec:12.556  },
+  {id:"M90", name:"",                      type:"Galaxy",            ra:12.6136, dec:13.163  },
+  {id:"M91", name:"",                      type:"Galaxy",            ra:12.5931, dec:14.496  },
+  {id:"M92", name:"",                      type:"Globular Cluster",  ra:17.2856, dec:43.136  },
+  {id:"M93", name:"",                      type:"Open Cluster",      ra:7.7428,  dec:-23.856 },
+  {id:"M94", name:"",                      type:"Galaxy",            ra:12.8478, dec:41.120  },
+  {id:"M95", name:"",                      type:"Galaxy",            ra:10.7331, dec:11.704  },
+  {id:"M96", name:"",                      type:"Galaxy",            ra:10.7794, dec:11.820  },
+  {id:"M97", name:"Owl Nebula",            type:"Planetary Nebula",  ra:11.2478, dec:55.019  },
+  {id:"M98", name:"",                      type:"Galaxy",            ra:12.2314, dec:14.901  },
+  {id:"M99", name:"",                      type:"Galaxy",            ra:12.3136, dec:14.416  },
+  {id:"M100",name:"",                      type:"Galaxy",            ra:12.3817, dec:15.823  },
+  {id:"M101",name:"Pinwheel Galaxy",       type:"Galaxy",            ra:14.0536, dec:54.349  },
+  {id:"M102",name:"Spindle Galaxy",        type:"Galaxy",            ra:15.1028, dec:55.763  },
+  {id:"M103",name:"",                      type:"Open Cluster",      ra:1.5572,  dec:60.657  },
+  {id:"M104",name:"Sombrero Galaxy",       type:"Galaxy",            ra:12.6664, dec:-11.623 },
+  {id:"M105",name:"",                      type:"Galaxy",            ra:10.7972, dec:12.581  },
+  {id:"M106",name:"",                      type:"Galaxy",            ra:12.3161, dec:47.304  },
+  {id:"M107",name:"",                      type:"Globular Cluster",  ra:16.5417, dec:-13.054 },
+  {id:"M108",name:"",                      type:"Galaxy",            ra:11.1919, dec:55.674  },
+  {id:"M109",name:"",                      type:"Galaxy",            ra:11.9583, dec:53.374  },
+  {id:"M110",name:"",                      type:"Galaxy",            ra:0.6728,  dec:41.685  },
+];
+
+let _catalogIdx = -1;
+
+function catalogFilter() {
+  const q   = document.getElementById("catalogSearch").value.trim().toLowerCase();
+  const dd  = document.getElementById("catalogDropdown");
+  _catalogIdx = -1;
+
+  const matches = q.length === 0 ? [] : MESSIER_CATALOG.filter(o => {
+    const label = (o.id + " " + o.name + " " + o.type).toLowerCase();
+    return q.split(/\s+/).every(t => label.includes(t));
+  }).slice(0, 30);
+
+  if (matches.length === 0) { dd.style.display = "none"; return; }
+
+  dd.innerHTML = matches.map((o, i) => {
+    const label = o.name ? `${o.id} — ${o.name}` : o.id;
+    return `<div class="cat-item" data-idx="${i}"
+      onmousedown="catalogSelect(${i})" onmouseover="catalogHover(${i})"
+      style="padding:7px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <span style="color:var(--text);">${label}</span>
+      <span style="font-size:10px;color:var(--dim);letter-spacing:1px;">${o.type.toUpperCase()}</span>
+    </div>`;
+  }).join("");
+  dd._matches = matches;
+  dd.style.display = "block";
+}
+
+function catalogHover(i) {
+  _catalogIdx = i;
+  document.querySelectorAll(".cat-item").forEach((el, j) => {
+    el.style.background = j === i ? "var(--border)" : "";
+  });
+}
+
+function catalogSelect(i) {
+  const dd  = document.getElementById("catalogDropdown");
+  const obj = dd._matches[i];
+  if (!obj) return;
+  setSlewMode("eq");
+  document.getElementById("slewRA").value  = obj.ra.toFixed(4);
+  document.getElementById("slewDec").value = obj.dec.toFixed(4);
+  document.getElementById("catalogSearch").value = obj.name ? `${obj.id} — ${obj.name}` : obj.id;
+  dd.style.display = "none";
+}
+
+function catalogKeyNav(e) {
+  const dd = document.getElementById("catalogDropdown");
+  if (dd.style.display === "none") return;
+  const items = dd._matches || [];
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    _catalogIdx = Math.min(_catalogIdx + 1, items.length - 1);
+    catalogHover(_catalogIdx);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    _catalogIdx = Math.max(_catalogIdx - 1, 0);
+    catalogHover(_catalogIdx);
+  } else if (e.key === "Enter" && _catalogIdx >= 0) {
+    e.preventDefault();
+    catalogSelect(_catalogIdx);
+  } else if (e.key === "Escape") {
+    dd.style.display = "none";
+  }
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#catalogSearch") && !e.target.closest("#catalogDropdown")) {
+    const dd = document.getElementById("catalogDropdown");
+    if (dd) dd.style.display = "none";
+  }
+});
 
 let _slewMode = "eq";
 

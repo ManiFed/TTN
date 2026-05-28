@@ -1249,10 +1249,11 @@ body {
   background: var(--surface2); border: 1px solid var(--border);
   padding: 24px 28px; width: 420px;
   display: flex; flex-direction: column; gap: 14px;
+  max-height: 90vh; overflow: hidden;
 }
 .card-title { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--green-hi); }
 .inp-row { display: flex; gap: 8px; }
-.srv-list { display: flex; flex-direction: column; gap: 5px; }
+.srv-list { display: flex; flex-direction: column; gap: 5px; max-height: 320px; overflow-y: auto; }
 .srv-item {
   padding: 7px 12px; border: 1px solid var(--border);
   cursor: pointer; color: var(--blue); transition: border-color .12s, background .12s;
