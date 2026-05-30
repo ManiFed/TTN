@@ -685,6 +685,9 @@ _poller_stop = threading.Event()
 
 
 def _poll_loop() -> None:
+    _tel_connected_prev: Optional[bool] = None
+    _cam_connected_prev: Optional[bool] = None
+
     while not _poller_stop.is_set():
         with _state_lock:
             tel_enabled = _state["telescope"]["enabled"]
@@ -702,9 +705,15 @@ def _poll_loop() -> None:
                         connected=True, ra=ra, dec=dec,
                         slewing=slewing, parked=parked, tracking=tracking,
                     )
+                if _tel_connected_prev is False:
+                    logger.info("Telescope connection restored")
+                _tel_connected_prev = True
             except Exception:
                 with _state_lock:
                     _state["telescope"]["connected"] = False
+                if _tel_connected_prev is True:
+                    logger.warning("Telescope connection lost")
+                _tel_connected_prev = False
 
         if cam_enabled and _cam is not None:
             try:
@@ -716,9 +725,15 @@ def _poll_loop() -> None:
                         state_name=_CAMERA_STATES.get(state, "Unknown"),
                         image_ready=img_ready,
                     )
+                if _cam_connected_prev is False:
+                    logger.info("Camera connection restored")
+                _cam_connected_prev = True
             except Exception:
                 with _state_lock:
                     _state["camera"]["connected"] = False
+                if _cam_connected_prev is True:
+                    logger.warning("Camera connection lost")
+                _cam_connected_prev = False
 
         if _safety_mgr is not None:
             try:
@@ -915,7 +930,8 @@ def api_discover():
         port=alpaca_cfg.get("discovery_port", 32227),
         timeout=alpaca_cfg.get("discovery_timeout", 5),
     )
-    return jsonify({"servers": servers})
+    default_srv = alpaca_cfg.get("default_server")
+    return jsonify({"servers": servers, "default_server": default_srv})
 
 
 _SEESTAR_AP_IP = "192.168.4.1"
@@ -986,6 +1002,24 @@ def api_connect():
     with _state_lock:
         _state["connected"] = True
 
+    if bool(data.get("set_as_default", False)):
+        try:
+            cfg_w = _load_config()
+            if "alpaca" not in cfg_w or cfg_w["alpaca"] is None:
+                cfg_w["alpaca"] = {}
+            cfg_w["alpaca"]["default_server"] = {"address": host, "port": port}
+            with open("config.yaml", "w") as fh:
+                yaml.dump(cfg_w, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            logger.info("Default ALPACA server set to %s:%d", host, port)
+        except OSError as exc:
+            logger.warning("Could not save default server: %s", exc)
+
+    _parts = []
+    if tel_ok: _parts.append("telescope")
+    if cam_ok: _parts.append("camera")
+    logger.info("Connected to %s:%d — %s", host, port, " + ".join(_parts))
+    if errors:
+        logger.warning("Connection warnings: %s", "; ".join(errors))
     _start_poller()
     return jsonify({"ok": True, "telescope": tel_ok, "camera": cam_ok, "errors": errors})
 
@@ -993,6 +1027,10 @@ def api_connect():
 @app.route("/api/disconnect", methods=["POST"])
 def api_disconnect():
     global _tel, _cam
+    with _state_lock:
+        _server = _state.get("server") or {}
+    _disc_host = _server.get("address", "")
+    _disc_port = _server.get("port", "")
     _poller_stop.set()
     with _state_lock:
         _state["connected"] = False
@@ -1011,6 +1049,10 @@ def api_disconnect():
         pass
     _tel = None
     _cam = None
+    if _disc_host:
+        logger.info("Disconnected from %s:%s", _disc_host, _disc_port)
+    else:
+        logger.info("Disconnected from ALPACA server")
     return jsonify({"ok": True})
 
 
@@ -1025,6 +1067,7 @@ def api_unpark():
         try:
             with _device_lock:
                 _tel.unpark()
+            logger.info("Unpark complete — mount ready")
         except Exception as exc:
             logger.error("Unpark failed: %s", exc)
         finally:
@@ -1047,6 +1090,7 @@ def api_park():
         try:
             with _device_lock:
                 _tel.park()
+            logger.info("Park complete — mount stowed")
         except Exception as exc:
             logger.error("Park failed: %s", exc)
         finally:
@@ -1070,6 +1114,7 @@ def api_tracking():
     except Exception as exc:
         logger.error("Set tracking failed: %s", exc)
         return jsonify({"error": str(exc)}), 500
+    logger.info("Tracking %s", "enabled" if enabled else "disabled")
     return jsonify({"ok": True})
 
 
@@ -1109,6 +1154,7 @@ def api_slew():
             return jsonify({"error": msg, "horizon_blocked": True,
                             "min_safe_alt": round(min_alt, 1)}), 403
 
+        logger.info("Slewing: Alt=%.1f°  Az=%.1f°", alt, az)
         try:
             with _device_lock:
                 _tel.begin_slew_altaz(alt, az)
@@ -1153,6 +1199,7 @@ def api_slew():
             logger.warning(msg)
             return jsonify({"error": msg, "blocked": True}), 403
 
+        logger.info("Slewing: RA=%.4f h  Dec=%.4f°", ra, dec)
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
@@ -1276,6 +1323,7 @@ def api_expose():
                     ra  = _state["telescope"].get("ra")
                     dec = _state["telescope"].get("dec")
                 target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
+                logger.info("Exposure complete — image captured (%.2f s  bin%d)", duration, binning)
                 _store_history_image(target, duration, binning, 1, 1, b64)
         except ExposureCancelled:
             logger.warning("Manual exposure aborted")
@@ -1891,6 +1939,22 @@ def api_history_image(img_id: str):
     )
 
 
+@app.route("/api/history/<img_id>/metadata", methods=["PATCH"])
+def api_history_patch_metadata(img_id: str):
+    data = request.get_json(silent=True) or {}
+    allowed = {"target", "exp_dur", "binning", "frame", "total"}
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return jsonify({"error": "No valid fields provided"}), 400
+    with _img_history_lock:
+        for entry in _img_history:
+            if entry["id"] == img_id:
+                for k, v in updates.items():
+                    entry[k] = v
+                return jsonify({"ok": True, "entry": entry})
+    return jsonify({"error": "Image not found"}), 404
+
+
 # ── HTML template ──────────────────────────────────────────────────────────────
 
 _HTML = r"""<!DOCTYPE html>
@@ -2395,6 +2459,7 @@ body > * { position: relative; z-index: 1; }
   cursor: pointer; color: var(--blue); transition: border-color .15s, background .15s, box-shadow .15s;
 }
 .srv-item:hover { border-color: rgba(68,138,255,0.4); background: rgba(68,138,255,.08); box-shadow: 0 0 12px rgba(68,138,255,0.15); }
+.srv-item.selected { border-color: rgba(68,138,255,0.7); background: rgba(68,138,255,.14); }
 .sep { border-top: var(--glass-border); }
 
 /* ── Config editor ── */
@@ -2829,6 +2894,21 @@ body > * { position: relative; z-index: 1; }
 }
 .hist-lb-meta strong { color:var(--text); }
 .hist-lb-btns { display:flex;gap:10px; }
+.hist-lb-edit {
+  background:var(--surface2);border:var(--glass-border);border-radius:10px;
+  padding:14px 18px;display:flex;flex-direction:column;gap:8px;min-width:260px;
+}
+.hist-lb-edit.hidden { display:none; }
+.hist-lb-edit-row { display:flex;align-items:center;gap:10px; }
+.hist-lb-edit-row label {
+  font-size:10px;letter-spacing:1px;color:var(--dim);text-transform:uppercase;width:90px;flex-shrink:0;
+}
+.hist-lb-edit-inp {
+  flex:1;background:var(--surface);border:1px solid var(--border);border-radius:5px;
+  color:var(--text);font-size:12px;padding:4px 8px;font-family:inherit;
+}
+.hist-lb-edit-inp:focus { outline:none;border-color:var(--green); }
+.hist-lb-edit-actions { display:flex;gap:8px;justify-content:flex-end;margin-top:4px; }
 
 /* ── Night-vision mode (red monochrome) ── */
 html[data-night] {
@@ -2901,7 +2981,6 @@ html[data-night] img, html[data-night] video { filter: none; }
   <div style="color:var(--dim);font-size:11px;" id="sunEl"></div>
 
   <div id="errBanner" style="display:none;color:var(--red);font-size:11px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title=""></div>
-
   <div class="hdr-right">
     <button class="btn btn-dim" id="btnNightMode" onclick="toggleNightMode()" title="Toggle night-vision mode" style="font-size:13px;padding:4px 10px;letter-spacing:0;">👁</button>
     <button class="btn btn-dim" id="btnHdrTel" onclick="openTelescopeModal()">
@@ -2915,7 +2994,6 @@ html[data-night] img, html[data-night] video { filter: none; }
     <button class="btn btn-dim" id="btnHistory"  onclick="openHistoryModal()" style="border-color:var(--yellow);color:var(--yellow);position:relative;">
       📷 History<span id="histBadge" style="display:none;position:absolute;top:-5px;right:-5px;background:var(--yellow);color:#000;border-radius:50%;width:16px;height:16px;font-size:9px;display:none;align-items:center;justify-content:center;font-weight:bold;"></span>
     </button>
-    <button class="btn btn-blue" id="btnDiscover" onclick="showDiscover()">Discover</button>
   </div>
 </div>
 
@@ -2988,8 +3066,38 @@ html[data-night] img, html[data-night] video { filter: none; }
 <div class="hist-lightbox hidden" id="histLightbox" onclick="if(event.target===this)closeLightbox()">
   <img class="hist-lb-img" id="histLbImg" src="" alt="Full image">
   <div class="hist-lb-meta" id="histLbMeta"></div>
+
+  <!-- Inline metadata editor (hidden until Edit is clicked) -->
+  <div class="hist-lb-edit hidden" id="histLbEdit">
+    <div class="hist-lb-edit-row">
+      <label>Target</label>
+      <input id="metaTarget" class="hist-lb-edit-inp" type="text" placeholder="e.g. M42">
+    </div>
+    <div class="hist-lb-edit-row">
+      <label>Exposure (s)</label>
+      <input id="metaExpDur" class="hist-lb-edit-inp" type="number" step="0.01" min="0" placeholder="30">
+    </div>
+    <div class="hist-lb-edit-row">
+      <label>Binning</label>
+      <input id="metaBinning" class="hist-lb-edit-inp" type="number" step="1" min="1" placeholder="1">
+    </div>
+    <div class="hist-lb-edit-row">
+      <label>Frame</label>
+      <input id="metaFrame" class="hist-lb-edit-inp" type="number" step="1" min="1" placeholder="1">
+    </div>
+    <div class="hist-lb-edit-row">
+      <label>Total</label>
+      <input id="metaTotal" class="hist-lb-edit-inp" type="number" step="1" min="1" placeholder="1">
+    </div>
+    <div class="hist-lb-edit-actions">
+      <button class="btn btn-dim" onclick="cancelMetaEdit()">Cancel</button>
+      <button class="btn btn-green" onclick="saveMetaEdit()">Save</button>
+    </div>
+  </div>
+
   <div class="hist-lb-btns">
     <button class="btn btn-dim" onclick="closeLightbox()">Close</button>
+    <button class="btn btn-dim" id="histLbEditBtn" onclick="openMetaEdit()">Edit Metadata</button>
     <a id="histLbDl" class="btn btn-green" download="image.png">Download</a>
   </div>
 </div>
@@ -3587,6 +3695,13 @@ html[data-night] img, html[data-night] video { filter: none; }
             <input class="inp" type="number" id="cfgAlpacaApiVer" min="1" max="2" step="1">
           </div>
         </div>
+        <div class="inp-group" style="margin-top:6px;">
+          <div class="inp-label">Default Server <span class="help-tip" data-tip="If set, the discovery scan auto-connects to this server whenever it is found on the LAN, skipping the server list. Set automatically when you tick 'Set as default' during connection. Clear both fields to disable auto-connect.">?</span></div>
+          <div style="display:flex;gap:6px;">
+            <input class="inp" type="text"   id="cfgAlpacaDefaultAddr" placeholder="address  (e.g. 192.168.1.x)" style="flex:1">
+            <input class="inp" type="number" id="cfgAlpacaDefaultPort" placeholder="port" min="1" max="65535" style="width:80px">
+          </div>
+        </div>
         <div class="cfg-section-hdr">Device Defaults</div>
         <div class="cfg-field-grid">
           <div class="inp-group">
@@ -3708,6 +3823,17 @@ html[data-night] img, html[data-night] video { filter: none; }
       Scan LAN for servers
     </button>
     <div class="srv-list" id="srvList"></div>
+    <div id="srvConfirm" style="display:none;border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
+      <div style="font-size:12px;color:var(--text);margin-bottom:6px;">Connect to <strong id="srvConfirmAddr"></strong>?</div>
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;">
+        <input type="checkbox" id="defaultCheckbox" style="margin-top:2px;accent-color:var(--blue);width:14px;height:14px;flex-shrink:0;cursor:pointer;">
+        <label for="defaultCheckbox" style="color:var(--dim);font-size:11px;cursor:pointer;line-height:1.5;">Set as default — auto-connect when detected on LAN</label>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-green" id="btnSrvConnect" onclick="doConfirmedConnect()" style="flex:1" disabled>Connect</button>
+        <button class="btn btn-dim" onclick="clearSrvSelection()">Back</button>
+      </div>
+    </div>
     <div class="sep"></div>
     <div style="color:var(--dim);font-size:11px;">Manual entry</div>
     <div class="inp-row">
@@ -3819,29 +3945,19 @@ function renderHeader(s) {
     srv.classList.add("hidden");
   }
 
-  const discoverBtn = document.getElementById("btnDiscover");
-
   if (s.connected) {
     dot.className    = "dot dot-green";
     label.textContent = "Connected";
     pill.classList.add("clickable");
     pill.onclick = toggleConnDropdown;
-    // Change Discover → Connection
-    discoverBtn.textContent = "Connection";
-    discoverBtn.className   = "btn btn-green";
-    discoverBtn.onclick     = showDiscover;
     // Close blocking overlay now that we're connected
     document.getElementById("overlay").classList.add("hidden");
   } else {
     dot.className    = "dot dot-gray";
     label.textContent = "Disconnected";
-    pill.classList.remove("clickable");
-    pill.onclick = null;
+    pill.classList.add("clickable");
+    pill.onclick = showDiscover;
     document.getElementById("connDropdown").classList.remove("open");
-    // Restore Discover button
-    discoverBtn.textContent = "Discover";
-    discoverBtn.className   = "btn btn-blue";
-    discoverBtn.onclick     = showDiscover;
     // Auto-show blocking overlay the first time we detect disconnected state
     if (!_overlayAutoShown) {
       _overlayAutoShown = true;
@@ -5433,6 +5549,7 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
 function onPermCheckChange() {
   const checked = document.getElementById("permCheckbox").checked;
   document.getElementById("btnManualConnect").disabled = !checked;
+  document.getElementById("btnSrvConnect").disabled = !checked;
   document.querySelectorAll(".srv-item").forEach(item => {
     item.style.pointerEvents = checked ? "auto" : "none";
     item.style.opacity       = checked ? "1"    : "0.4";
@@ -5445,6 +5562,7 @@ function showDiscover() {
   // Reset permission checkbox each time overlay opens
   document.getElementById("permCheckbox").checked = false;
   onPermCheckChange();
+  clearSrvSelection();
   // Show cancel button only when already connected
   document.getElementById("btnOverlayCancel").style.display = _lastConnected ? "" : "none";
   doScan();
@@ -5459,11 +5577,22 @@ async function doScan() {
   const btn = document.getElementById("scanBtn");
   btn.textContent = "Scanning…"; btn.disabled = true;
   document.getElementById("srvList").innerHTML = "";
+  clearSrvSelection();
   const permOk = document.getElementById("permCheckbox").checked;
   try {
     const r    = await fetch("/api/discover", { method: "POST" });
     const data = await r.json();
     const list = document.getElementById("srvList");
+    const defSrv = data.default_server;
+
+    // Auto-connect if the saved default server is present on the LAN
+    if (defSrv && data.servers?.some(s => s.address === defSrv.address && s.port === defSrv.port)) {
+      list.innerHTML = `<div style="color:var(--dim);font-size:12px;padding:4px 0;">Auto-connecting to saved server ${defSrv.address}:${defSrv.port}…</div>`;
+      btn.textContent = "Scan LAN for servers"; btn.disabled = false;
+      await connectTo(defSrv.address, defSrv.port, false, true);
+      return;
+    }
+
     if (data.servers?.length) {
       data.servers.forEach(srv => {
         const item = document.createElement("div");
@@ -5471,7 +5600,7 @@ async function doScan() {
         item.textContent      = `${srv.address}:${srv.port}`;
         item.style.opacity        = permOk ? "1"    : "0.4";
         item.style.pointerEvents  = permOk ? "auto" : "none";
-        item.onclick = () => connectTo(srv.address, srv.port);
+        item.onclick = () => selectSrv(srv.address, srv.port);
         list.appendChild(item);
       });
     } else {
@@ -5492,14 +5621,42 @@ async function doManualConnect() {
   await connectTo(host, port);
 }
 
-async function connectTo(host, port) {
-  if (!document.getElementById("permCheckbox").checked) return;
+let _selectedSrv = null;
+
+function selectSrv(host, port) {
+  _selectedSrv = { host, port };
+  document.querySelectorAll(".srv-item").forEach(el => el.classList.remove("selected"));
+  document.querySelectorAll(".srv-item").forEach(el => {
+    if (el.textContent === `${host}:${port}`) el.classList.add("selected");
+  });
+  document.getElementById("srvConfirmAddr").textContent = `${host}:${port}`;
+  document.getElementById("defaultCheckbox").checked = false;
+  const permOk = document.getElementById("permCheckbox").checked;
+  document.getElementById("btnSrvConnect").disabled = !permOk;
+  document.getElementById("srvConfirm").style.display = "";
+}
+
+function clearSrvSelection() {
+  _selectedSrv = null;
+  document.querySelectorAll(".srv-item").forEach(el => el.classList.remove("selected"));
+  const confirm = document.getElementById("srvConfirm");
+  if (confirm) confirm.style.display = "none";
+}
+
+async function doConfirmedConnect() {
+  if (!_selectedSrv || !document.getElementById("permCheckbox").checked) return;
+  const setDefault = document.getElementById("defaultCheckbox").checked;
+  await connectTo(_selectedSrv.host, _selectedSrv.port, setDefault);
+}
+
+async function connectTo(host, port, setAsDefault = false, skipPermCheck = false) {
+  if (!skipPermCheck && !document.getElementById("permCheckbox").checked) return;
   document.getElementById("overlay").classList.add("hidden");
   try {
     const r = await fetch("/api/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host, port }),
+      body: JSON.stringify({ host, port, set_as_default: setAsDefault }),
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || "failed");
@@ -5548,6 +5705,9 @@ function renderCfgForm(c) {
   setVal('cfgAlpacaPort',    _cfgGet(c, 'alpaca.discovery_port',    32227));
   setVal('cfgAlpacaTimeout', _cfgGet(c, 'alpaca.discovery_timeout', 5));
   setVal('cfgAlpacaApiVer',  _cfgGet(c, 'alpaca.api_version',       1));
+  const _defSrv = _cfgGet(c, 'alpaca.default_server', null);
+  setVal('cfgAlpacaDefaultAddr', _defSrv ? _defSrv.address : '');
+  setVal('cfgAlpacaDefaultPort', _defSrv ? _defSrv.port    : '');
   setVal('cfgObsLat',        _cfgGet(c, 'safety.observer.latitude',  0.0));
   setVal('cfgObsLon',        _cfgGet(c, 'safety.observer.longitude', 0.0));
   setVal('cfgDevTelEnabled', _cfgGet(c, 'devices.telescope.enabled',         false));
@@ -5632,6 +5792,9 @@ function collectCfgForm() {
   set('alpaca.discovery_port',    num('cfgAlpacaPort',    true));
   set('alpaca.discovery_timeout', num('cfgAlpacaTimeout', true));
   set('alpaca.api_version',       num('cfgAlpacaApiVer',  true));
+  const _dAddr = txt('cfgAlpacaDefaultAddr').trim();
+  const _dPort = num('cfgAlpacaDefaultPort', true);
+  set('alpaca.default_server', _dAddr ? { address: _dAddr, port: _dPort || 11111 } : null);
   set('safety.observer.latitude',  num('cfgObsLat'));
   set('safety.observer.longitude', num('cfgObsLon'));
   set('devices.telescope.enabled',         chk('cfgDevTelEnabled'));
@@ -6792,23 +6955,76 @@ function histRender() {
   });
 }
 
+let _lbCurrentImg = null;
+
+function _lbRenderMeta(img) {
+  document.getElementById("histLbMeta").innerHTML =
+    `<strong>${escH(img.target)}</strong><br>${img.date} · ${img.ts} &nbsp;·&nbsp; ${img.exp_dur}s exposure · binning ${img.binning}× · frame ${img.frame}/${img.total}`;
+}
+
 function openLightbox(img) {
-  const lb     = document.getElementById("histLightbox");
-  const lbImg  = document.getElementById("histLbImg");
-  const lbMeta = document.getElementById("histLbMeta");
-  const lbDl   = document.getElementById("histLbDl");
+  _lbCurrentImg = img;
+  const lbImg = document.getElementById("histLbImg");
+  const lbDl  = document.getElementById("histLbDl");
 
   lbImg.src  = `/api/history/${img.id}`;
   lbImg.alt  = img.target;
-  lbMeta.innerHTML = `<strong>${escH(img.target)}</strong><br>${img.date} · ${img.ts} &nbsp;·&nbsp; ${img.exp_dur}s exposure · binning ${img.binning}× · frame ${img.frame}/${img.total}`;
+  _lbRenderMeta(img);
   lbDl.href = `/api/history/${img.id}`;
   lbDl.download = `${img.target.replace(/[^a-z0-9]/gi,"_")}_${img.ts.replace(/:/g,"")}.png`;
-  lb.classList.remove("hidden");
+
+  document.getElementById("histLbEdit").classList.add("hidden");
+  document.getElementById("histLightbox").classList.remove("hidden");
 }
 
 function closeLightbox() {
   document.getElementById("histLightbox").classList.add("hidden");
   document.getElementById("histLbImg").src = "";
+  document.getElementById("histLbEdit").classList.add("hidden");
+  _lbCurrentImg = null;
+}
+
+function openMetaEdit() {
+  if (!_lbCurrentImg) return;
+  const img = _lbCurrentImg;
+  document.getElementById("metaTarget").value  = img.target;
+  document.getElementById("metaExpDur").value  = img.exp_dur;
+  document.getElementById("metaBinning").value = img.binning;
+  document.getElementById("metaFrame").value   = img.frame;
+  document.getElementById("metaTotal").value   = img.total;
+  document.getElementById("histLbEdit").classList.remove("hidden");
+}
+
+function cancelMetaEdit() {
+  document.getElementById("histLbEdit").classList.add("hidden");
+}
+
+async function saveMetaEdit() {
+  if (!_lbCurrentImg) return;
+  const payload = {
+    target:  document.getElementById("metaTarget").value.trim(),
+    exp_dur: parseFloat(document.getElementById("metaExpDur").value),
+    binning: parseInt(document.getElementById("metaBinning").value, 10),
+    frame:   parseInt(document.getElementById("metaFrame").value, 10),
+    total:   parseInt(document.getElementById("metaTotal").value, 10),
+  };
+  try {
+    const r = await fetch(`/api/history/${_lbCurrentImg.id}/metadata`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const {entry} = await r.json();
+    Object.assign(_lbCurrentImg, entry);
+    const idx = _histImages.findIndex(i => i.id === entry.id);
+    if (idx >= 0) Object.assign(_histImages[idx], entry);
+    _lbRenderMeta(_lbCurrentImg);
+    document.getElementById("histLbEdit").classList.add("hidden");
+    histRender();
+  } catch(e) {
+    alert("Failed to save metadata: " + e.message);
+  }
 }
 
 async function histClearAll() {
@@ -6864,6 +7080,7 @@ def launch(port: int = 5173) -> None:
         level=log_cfg.get("level", "INFO"),
         format=log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
     )
+    logger.info("NODE v1 starting on port %d", port)
 
     _safety_mgr = SafetyManager(config=cfg, on_unsafe=_on_safety_unsafe)
     _safety_mgr.start()
@@ -6874,6 +7091,7 @@ def launch(port: int = 5173) -> None:
         debounce_delay = float(iw_cfg.get("debounce_delay", 2.0))
         _image_watcher = ImageWatcher(watch_path, _on_new_fits, debounce_delay)
         _image_watcher.start()
+        logger.info("Image watcher active: %s", watch_path)
         with _state_lock:
             _state["image_watcher"]["enabled"]    = True
             _state["image_watcher"]["watch_path"] = watch_path
