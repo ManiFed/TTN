@@ -417,6 +417,53 @@ watcher.start()
 - Too few comparison stars: target may be outside AAVSO VSX coverage — Gaia DR3 fallback should help
 - Large ZP scatter: poor seeing or clouds; the scatter contributes directly to uncertainty
 
+### "Host is down" errors despite Seestar app showing connected
+
+**Symptom:** Dashboard logs show repeated `[Errno 64] Host is down` or `ConnectTimeoutError` on port 32323, but the Seestar app displays the telescope as fully connected and operational.
+
+**What happened:** The ALPACA HTTP server on the Seestar has wedged (hung, deadlocked, or crashed), while the core device firmware remains operational. The Seestar app talks to the firmware directly; the ALPACA endpoint is a separate HTTP service that can fail independently.
+
+**Recovery:**
+
+1. Open the Seestar app and restart the device: **Settings → Restart**.
+2. A simple app quit and relaunch will not fix this — the HTTP daemon is built into the firmware and requires a full device reboot.
+3. Once the Seestar finishes restarting, `dashboard.py` should reconnect cleanly.
+
+This is a firmware quirk, typically triggered by rapid successive API calls or memory pressure. If it recurs frequently, check whether the node software is firing commands too fast (e.g., rapid slew tests or a tight loop without delays between API calls).
+
+### SafetyManager: "telescope unreachable" / stuck unsafe state after reconnect
+
+**Symptom:** Logs show repeated heartbeat failures, an emergency park attempt, and then all slews rejected with `Slew rejected — system is in an unsafe state (telescope unreachable for Xs)` even after the Seestar comes back online.
+
+**What happened:** The SafetyManager lost contact with the ALPACA server for longer than `safety.disconnect_timeout` (default 600 s) and triggered an emergency park. Once the unsafe state is set it does not self-clear — slews remain blocked until the session is restarted.
+
+**Likely root causes:**
+
+- **Seestar dropped off WiFi** — the most common cause. `[Errno 64] Host is down` followed by `ConnectTimeoutError` in the same reconnect cycle indicates intermittent wireless loss rather than a clean disconnect. Check the Seestar's WiFi signal strength and whether your router rate-limits or disconnects idle devices.
+- **Seestar app crashed or was suspended** — the device stayed on the network but the ALPACA HTTP server stopped responding.
+- **Mac or host machine went to sleep** — the node software paused, accumulated a gap, and woke up past the timeout threshold.
+
+**Recovery:**
+
+1. Confirm the Seestar is back online — open a browser to `http://<seestar-ip>:32323/api/v1/telescope/0/connected` and check for a valid JSON response.
+2. Restart `dashboard.py`. The SafetyManager initialises in a safe state on startup and will re-attach cleanly.
+3. If the emergency park command also failed (logged as `park command failed`), the mount may still be physically unparked — verify its position in the Seestar app before slewing.
+
+**Preventing recurrence:**
+
+- Place the Seestar closer to the access point or use a 2.4 GHz band for better range.
+- Increase `safety.disconnect_timeout` if brief network glitches are common at your site (e.g. `900` or `1200` s).
+- Disable Wi-Fi sleep / power-save on your router for the Seestar's MAC address.
+- Prevent the host Mac from sleeping during a session: `sudo pmset -b sleep 0` or use Amphetamine/Caffeinate.
+
+### "ErrorNumber 1024: Method Unpark is not implemented in this driver"
+
+The Seestar S50 ALPACA driver does not implement the `Unpark` command. Unparking must be done from within the Seestar iOS/Android app. After unparking in the app, the dashboard's telescope controls will work normally — the `Unpark` button in the dashboard has no effect on this device.
+
+### "CoverCalibrator connect failed: 400 Client Error"
+
+A 400 response (rather than a connection error) means the ALPACA server is reachable but rejects the request — typically because no cover/calibrator device is configured at index 0 on this firmware version. This is a non-fatal warning; arm control is listed as unavailable in the dashboard but all other functions continue normally. If you do not have a cover calibrator attached, you can suppress these messages by setting `devices.covercalibrator.enabled: false` in `config.yaml`.
+
 ### Dawn parking not triggering
 - `observer.latitude` and `observer.longitude` must be non-zero
 - `dawn_type: astronomical` requires the sun to reach −18°; at mid-latitudes in summer it may not — try `nautical` or `civil`

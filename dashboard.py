@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import os
+import pathlib
 import queue
 import sys
 import threading
@@ -26,6 +27,7 @@ from alpaca.discovery import discover_servers
 from alpaca.safety_manager import SafetyManager
 from alpaca.telescope import Telescope
 from alpaca.camera import Camera, ExposureCancelled
+from alpaca.covercalibrator import CoverCalibrator, COVER_STATE_NAMES, COVER_NOT_PRESENT, COVER_MOVING, COVER_OPEN, COVER_CLOSED
 from image_watcher import ImageWatcher
 from photometry import run_pipeline as _run_photometry
 from aavso_submission import submit as _aavso_submit
@@ -50,6 +52,8 @@ _state: dict[str, Any] = {
         "ra":        None,
         "dec":       None,
         "busy":      False,
+        "arm_state": None,      # CoverCalibrator cover state int, or None if unavailable
+        "arm_busy":  False,
     },
     "camera": {
         "enabled":          False,
@@ -121,6 +125,68 @@ _img_full_lock = threading.Lock()
 _img_counter = 0
 _img_counter_lock = threading.Lock()
 
+# ── Local history persistence ──────────────────────────────────────────────────
+_DATA_DIR     = pathlib.Path("data")
+_IMAGES_DIR   = _DATA_DIR / "images"
+_HISTORY_FILE = _DATA_DIR / "camera_history.json"
+
+
+def _save_history_to_disk() -> None:
+    """Write image metadata + thumbnails to data/camera_history.json."""
+    try:
+        _DATA_DIR.mkdir(exist_ok=True)
+        with _img_history_lock:
+            history_copy = list(_img_history)
+        with open(_HISTORY_FILE, "w") as _f:
+            json.dump({"history": history_copy}, _f, separators=(",", ":"))
+    except Exception as _exc:
+        logger.warning("Could not save camera history: %s", _exc)
+
+
+def _save_full_image_to_disk(img_id: str, b64_full: str) -> None:
+    """Write a full-resolution image as data/images/{img_id}.png."""
+    try:
+        _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_IMAGES_DIR / f"{img_id}.png", "wb") as _f:
+            _f.write(base64.b64decode(b64_full))
+    except Exception as _exc:
+        logger.warning("Could not save image %s: %s", img_id, _exc)
+
+
+def _delete_image_from_disk(img_id: str) -> None:
+    """Remove an evicted image file from disk (best-effort)."""
+    try:
+        (_IMAGES_DIR / f"{img_id}.png").unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _load_history_from_disk() -> None:
+    """Restore image history metadata from disk on startup."""
+    global _img_counter
+    if not _HISTORY_FILE.exists():
+        return
+    try:
+        with open(_HISTORY_FILE) as _f:
+            data = json.load(_f)
+        entries = data.get("history", [])
+        max_n = 0
+        for e in entries:
+            try:
+                n = int(e["id"].split("_")[1])
+                if n > max_n:
+                    max_n = n
+            except (ValueError, IndexError, KeyError):
+                pass
+        with _img_counter_lock:
+            _img_counter = max_n
+        with _img_history_lock:
+            _img_history.extend(entries)
+        logger.info("Restored %d images from local history", len(entries))
+    except Exception as _exc:
+        logger.warning("Could not load camera history: %s", _exc)
+
+
 _CAMERA_STATES = {
     0: "Idle", 1: "Waiting", 2: "Exposing",
     3: "Reading", 4: "Downloading", 5: "Error",
@@ -185,8 +251,9 @@ sys.stdout = _StdoutCapture()  # type: ignore[assignment]
 
 # ── Device handles ─────────────────────────────────────────────────────────────
 
-_tel: Optional[Telescope] = None
-_cam: Optional[Camera] = None
+_tel:   Optional[Telescope]        = None
+_cam:   Optional[Camera]           = None
+_cover: Optional[CoverCalibrator]  = None
 _last_image_b64: Optional[str] = None
 _last_image_lock = threading.Lock()
 
@@ -284,14 +351,19 @@ def _store_history_image(
         "total":   total,
         "thumb":   thumb,
     }
+    evicted_id: Optional[str] = None
     with _img_history_lock:
         _img_history.append(entry)
         if len(_img_history) > 400:
-            oldest_id = _img_history.pop(0)["id"]
+            evicted_id = _img_history.pop(0)["id"]
             with _img_full_lock:
-                _img_full.pop(oldest_id, None)
+                _img_full.pop(evicted_id, None)
     with _img_full_lock:
         _img_full[img_id] = b64_full
+    _save_full_image_to_disk(img_id, b64_full)
+    _save_history_to_disk()
+    if evicted_id:
+        _delete_image_from_disk(evicted_id)
     return img_id
 
 
@@ -684,9 +756,70 @@ def _run_horizon_scan(
 _poller_stop = threading.Event()
 
 
+_HEARTBEAT_INTERVAL = 300  # seconds between "all good" heartbeat log lines
+
+
+def _emit_heartbeat() -> None:
+    """Log a friendly status summary when all systems are nominal."""
+    with _state_lock:
+        tel  = _state["telescope"]
+        cam  = _state["camera"]
+        safe = _state["safety"]
+
+    parts: list[str] = []
+
+    if tel.get("connected"):
+        ra      = tel.get("ra")
+        dec     = tel.get("dec")
+        parked  = tel.get("parked", False)
+        slewing = tel.get("slewing", False)
+        tracking = tel.get("tracking", False)
+        if parked:
+            tel_status = "parked"
+        elif slewing:
+            tel_status = "slewing"
+        elif tracking:
+            tel_status = "tracking"
+        else:
+            tel_status = "idle"
+        if ra is not None and dec is not None:
+            parts.append(f"telescope {tel_status} RA={ra:.4f}h Dec={dec:+.2f}°")
+        else:
+            parts.append(f"telescope {tel_status}")
+
+    if cam.get("connected"):
+        cam_name = cam.get("state_name", "Ready")
+        parts.append(f"camera {cam_name.lower()}")
+
+    if not parts:
+        return  # nothing connected — skip heartbeat
+
+    sun_el = safe.get("sun_elevation")
+    if sun_el is not None:
+        parts.append(f"sun {sun_el:+.1f}°")
+
+    with _sched_lock:
+        sched_running = _sched_state.get("running", False)
+        sched_target  = _sched_state.get("current_target", "")
+        sched_frame   = _sched_state.get("current_frame", 0)
+        sched_total   = _sched_state.get("total_frames", 0)
+        sched_phase   = _sched_state.get("current_phase", "")
+
+    if sched_running and sched_target:
+        if sched_phase == "exposing" and sched_total:
+            parts.append(f"schedule: {sched_target} frame {sched_frame}/{sched_total}")
+        elif sched_phase == "slewing":
+            parts.append(f"schedule: slewing to {sched_target}")
+        else:
+            parts.append(f"schedule: {sched_target}")
+
+    logger.info("Heartbeat — all systems nominal | %s", " | ".join(parts))
+
+
 def _poll_loop() -> None:
     _tel_connected_prev: Optional[bool] = None
     _cam_connected_prev: Optional[bool] = None
+    _heartbeat_ticks = 0
 
     while not _poller_stop.is_set():
         with _state_lock:
@@ -700,10 +833,17 @@ def _poll_loop() -> None:
                 slewing  = _tel.is_slewing()
                 parked   = _tel.is_parked()
                 tracking = _tel.is_tracking()
+                arm_state = None
+                if _cover is not None:
+                    try:
+                        arm_state = _cover.cover_state()
+                    except Exception:
+                        arm_state = None
                 with _state_lock:
                     _state["telescope"].update(
                         connected=True, ra=ra, dec=dec,
                         slewing=slewing, parked=parked, tracking=tracking,
+                        arm_state=arm_state,
                     )
                 if _tel_connected_prev is False:
                     logger.info("Telescope connection restored")
@@ -742,6 +882,11 @@ def _poll_loop() -> None:
                     _state["safety"].update(safety_snap)
             except Exception:
                 pass
+
+        _heartbeat_ticks += 1
+        if _heartbeat_ticks >= _HEARTBEAT_INTERVAL:
+            _heartbeat_ticks = 0
+            _emit_heartbeat()
 
         time.sleep(1.0)
 
@@ -939,7 +1084,7 @@ _SEESTAR_AP_IP = "192.168.4.1"
 
 @app.route("/api/connect", methods=["POST"])
 def api_connect():
-    global _tel, _cam
+    global _tel, _cam, _cover
     data    = request.get_json(force=True) or {}
     host    = data.get("host", "")
     port    = int(data.get("port", 11111))
@@ -993,6 +1138,15 @@ def api_connect():
             errors.append(f"camera: {exc}")
             _cam = None
 
+    if devices.get("covercalibrator", {}).get("enabled", False):
+        num = devices["covercalibrator"].get("device_number", 0)
+        try:
+            _cover = CoverCalibrator(host, port, num, api_ver)
+            _cover.connect()
+        except Exception as exc:
+            logger.warning("CoverCalibrator connect failed (arm control unavailable): %s", exc)
+            _cover = None
+
     if not (tel_ok or cam_ok):
         with _state_lock:
             _state["connected"] = False
@@ -1026,7 +1180,7 @@ def api_connect():
 
 @app.route("/api/disconnect", methods=["POST"])
 def api_disconnect():
-    global _tel, _cam
+    global _tel, _cam, _cover
     with _state_lock:
         _server = _state.get("server") or {}
     _disc_host = _server.get("address", "")
@@ -1047,8 +1201,17 @@ def api_disconnect():
             _cam.disconnect()
     except Exception:
         pass
-    _tel = None
-    _cam = None
+    try:
+        if _cover is not None:
+            _cover.disconnect()
+    except Exception:
+        pass
+    _tel   = None
+    _cam   = None
+    _cover = None
+    with _state_lock:
+        _state["telescope"]["arm_state"] = None
+        _state["telescope"]["arm_busy"]  = False
     if _disc_host:
         logger.info("Disconnected from %s:%s", _disc_host, _disc_port)
     else:
@@ -1102,6 +1265,48 @@ def api_park():
     return jsonify({"ok": True})
 
 
+@app.route("/api/arm/open", methods=["POST"])
+def api_arm_open():
+    if _cover is None:
+        return jsonify({"error": "CoverCalibrator not connected"}), 400
+
+    def _do():
+        with _state_lock:
+            _state["telescope"]["arm_busy"] = True
+        try:
+            _cover.open_cover()
+            logger.info("Arm open commanded")
+        except Exception as exc:
+            logger.error("Arm open failed: %s", exc)
+        finally:
+            with _state_lock:
+                _state["telescope"]["arm_busy"] = False
+
+    threading.Thread(target=_do, daemon=True, name="arm-open").start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/arm/close", methods=["POST"])
+def api_arm_close():
+    if _cover is None:
+        return jsonify({"error": "CoverCalibrator not connected"}), 400
+
+    def _do():
+        with _state_lock:
+            _state["telescope"]["arm_busy"] = True
+        try:
+            _cover.close_cover()
+            logger.info("Arm close commanded")
+        except Exception as exc:
+            logger.error("Arm close failed: %s", exc)
+        finally:
+            with _state_lock:
+                _state["telescope"]["arm_busy"] = False
+
+    threading.Thread(target=_do, daemon=True, name="arm-close").start()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/telescope/tracking", methods=["POST"])
 def api_tracking():
     if _tel is None:
@@ -1136,12 +1341,16 @@ def api_slew():
         if not (0.0 <= az < 360.0):
             return jsonify({"error": "Azimuth must be in range [0, 360)"}), 400
 
+        force = bool(data.get("force", False))
+
         # Safety gate — refuse to move while the system is unsafe
         if _safety_mgr is not None and not _safety_mgr.is_safe():
             reason = _safety_mgr.status().get("reason") or "unknown"
             msg = f"Slew rejected — system is in an unsafe state ({reason})"
-            logger.warning(msg)
-            return jsonify({"error": msg, "unsafe": True}), 403
+            if not force:
+                logger.warning(msg)
+                return jsonify({"error": msg, "unsafe": True}), 403
+            logger.warning("FORCED slew despite unsafe state: %s", reason)
 
         # Horizon-mask check
         if _safety_mgr is not None and not _safety_mgr.is_pointing_safe(alt, az):
@@ -1150,9 +1359,11 @@ def api_slew():
                 f"Slew rejected by horizon mask: "
                 f"Alt {alt:.1f}° is below the {min_alt:.1f}° limit at Az {az:.1f}°"
             )
-            logger.warning(msg)
-            return jsonify({"error": msg, "horizon_blocked": True,
-                            "min_safe_alt": round(min_alt, 1)}), 403
+            if not force:
+                logger.warning(msg)
+                return jsonify({"error": msg, "horizon_blocked": True,
+                                "min_safe_alt": round(min_alt, 1)}), 403
+            logger.warning("FORCED slew past horizon mask: %s", msg)
 
         logger.info("Slewing: Alt=%.1f°  Az=%.1f°", alt, az)
         try:
@@ -1192,12 +1403,16 @@ def api_slew():
         if not (-90.0 <= dec <= 90.0):
             return jsonify({"error": "Dec must be in range [-90, 90]"}), 400
 
+        force = bool(data.get("force", False))
+
         # Safety + horizon-mask gate (shared with the scheduler)
         rejection = _slew_rejection(ra, dec)
         if rejection is not None:
             msg = f"Slew rejected — {rejection}"
-            logger.warning(msg)
-            return jsonify({"error": msg, "blocked": True}), 403
+            if not force:
+                logger.warning(msg)
+                return jsonify({"error": msg, "blocked": True}), 403
+            logger.warning("FORCED slew despite rejection: %s", rejection)
 
         logger.info("Slewing: RA=%.4f h  Dec=%.4f°", ra, dec)
         try:
@@ -1932,6 +2147,14 @@ def api_history_image(img_id: str):
     with _img_full_lock:
         b64 = _img_full.get(img_id)
     if not b64:
+        # Lazy-load from disk if not in memory cache
+        disk_path = _IMAGES_DIR / f"{img_id}.png"
+        if disk_path.exists():
+            with open(disk_path, "rb") as _f:
+                b64 = base64.b64encode(_f.read()).decode()
+            with _img_full_lock:
+                _img_full[img_id] = b64
+    if not b64:
         return jsonify({"error": "Image not found"}), 404
     return Response(
         base64.b64decode(b64), content_type="image/png",
@@ -1951,6 +2174,7 @@ def api_history_patch_metadata(img_id: str):
             if entry["id"] == img_id:
                 for k, v in updates.items():
                     entry[k] = v
+                _save_history_to_disk()
                 return jsonify({"ok": True, "entry": entry})
     return jsonify({"error": "Image not found"}), 404
 
@@ -2117,12 +2341,58 @@ body > * { position: relative; z-index: 1; }
 .main {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   padding: 10px;
   background: transparent;
   overflow: hidden;
   min-height: 0;
+}
+
+/* ── Resize handles ── */
+.resize-handle-h {
+  flex-shrink: 0;
+  height: 8px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  z-index: 10;
+}
+.resize-handle-h::after {
+  content: '';
+  width: 48px; height: 3px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.1);
+  transition: background 0.2s, width 0.2s;
+}
+.resize-handle-h:hover::after,
+.resize-handle-h.dragging::after {
+  background: rgba(255,255,255,0.38);
+  width: 72px;
+}
+.resize-handle-v {
+  flex-shrink: 0;
+  width: 8px;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  z-index: 10;
+}
+.resize-handle-v::after {
+  content: '';
+  width: 3px; height: 48px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.1);
+  transition: background 0.2s, height 0.2s;
+}
+.resize-handle-v:hover::after,
+.resize-handle-v.dragging::after {
+  background: rgba(255,255,255,0.38);
+  height: 72px;
 }
 
 .main-empty {
@@ -2139,7 +2409,8 @@ body > * { position: relative; z-index: 1; }
 
 .log-footer {
   flex-shrink: 0;
-  height: 180px;
+  height: 180px; /* overridden by JS resizer */
+  min-height: 40px;
   background: rgba(0,0,0,0.6);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
@@ -2209,6 +2480,29 @@ body > * { position: relative; z-index: 1; }
 .img-sub::-webkit-scrollbar-track { background: var(--bg); }
 .img-sub::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .img-sub::-webkit-scrollbar-thumb:hover { background: var(--gray); }
+
+/* ── Embedded panels (camera + telescope in main grid) ── */
+.panel-embed {
+  background: var(--surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shine), var(--glass-shadow);
+  display: flex; flex-direction: column;
+  overflow: hidden; min-height: 0;
+}
+.panel-embed.hidden { display: none; }
+.panel-embed-inner {
+  flex: 1; overflow-y: auto;
+  padding: 20px;
+  display: flex; flex-direction: column; gap: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+.panel-embed-inner::-webkit-scrollbar { width: 5px; }
+.panel-embed-inner::-webkit-scrollbar-track { background: transparent; }
+.panel-embed-inner::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
 
 /* ── Pier cam ── */
 .pier-cam-wrap {
@@ -3021,19 +3315,219 @@ html[data-night] img, html[data-night] video { filter: none; }
     <div class="pier-cam-badge" id="pierCamStatus"></div>
   </div>
 
-  <!-- Last exposure panel -->
-  <div class="img-sub hidden" id="lastExpSub">
-    <div class="panel-hdr" style="flex-shrink:0">
-      <div class="panel-name">Last Exposure</div>
-      <div id="imgReadyBadge" style="font-size:10px;color:var(--dim)"></div>
-    </div>
-    <div class="img-inner" style="flex:1;align-items:stretch;">
-      <div class="img-frame" style="max-width:none;flex:1;display:flex;align-items:center;justify-content:center;">
-        <img id="lastImg" src="" alt="Last exposure" style="max-width:100%;max-height:100%;object-fit:contain;image-rendering:pixelated;">
+  <!-- Panel row: telescope + camera side by side with draggable divider -->
+  <div id="panelRow" style="display:flex;min-height:0;overflow:hidden;gap:0;">
+  <!-- Telescope Panel -->
+  <div class="panel-embed hidden" id="telModal" style="flex:1;min-width:0;">
+    <div class="panel-embed-inner">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="dot dot-gray" id="telModalDot"></span>
+          🔭 Telescope Control
+          <div class="badges" id="telModalBadges" style="margin-left:8px;"></div>
+        </div>
       </div>
-      <div class="img-meta" id="imgMeta" style="min-width:140px;"></div>
+
+      <!-- Coordinates -->
+      <div style="display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+        <div style="font-size: 14px; color: var(--dim); letter-spacing: 1px;">CURRENT POSITION</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div>
+            <div style="font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-bottom: 4px;">R.A.</div>
+            <div class="coord-val" id="telModalRA" style="font-size: 18px;">—</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-bottom: 4px;">DEC</div>
+            <div class="coord-val" id="telModalDec" style="font-size: 18px;">—</div>
+          </div>
+        </div>
+        <div class="coord-raw" id="telModalRaw" style="font-size: 10px;"></div>
+      </div>
+
+      <!-- Mount controls -->
+      <div class="ctrl-group">
+        <div class="panel-label">Mount</div>
+        <div class="ctrl-row">
+          <button class="btn btn-green" id="btnModalUnpark" onclick="apiUnpark()" disabled>Unpark</button>
+          <button class="btn btn-dim"   id="btnModalPark"   onclick="apiPark()"   disabled>Park</button>
+        </div>
+      </div>
+
+      <!-- Arm controls (shown only when CoverCalibrator is available) -->
+      <div class="ctrl-group" id="armCtrlGroup" style="display:none;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <div class="panel-label" style="margin:0;">Arm</div>
+          <span id="armStateLabel" style="font-size:11px;color:var(--dim);letter-spacing:1px;"></span>
+        </div>
+        <div class="ctrl-row">
+          <button class="btn btn-green" id="btnArmOpen"  onclick="apiArmOpen()"  disabled>Open Arm</button>
+          <button class="btn btn-dim"   id="btnArmClose" onclick="apiArmClose()" disabled>Close Arm</button>
+        </div>
+      </div>
+
+      <!-- Tracking controls -->
+      <div class="ctrl-group">
+        <div class="panel-label">Tracking</div>
+        <div class="ctrl-row">
+          <button class="btn btn-green"  id="btnModalTrackOn"  onclick="apiTracking(true)"  disabled>Track ON</button>
+          <button class="btn btn-yellow" id="btnModalTrackOff" onclick="apiTracking(false)" disabled>Track OFF</button>
+        </div>
+      </div>
+
+      <!-- Object Catalog Search -->
+      <div class="ctrl-group">
+        <div class="panel-label">Object Catalog</div>
+        <div style="position:relative;">
+          <input class="inp" id="catalogSearch" type="text" placeholder="Search M42, Andromeda, nebula…"
+            autocomplete="off" spellcheck="false"
+            oninput="catalogFilter()" onfocus="catalogFilter()" onkeydown="catalogKeyNav(event)">
+          <div id="catalogDropdown" style="display:none;position:fixed;z-index:9999;
+            background:#161b22;border:1px solid var(--border);border-radius:6px;
+            max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,0.7);"></div>
+        </div>
+      </div>
+
+      <!-- Slew -->
+      <div class="ctrl-group">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div class="panel-label" style="margin:0;">Slew Target</div>
+          <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+            <button id="slewModeEQ" onclick="setSlewMode('eq')"
+              style="padding:3px 10px;font-size:10px;letter-spacing:1px;border:none;cursor:pointer;background:var(--blue);color:#fff;">EQ</button>
+            <button id="slewModeAltAz" onclick="setSlewMode('altaz')"
+              style="padding:3px 10px;font-size:10px;letter-spacing:1px;border:none;cursor:pointer;background:var(--panel-bg);color:var(--dim);">ALT-AZ</button>
+          </div>
+        </div>
+        <div id="slewInputsEQ" class="inp-grid">
+          <div class="inp-group">
+            <div class="inp-label">R.A. (decimal hours)</div>
+            <input class="inp" id="slewRA" type="number" min="0" max="23.9999" step="0.0001" placeholder="0.0000">
+          </div>
+          <div class="inp-group">
+            <div class="inp-label">Dec (decimal degrees)</div>
+            <input class="inp" id="slewDec" type="number" min="-90" max="90" step="0.0001" placeholder="0.0000">
+          </div>
+        </div>
+        <div id="slewInputsAltAz" class="inp-grid" style="display:none;">
+          <div class="inp-group">
+            <div class="inp-label">Altitude (degrees, 0–90)</div>
+            <input class="inp" id="slewAlt" type="number" min="0" max="90" step="0.0001" placeholder="0.0000">
+          </div>
+          <div class="inp-group">
+            <div class="inp-label">Azimuth (degrees, 0–360)</div>
+            <input class="inp" id="slewAz" type="number" min="0" max="359.9999" step="0.0001" placeholder="0.0000">
+          </div>
+        </div>
+        <button class="btn btn-blue btn-full" id="btnModalSlew" onclick="apiSlew()" disabled>Slew to Target</button>
+        <div id="slewRejectionBanner" style="display:none;margin-top:8px;padding:8px 10px;background:rgba(220,50,50,0.15);border:1px solid #c0392b;border-radius:6px;font-size:12px;color:#e74c3c;">
+          <div id="slewRejectionMsg" style="margin-bottom:6px;"></div>
+          <button class="btn btn-full" id="btnForceSlew" onclick="apiForceSlew()"
+            style="background:#c0392b;color:#fff;border:none;padding:5px 0;border-radius:4px;cursor:pointer;font-size:12px;letter-spacing:0.5px;">
+            ⚠ Force Slew — I accept the risks
+          </button>
+        </div>
+      </div>
+
+      <!-- Joystick -->
+      <div class="ctrl-group">
+        <div class="panel-label">Nudge</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:10px;color:var(--dim);letter-spacing:1px;">SPEED</span>
+              <span id="joySpeedLabel" style="font-size:10px;color:var(--blue);">1×</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:9px;color:var(--dim);">Fine</span>
+              <input id="joySpeed" type="range" min="-2" max="2" step="0.1" value="0"
+                style="flex:1;accent-color:var(--blue);cursor:pointer;"
+                title="Speed multiplier (logarithmic)">
+              <span style="font-size:9px;color:var(--dim);">Fast</span>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+            <div id="joyPad" style="width:120px; height:120px; border-radius:50%; background:var(--panel-bg); border:2px solid var(--border); position:relative; cursor:grab; touch-action:none; user-select:none; flex-shrink:0;" title="Hold and drag to move — distance sets speed">
+              <span style="position:absolute;top:4px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--dim);pointer-events:none;">N</span>
+              <span style="position:absolute;bottom:4px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--dim);pointer-events:none;">S</span>
+              <span style="position:absolute;left:5px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--dim);pointer-events:none;">W</span>
+              <span style="position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--dim);pointer-events:none;">E</span>
+              <div id="joyKnob" style="width:34px;height:34px;border-radius:50%;background:var(--blue);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;transition:background 0.1s;box-shadow:0 0 8px rgba(96,165,250,0.4);"></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <div id="joyReadout" style="font-size:11px;color:var(--dim);">drag to nudge</div>
+              <div id="joyDir"     style="font-size:13px;color:var(--blue);min-height:18px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
+
+  <div class="resize-handle-v" id="panelResizer"></div>
+  <!-- Camera Panel -->
+  <div class="panel-embed hidden" id="camModal" style="flex:1;min-width:0;">
+    <div class="panel-embed-inner">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="dot dot-gray" id="camModalDot"></span>
+          📷 Camera Control
+        </div>
+      </div>
+
+      <!-- Last exposure preview (shown after first capture) -->
+      <div id="camLastExpSection" style="display:none;border-bottom:1px solid var(--border);padding-bottom:14px;">
+        <div class="panel-label" style="margin-bottom:8px;">Last Exposure</div>
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <img id="camLastImg" src="" alt="Last exposure" style="max-width:55%;max-height:200px;object-fit:contain;image-rendering:pixelated;border-radius:6px;background:#000;flex-shrink:0;">
+          <div>
+            <div id="imgReadyBadge" style="font-size:11px;color:var(--green);margin-bottom:6px;font-weight:bold;min-height:16px;"></div>
+            <div id="camLastMeta" style="font-size:11px;color:var(--dim);line-height:1.8;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- State display -->
+      <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+        <div class="exp-ring-wrap">
+          <div>
+            <div class="cam-state cs-idle" id="camModalState">—</div>
+            <div class="cam-sub" id="camModalSub"></div>
+            <div id="camModalReady" style="font-size:11px;color:var(--gray)"></div>
+          </div>
+          <svg id="expRing" class="exp-ring" width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="30" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="5"/>
+            <circle id="expRingArc" cx="36" cy="36" r="30" fill="none"
+              stroke="var(--yellow)" stroke-width="5" stroke-linecap="round"
+              stroke-dasharray="188.5" stroke-dashoffset="0"
+              transform="rotate(-90 36 36)" style="transition:stroke 0.3s;"/>
+            <text id="expRingText" x="36" y="40" text-anchor="middle"
+              fill="var(--text)" font-size="11" font-family="monospace" letter-spacing="0">—</text>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Exposure controls -->
+      <div class="ctrl-group">
+        <div class="panel-label">Exposure</div>
+        <div class="inp-grid">
+          <div class="inp-group">
+            <div class="inp-label">Duration (seconds)</div>
+            <input class="inp" id="expDuration" type="number" min="0.001" step="0.1" value="1.0" placeholder="1.0">
+          </div>
+          <div class="inp-group">
+            <div class="inp-label">Binning</div>
+            <input class="inp" id="expBinning" type="number" min="1" max="8" step="1" value="1" placeholder="1">
+          </div>
+        </div>
+        <div class="ctrl-row">
+          <button class="btn btn-green" id="btnModalExpose" onclick="apiExpose()" disabled>Expose</button>
+          <button class="btn btn-red"   id="btnModalAbortExp" onclick="apiAbortExposure()" disabled>Abort</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /panelRow -->
 
 </div><!-- /main -->
 
@@ -3168,186 +3662,6 @@ html[data-night] img, html[data-night] video { filter: none; }
   </div>
 </div>
 
-<!-- Telescope Modal -->
-<div class="modal hidden" id="telModal" onclick="if(event.target===this)closeTelescopeModal()">
-  <div class="modal-content">
-    <div class="modal-header">
-      <div class="modal-title">
-        <span class="dot dot-gray" id="telModalDot"></span>
-        🔭 Telescope Control
-        <div class="badges" id="telModalBadges" style="margin-left:8px;"></div>
-      </div>
-      <button class="modal-close" onclick="closeTelescopeModal()">×</button>
-    </div>
-
-    <!-- Coordinates -->
-    <div style="display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
-      <div style="font-size: 14px; color: var(--dim); letter-spacing: 1px;">CURRENT POSITION</div>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-        <div>
-          <div style="font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-bottom: 4px;">R.A.</div>
-          <div class="coord-val" id="telModalRA" style="font-size: 18px;">—</div>
-        </div>
-        <div>
-          <div style="font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-bottom: 4px;">DEC</div>
-          <div class="coord-val" id="telModalDec" style="font-size: 18px;">—</div>
-        </div>
-      </div>
-      <div class="coord-raw" id="telModalRaw" style="font-size: 10px;"></div>
-    </div>
-
-    <!-- Mount controls -->
-    <div class="ctrl-group">
-      <div class="panel-label">Mount</div>
-      <div class="ctrl-row">
-        <button class="btn btn-green" id="btnModalUnpark" onclick="apiUnpark()" disabled>Unpark</button>
-        <button class="btn btn-dim"   id="btnModalPark"   onclick="apiPark()"   disabled>Park</button>
-      </div>
-    </div>
-
-    <!-- Tracking controls -->
-    <div class="ctrl-group">
-      <div class="panel-label">Tracking</div>
-      <div class="ctrl-row">
-        <button class="btn btn-green"  id="btnModalTrackOn"  onclick="apiTracking(true)"  disabled>Track ON</button>
-        <button class="btn btn-yellow" id="btnModalTrackOff" onclick="apiTracking(false)" disabled>Track OFF</button>
-      </div>
-    </div>
-
-    <!-- Object Catalog Search -->
-    <div class="ctrl-group">
-      <div class="panel-label">Object Catalog</div>
-      <div style="position:relative;">
-        <input class="inp" id="catalogSearch" type="text" placeholder="Search M42, Andromeda, nebula…"
-          autocomplete="off" spellcheck="false"
-          oninput="catalogFilter()" onfocus="catalogFilter()" onkeydown="catalogKeyNav(event)">
-        <div id="catalogDropdown" style="display:none;position:fixed;z-index:9999;
-          background:#161b22;border:1px solid var(--border);border-radius:6px;
-          max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,0.7);"></div>
-      </div>
-    </div>
-
-    <!-- Slew -->
-    <div class="ctrl-group">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <div class="panel-label" style="margin:0;">Slew Target</div>
-        <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
-          <button id="slewModeEQ" onclick="setSlewMode('eq')"
-            style="padding:3px 10px;font-size:10px;letter-spacing:1px;border:none;cursor:pointer;background:var(--blue);color:#fff;">EQ</button>
-          <button id="slewModeAltAz" onclick="setSlewMode('altaz')"
-            style="padding:3px 10px;font-size:10px;letter-spacing:1px;border:none;cursor:pointer;background:var(--panel-bg);color:var(--dim);">ALT-AZ</button>
-        </div>
-      </div>
-      <div id="slewInputsEQ" class="inp-grid">
-        <div class="inp-group">
-          <div class="inp-label">R.A. (decimal hours)</div>
-          <input class="inp" id="slewRA" type="number" min="0" max="23.9999" step="0.0001" placeholder="0.0000">
-        </div>
-        <div class="inp-group">
-          <div class="inp-label">Dec (decimal degrees)</div>
-          <input class="inp" id="slewDec" type="number" min="-90" max="90" step="0.0001" placeholder="0.0000">
-        </div>
-      </div>
-      <div id="slewInputsAltAz" class="inp-grid" style="display:none;">
-        <div class="inp-group">
-          <div class="inp-label">Altitude (degrees, 0–90)</div>
-          <input class="inp" id="slewAlt" type="number" min="0" max="90" step="0.0001" placeholder="0.0000">
-        </div>
-        <div class="inp-group">
-          <div class="inp-label">Azimuth (degrees, 0–360)</div>
-          <input class="inp" id="slewAz" type="number" min="0" max="359.9999" step="0.0001" placeholder="0.0000">
-        </div>
-      </div>
-      <button class="btn btn-blue btn-full" id="btnModalSlew" onclick="apiSlew()" disabled>Slew to Target</button>
-    </div>
-
-    <!-- Joystick -->
-    <div class="ctrl-group">
-      <div class="panel-label">Nudge</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:10px;color:var(--dim);letter-spacing:1px;">SPEED</span>
-            <span id="joySpeedLabel" style="font-size:10px;color:var(--blue);">1×</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:9px;color:var(--dim);">Fine</span>
-            <input id="joySpeed" type="range" min="-2" max="2" step="0.1" value="0"
-              style="flex:1;accent-color:var(--blue);cursor:pointer;"
-              title="Speed multiplier (logarithmic)">
-            <span style="font-size:9px;color:var(--dim);">Fast</span>
-          </div>
-        </div>
-        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-          <div id="joyPad" style="width:120px; height:120px; border-radius:50%; background:var(--panel-bg); border:2px solid var(--border); position:relative; cursor:grab; touch-action:none; user-select:none; flex-shrink:0;" title="Hold and drag to move — distance sets speed">
-            <span style="position:absolute;top:4px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--dim);pointer-events:none;">N</span>
-            <span style="position:absolute;bottom:4px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--dim);pointer-events:none;">S</span>
-            <span style="position:absolute;left:5px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--dim);pointer-events:none;">W</span>
-            <span style="position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--dim);pointer-events:none;">E</span>
-            <div id="joyKnob" style="width:34px;height:34px;border-radius:50%;background:var(--blue);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;transition:background 0.1s;box-shadow:0 0 8px rgba(96,165,250,0.4);"></div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <div id="joyReadout" style="font-size:11px;color:var(--dim);">drag to nudge</div>
-            <div id="joyDir"     style="font-size:13px;color:var(--blue);min-height:18px;"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Camera Modal -->
-<div class="modal hidden" id="camModal" onclick="if(event.target===this)closeCameraModal()">
-  <div class="modal-content">
-    <div class="modal-header">
-      <div class="modal-title">
-        <span class="dot dot-gray" id="camModalDot"></span>
-        📷 Camera Control
-      </div>
-      <button class="modal-close" onclick="closeCameraModal()">×</button>
-    </div>
-
-    <!-- State display -->
-    <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px;">
-      <div class="exp-ring-wrap">
-        <div>
-          <div class="cam-state cs-idle" id="camModalState">—</div>
-          <div class="cam-sub" id="camModalSub"></div>
-          <div id="camModalReady" style="font-size:11px;color:var(--gray)"></div>
-        </div>
-        <svg id="expRing" class="exp-ring" width="72" height="72" viewBox="0 0 72 72">
-          <circle cx="36" cy="36" r="30" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="5"/>
-          <circle id="expRingArc" cx="36" cy="36" r="30" fill="none"
-            stroke="var(--yellow)" stroke-width="5" stroke-linecap="round"
-            stroke-dasharray="188.5" stroke-dashoffset="0"
-            transform="rotate(-90 36 36)" style="transition:stroke 0.3s;"/>
-          <text id="expRingText" x="36" y="40" text-anchor="middle"
-            fill="var(--text)" font-size="11" font-family="monospace" letter-spacing="0">—</text>
-        </svg>
-      </div>
-    </div>
-
-    <!-- Exposure controls -->
-    <div class="ctrl-group">
-      <div class="panel-label">Exposure</div>
-      <div class="inp-grid">
-        <div class="inp-group">
-          <div class="inp-label">Duration (seconds)</div>
-          <input class="inp" id="expDuration" type="number" min="0.001" step="0.1" value="1.0" placeholder="1.0">
-        </div>
-        <div class="inp-group">
-          <div class="inp-label">Binning</div>
-          <input class="inp" id="expBinning" type="number" min="1" max="8" step="1" value="1" placeholder="1">
-        </div>
-      </div>
-      <div class="ctrl-row">
-        <button class="btn btn-green" id="btnModalExpose" onclick="apiExpose()" disabled>Expose</button>
-        <button class="btn btn-red"   id="btnModalAbortExp" onclick="apiAbortExposure()" disabled>Abort</button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- Config editor modal -->
 <div class="modal hidden cfg-modal" id="cfgModal" onclick="if(event.target===this)closeConfigModal()">
   <div class="modal-content" style="max-width:780px;width:95%;max-height:90vh;height:90vh;">
@@ -3429,6 +3743,17 @@ html[data-night] img, html[data-night] video { filter: none; }
           <div class="inp-group" style="max-width:110px;">
             <div class="inp-label">Device #</div>
             <input class="inp" type="number" id="cfgDevFwNum" min="0" max="99" step="1">
+          </div>
+        </div>
+        <div class="cfg-device-row">
+          <label class="cfg-toggle" style="flex:1;">
+            <input type="checkbox" id="cfgDevCoverEnabled">
+            <span>Cover / Arm</span>
+            <span class="help-tip" data-tip="Enable ALPACA CoverCalibrator for arm open/close control. Device 0 on the Seestar S50.">?</span>
+          </label>
+          <div class="inp-group" style="max-width:110px;">
+            <div class="inp-label">Device # <span class="help-tip" data-tip="CoverCalibrator device index. Almost always 0 for the Seestar S50.">?</span></div>
+            <input class="inp" type="number" id="cfgDevCoverNum" min="0" max="99" step="1">
           </div>
         </div>
       </div>
@@ -3801,6 +4126,9 @@ html[data-night] img, html[data-night] video { filter: none; }
   </div>
 </div>
 
+<!-- Log resize handle -->
+<div class="resize-handle-h" id="logResizer"></div>
+
 <!-- Log footer -->
 <div class="log-footer">
   <div class="log-panel">
@@ -3895,21 +4223,20 @@ async function doDisconnect() {
 // ── Modal management ────────────────────────────────────────────────────────
 
 function openTelescopeModal() {
-  document.getElementById("telModal").classList.remove("hidden");
+  // Panel is embedded in main grid — just ensure catalog is loaded
   loadCatalog();
+  const el = document.getElementById("telModal");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function closeTelescopeModal() {
-  document.getElementById("telModal").classList.add("hidden");
-}
+function closeTelescopeModal() { /* panel is always visible when device is enabled */ }
 
 function openCameraModal() {
-  document.getElementById("camModal").classList.remove("hidden");
+  const el = document.getElementById("camModal");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function closeCameraModal() {
-  document.getElementById("camModal").classList.add("hidden");
-}
+function closeCameraModal() { /* panel is always visible when device is enabled */ }
 
 // Close modals on escape key
 document.addEventListener("keydown", (e) => {
@@ -3917,8 +4244,6 @@ document.addEventListener("keydown", (e) => {
     if (!document.getElementById("histLightbox").classList.contains("hidden")) { closeLightbox(); return; }
     const addWin = document.getElementById("schedAddWindow");
     if (addWin) { schedCloseAdd(); return; }
-    closeTelescopeModal();
-    closeCameraModal();
     closeConfigModal();
     closeScheduleModal();
     closeHistoryModal();
@@ -4065,8 +4390,8 @@ function renderTelescope(t) {
   }
 
   const blocked = !t.connected || t.busy || t.slewing;
-  document.getElementById("btnModalUnpark").disabled   = blocked;
-  document.getElementById("btnModalPark").disabled     = blocked;
+  document.getElementById("btnModalUnpark").disabled   = blocked || t.parked === false;
+  document.getElementById("btnModalPark").disabled     = blocked || t.parked === true;
   document.getElementById("btnModalTrackOn").disabled  = blocked;
   document.getElementById("btnModalTrackOff").disabled = blocked;
   document.getElementById("btnModalSlew").disabled     = blocked;
@@ -4077,7 +4402,35 @@ function renderTelescope(t) {
     pad.style.cursor  = blocked ? "not-allowed" : "grab";
   }
 
+  // Arm (CoverCalibrator) controls
+  const armGroup = document.getElementById("armCtrlGroup");
+  const armLabel = document.getElementById("armStateLabel");
+  const btnArmOpen  = document.getElementById("btnArmOpen");
+  const btnArmClose = document.getElementById("btnArmClose");
+  if (armGroup && t.arm_state != null) {
+    armGroup.style.display = "";
+    const ARM_NAMES = {0:"Not Present",1:"Closed",2:"Moving…",3:"Open",4:"Unknown",5:"Error"};
+    const ARM_COLORS = {1:"var(--dim)",2:"var(--yellow)",3:"var(--green)",5:"var(--red)"};
+    const armName = ARM_NAMES[t.arm_state] ?? "Unknown";
+    if (armLabel) {
+      armLabel.textContent = armName.toUpperCase();
+      armLabel.style.color = ARM_COLORS[t.arm_state] ?? "var(--dim)";
+    }
+    const armBlocked = !t.connected || t.arm_busy || t.arm_state === 2;
+    if (btnArmOpen)  btnArmOpen.disabled  = armBlocked || t.arm_state === 3;
+    if (btnArmClose) btnArmClose.disabled = armBlocked || t.arm_state === 1;
+  } else if (armGroup) {
+    armGroup.style.display = "none";
+  }
+
   updateSkyOverlay(t);
+
+  // Show/hide telescope panel based on whether device is enabled
+  const telPanel = document.getElementById("telModal");
+  if (telPanel) {
+    telPanel.classList.toggle("hidden", !t.enabled);
+    updateImgRow();
+  }
 }
 
 // ── Camera ───────────────────────────────────────────────────────────────────
@@ -4140,6 +4493,13 @@ function renderCamera(c) {
     ringTxt.textContent = remaining < 1 ? "↓" : remaining.toFixed(0) + "s";
   } else {
     ring.classList.remove("active");
+  }
+
+  // Show/hide camera panel based on whether device is enabled
+  const camPanel = document.getElementById("camModal");
+  if (camPanel) {
+    camPanel.classList.toggle("hidden", !c.enabled);
+    updateImgRow();
   }
 }
 
@@ -4338,10 +4698,11 @@ function drawAltSparkline(canvas, raHours, decDeg, nightStartH, nightEndH) {
 // ── Main area visibility ──────────────────────────────────────────────────────
 
 function updateImgRow() {
+  const tel   = document.getElementById("telModal");
+  const cam   = document.getElementById("camModal");
   const pier  = document.getElementById("pierCamSub");
-  const last  = document.getElementById("lastExpSub");
   const empty = document.getElementById("mainEmpty");
-  const hasContent = !pier.classList.contains("hidden") || !last.classList.contains("hidden");
+  const hasContent = [tel, cam, pier].some(el => el && !el.classList.contains("hidden"));
   empty.style.display = hasContent ? "none" : "flex";
 }
 
@@ -4354,30 +4715,29 @@ async function renderImage(s) {
   if (s.image_id === _lastImageId) return;
   _lastImageId = s.image_id;
 
-  const sub  = document.getElementById("lastExpSub");
-  const img  = document.getElementById("lastImg");
-  const meta = document.getElementById("imgMeta");
+  const section = document.getElementById("camLastExpSection");
+  const img     = document.getElementById("camLastImg");
+  const meta    = document.getElementById("camLastMeta");
 
-  sub.classList.remove("hidden");
-  updateImgRow();
-  meta.innerHTML = "Downloading…";
+  if (section) section.style.display = "";
+  if (meta) meta.innerHTML = "Downloading…";
 
   try {
     const r    = await fetch("/api/image");
     if (!r.ok) throw new Error("HTTP " + r.status);
     const blob = await r.blob();
     const url  = URL.createObjectURL(blob);
-    img.src = url;
+    if (img) img.src = url;
     const kb = (blob.size / 1024).toFixed(1);
     const ts = new Date().toLocaleTimeString();
-    img.onload = () => {
-      meta.innerHTML =
+    if (img) img.onload = () => {
+      if (meta) meta.innerHTML =
         `Captured: <span>${ts}</span><br>` +
         `Size: <span>${img.naturalWidth} × ${img.naturalHeight} px</span><br>` +
         `File: <span>${kb} KB (PNG)</span>`;
     };
   } catch (e) {
-    meta.innerHTML = `<span style="color:var(--red)">Image load failed: ${e.message}</span>`;
+    if (meta) meta.innerHTML = `<span style="color:var(--red)">Image load failed: ${e.message}</span>`;
     _lastImageId = -1;
   }
 }
@@ -4477,6 +4837,16 @@ async function apiTracking(enabled) {
       body: JSON.stringify({ enabled }),
     });
   } catch (e) { alert("Set tracking failed: " + e.message); }
+}
+
+async function apiArmOpen() {
+  try { await fetch("/api/arm/open", { method: "POST" }); }
+  catch (e) { alert("Arm open failed: " + e.message); }
+}
+
+async function apiArmClose() {
+  try { await fetch("/api/arm/close", { method: "POST" }); }
+  catch (e) { alert("Arm close failed: " + e.message); }
 }
 
 // ── Joystick ─────────────────────────────────────────────────────────────────
@@ -4845,8 +5215,44 @@ function setSlewMode(mode) {
   document.getElementById("slewModeAltAz").style.color      = isAltAz ? "#fff" : "var(--dim)";
 }
 
-async function apiSlew() {
+let _lastSlewPayload = null;
+
+function _hideSlewRejection() {
+  document.getElementById("slewRejectionBanner").style.display = "none";
+  document.getElementById("slewRejectionMsg").textContent = "";
+}
+
+function _showSlewRejection(msg) {
+  document.getElementById("slewRejectionMsg").textContent = msg;
+  document.getElementById("slewRejectionBanner").style.display = "block";
+}
+
+async function _doSlew(payload) {
   const btn = document.getElementById("btnModalSlew");
+  btn.disabled = true; btn.textContent = "Slewing…";
+  try {
+    const r = await fetch("/api/slew", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (r.status === 403 && (d.horizon_blocked || d.blocked || d.unsafe)) {
+      _lastSlewPayload = payload;
+      let notice = d.error || "Slew rejected";
+      if (d.min_safe_alt != null)
+        notice += `  (min safe altitude in this direction: ${d.min_safe_alt}°)`;
+      _showSlewRejection(notice);
+    } else {
+      _hideSlewRejection();
+      if (!d.ok) alert(d.error || "Slew failed");
+    }
+  } catch (e) { alert("Slew failed: " + e.message); }
+  btn.textContent = "Slew to Target";
+  // disabled state re-evaluated on next poll
+}
+
+async function apiSlew() {
   let payload;
   if (_slewMode === "altaz") {
     const alt = parseFloat(document.getElementById("slewAlt").value);
@@ -4859,28 +5265,16 @@ async function apiSlew() {
     if (isNaN(ra) || isNaN(dec)) { alert("Enter valid RA (h) and Dec (°) values."); return; }
     payload = { mode: "eq", ra, dec };
   }
-  btn.disabled = true; btn.textContent = "Slewing…";
-  try {
-    const r = await fetch("/api/slew", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    if (r.status === 403 && d.horizon_blocked) {
-      alert(
-        "⛔ Horizon mask blocked this slew\n\n" +
-        d.error +
-        (d.min_safe_alt != null
-          ? "\n\nMinimum safe altitude in that direction: " + d.min_safe_alt + "°"
-          : "")
-      );
-    } else if (!d.ok) {
-      alert(d.error || "Slew failed");
-    }
-  } catch (e) { alert("Slew failed: " + e.message); }
-  btn.textContent = "Slew to Target";
-  // disabled state re-evaluated on next poll
+  _hideSlewRejection();
+  await _doSlew(payload);
+}
+
+async function apiForceSlew() {
+  if (!_lastSlewPayload) return;
+  const btn = document.getElementById("btnForceSlew");
+  btn.disabled = true; btn.textContent = "Forcing…";
+  await _doSlew({ ..._lastSlewPayload, force: true });
+  btn.disabled = false; btn.textContent = "⚠ Force Slew — I accept the risks";
 }
 
 // ── Camera actions ───────────────────────────────────────────────────────────
@@ -5549,11 +5943,7 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
 function onPermCheckChange() {
   const checked = document.getElementById("permCheckbox").checked;
   document.getElementById("btnManualConnect").disabled = !checked;
-  document.getElementById("btnSrvConnect").disabled = !checked;
-  document.querySelectorAll(".srv-item").forEach(item => {
-    item.style.pointerEvents = checked ? "auto" : "none";
-    item.style.opacity       = checked ? "1"    : "0.4";
-  });
+  if (_selectedSrv) document.getElementById("btnSrvConnect").disabled = !checked;
 }
 
 function showDiscover() {
@@ -5578,7 +5968,6 @@ async function doScan() {
   btn.textContent = "Scanning…"; btn.disabled = true;
   document.getElementById("srvList").innerHTML = "";
   clearSrvSelection();
-  const permOk = document.getElementById("permCheckbox").checked;
   try {
     const r    = await fetch("/api/discover", { method: "POST" });
     const data = await r.json();
@@ -5598,8 +5987,6 @@ async function doScan() {
         const item = document.createElement("div");
         item.className        = "srv-item";
         item.textContent      = `${srv.address}:${srv.port}`;
-        item.style.opacity        = permOk ? "1"    : "0.4";
-        item.style.pointerEvents  = permOk ? "auto" : "none";
         item.onclick = () => selectSrv(srv.address, srv.port);
         list.appendChild(item);
       });
@@ -5716,9 +6103,11 @@ function renderCfgForm(c) {
   setVal('cfgDevCamNum',     _cfgGet(c, 'devices.camera.device_number',      0));
   setVal('cfgDevFocEnabled', _cfgGet(c, 'devices.focuser.enabled',           false));
   setVal('cfgDevFocNum',     _cfgGet(c, 'devices.focuser.device_number',     0));
-  setVal('cfgDevFwEnabled',  _cfgGet(c, 'devices.filterwheel.enabled',       false));
-  setVal('cfgDevFwNum',      _cfgGet(c, 'devices.filterwheel.device_number', 0));
-  setVal('cfgTrackingRate',  _cfgGet(c, 'telescope.tracking_rate', 0));
+  setVal('cfgDevFwEnabled',    _cfgGet(c, 'devices.filterwheel.enabled',          false));
+  setVal('cfgDevFwNum',        _cfgGet(c, 'devices.filterwheel.device_number',    0));
+  setVal('cfgDevCoverEnabled', _cfgGet(c, 'devices.covercalibrator.enabled',      false));
+  setVal('cfgDevCoverNum',     _cfgGet(c, 'devices.covercalibrator.device_number', 0));
+  setVal('cfgTrackingRate',    _cfgGet(c, 'telescope.tracking_rate', 0));
   setVal('cfgCamExposure',   _cfgGet(c, 'camera.exposure_duration', 1.0));
   setVal('cfgCamBinning',    _cfgGet(c, 'camera.binning',           1));
   setVal('cfgSafetyEnabled',       _cfgGet(c, 'safety.enabled',              true));
@@ -5803,8 +6192,10 @@ function collectCfgForm() {
   set('devices.camera.device_number',      num('cfgDevCamNum', true));
   set('devices.focuser.enabled',           chk('cfgDevFocEnabled'));
   set('devices.focuser.device_number',     num('cfgDevFocNum', true));
-  set('devices.filterwheel.enabled',       chk('cfgDevFwEnabled'));
-  set('devices.filterwheel.device_number', num('cfgDevFwNum', true));
+  set('devices.filterwheel.enabled',           chk('cfgDevFwEnabled'));
+  set('devices.filterwheel.device_number',     num('cfgDevFwNum', true));
+  set('devices.covercalibrator.enabled',       chk('cfgDevCoverEnabled'));
+  set('devices.covercalibrator.device_number', num('cfgDevCoverNum', true));
   set('telescope.tracking_rate',   num('cfgTrackingRate', true));
   set('camera.exposure_duration',  num('cfgCamExposure'));
   set('camera.binning',            num('cfgCamBinning', true));
@@ -7061,6 +7452,73 @@ setInterval(async () => {
     }
   } catch {}
 }, 8000);
+
+// ── Resizable log divider ─────────────────────────────────────────────────────
+(function() {
+  const handle = document.getElementById("logResizer");
+  const footer = document.querySelector(".log-footer");
+  if (!handle || !footer) return;
+  let startY, startH;
+  handle.addEventListener("mousedown", e => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = footer.getBoundingClientRect().height;
+    handle.classList.add("dragging");
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+    function onMove(e) {
+      const delta = startY - e.clientY;
+      footer.style.height = Math.max(40, Math.min(window.innerHeight * 0.75, startH + delta)) + "px";
+    }
+    function onUp() {
+      handle.classList.remove("dragging");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+})();
+
+// ── Resizable panel divider ───────────────────────────────────────────────────
+(function() {
+  const handle = document.getElementById("panelResizer");
+  const row    = document.getElementById("panelRow");
+  if (!handle || !row) return;
+  let startX, startLeftW;
+  handle.addEventListener("mousedown", e => {
+    e.preventDefault();
+    startX = e.clientX;
+    const tel = document.getElementById("telModal");
+    startLeftW = tel ? tel.getBoundingClientRect().width : row.clientWidth / 2;
+    handle.classList.add("dragging");
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    function onMove(e) {
+      const tel = document.getElementById("telModal");
+      const cam = document.getElementById("camModal");
+      if (!tel || !cam) return;
+      const rowW = row.clientWidth;
+      const hW   = handle.offsetWidth;
+      const avail = rowW - hW;
+      const delta = e.clientX - startX;
+      const newLeft = Math.max(160, Math.min(avail - 160, startLeftW + delta));
+      tel.style.flex = "0 0 " + newLeft + "px";
+      cam.style.flex = "1 1 0";
+    }
+    function onUp() {
+      handle.classList.remove("dragging");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+})();
 </script>
 </body>
 </html>"""
@@ -7081,6 +7539,7 @@ def launch(port: int = 5173) -> None:
         format=log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
     )
     logger.info("NODE v1 starting on port %d", port)
+    _load_history_from_disk()
 
     _safety_mgr = SafetyManager(config=cfg, on_unsafe=_on_safety_unsafe)
     _safety_mgr.start()

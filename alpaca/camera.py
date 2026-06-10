@@ -63,10 +63,54 @@ class Camera:
 
     # --- commands ------------------------------------------------------------
 
+    def gain(self) -> int:
+        return int(self._c._get("gain"))
+
+    def set_gain(self, gain: int) -> None:
+        self._c._put("gain", Gain=gain)
+        logger.info("Camera gain set to %d", gain)
+
+    def offset(self) -> int:
+        return int(self._c._get("offset"))
+
+    def set_offset(self, offset: int) -> None:
+        self._c._put("offset", Offset=offset)
+        logger.info("Camera offset set to %d", offset)
+
+    def ccd_temperature(self) -> float:
+        return float(self._c._get("ccdtemperature"))
+
+    def cooler_target(self) -> float:
+        return float(self._c._get("setccdtemperature"))
+
+    def set_cooler_target(self, temp: float) -> None:
+        self._c._put("setccdtemperature", SetCCDTemperature=temp)
+        logger.info("Camera cooler target set to %.1f °C", temp)
+
+    def cooler_on(self) -> bool:
+        return bool(self._c._get("cooleron"))
+
+    def set_cooler(self, enabled: bool) -> None:
+        self._c._put("cooleron", CoolerOn=enabled)
+        logger.info("Camera cooler %s", "enabled" if enabled else "disabled")
+
     def set_binning(self, bin_x: int, bin_y: int | None = None) -> None:
         bin_y = bin_y if bin_y is not None else bin_x
         self._c._put("binx", BinX=bin_x)
         self._c._put("biny", BinY=bin_y)
+
+    def set_roi(self, start_x: int, start_y: int, num_x: int, num_y: int) -> None:
+        self._c._put("startx", StartX=start_x)
+        self._c._put("starty", StartY=start_y)
+        self._c._put("numx", NumX=num_x)
+        self._c._put("numy", NumY=num_y)
+        logger.info("Camera ROI set: origin=(%d,%d) size=%dx%d", start_x, start_y, num_x, num_y)
+
+    def reset_roi(self) -> None:
+        w = int(self._c._get("cameraxsize"))
+        h = int(self._c._get("cameraysize"))
+        self.set_roi(0, 0, w, h)
+        logger.info("Camera ROI reset to full frame %dx%d", w, h)
 
     def expose(
         self,

@@ -40,3 +40,12 @@ class FilterWheel:
         self._c._put("position", Position=slot)
         self._c.wait_for(lambda: not self.is_moving(), timeout=30, label="filter wheel move")
         logger.info("FilterWheel at slot %d", self.position())
+
+    def set_position_by_name(self, name: str) -> None:
+        """Rotate the wheel to the named filter (case-insensitive)."""
+        names = [n.lower() for n in self.filter_names()]
+        try:
+            slot = names.index(name.lower())
+        except ValueError:
+            raise ValueError(f"Filter '{name}' not found. Available: {self.filter_names()}")
+        self.set_position(slot)

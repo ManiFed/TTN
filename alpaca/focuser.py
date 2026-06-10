@@ -39,3 +39,13 @@ class Focuser:
     def halt(self) -> None:
         self._c._put("halt")
         logger.warning("Focuser halted")
+
+    def temperature(self) -> float:
+        return float(self._c._get("temperature"))
+
+    def temp_compensation(self) -> bool:
+        return bool(self._c._get("tempcomp"))
+
+    def set_temp_compensation(self, enabled: bool) -> None:
+        self._c._put("tempcomp", TempComp=enabled)
+        logger.info("Focuser temperature compensation %s", "enabled" if enabled else "disabled")

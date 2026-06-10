@@ -1,8 +1,10 @@
 alpaca:
-  discovery_port: 32227        # UDP broadcast port defined by ALPACA spec
-  discovery_timeout: 5         # seconds to wait for discovery responses
+  discovery_port: 32227
+  discovery_timeout: 5
   api_version: 1
-
+  default_server:
+    address: 172.22.6.32
+    port: 32323
 devices:
   telescope:
     enabled: true
@@ -16,102 +18,80 @@ devices:
   filterwheel:
     enabled: false
     device_number: 0
-
+  covercalibrator:
+    enabled: true
+    device_number: 0
 telescope:
-  slew_ra: 23.6833             # RA in decimal hours  (example: Andromeda)
-  slew_dec: 80.2692            # Dec in decimal degrees
-  tracking_rate: 0             # 0=Sidereal, 1=Lunar, 2=Solar, 3=King
-
+  slew_ra: 23.6833
+  slew_dec: 80.2692
+  tracking_rate: 0
 camera:
-  exposure_duration: 1.0       # seconds
+  exposure_duration: 1.0
   binning: 1
-
 logging:
   level: INFO
-  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-
+  format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 pier_cam:
   enabled: false
-  device_index: 0           # ZWO camera index (may differ from ALPACA device number)
-  sdk_lib: ""               # path to libASICamera2.dylib/.so; blank = auto-detect
-  exposure_ms: 80           # milliseconds per preview frame
+  device_index: 0
+  sdk_lib: ''
+  exposure_ms: 80
   gain: 200
-  bin: 2                    # 1=full res, 2=half, etc.
+  bin: 2
   target_fps: 10
   jpeg_quality: 75
-
 image_watcher:
-  enabled: false                  # set true to watch for Seestar FITS files
-  watch_path: "/mnt/seestar"      # local mount point of the SMB share
-  debounce_delay: 2.0             # seconds to wait after last write before processing
-
+  enabled: false
+  watch_path: /mnt/seestar
+  debounce_delay: 2.0
 observatory:
-  name: ""                        # e.g. "Boundless Skies Node 001"
-  latitude: ~                     # decimal degrees N  (also used by safety.observer)
-  longitude: ~                    # decimal degrees E  (negative = West)
-  elevation: 0.0                  # metres above sea level
-  telescope: "ZWO Seestar S50"
-  instrument: "ZWO Seestar S50 IMX462"
-  observer: ""                    # AAVSO observer code or full name
-
+  name: ''
+  latitude: null
+  longitude: null
+  elevation: 0.0
+  telescope: ZWO Seestar S50
+  instrument: ZWO Seestar S50 IMX462
+  observer: ''
 photometry:
-  enabled: false                  # set true to run pipeline on each new FITS file
-
-  node_id: "node_001"             # unique identifier for this node (set before joining network)
-  filter_name: "CV"               # AAVSO filter code: CV=broadband, V=Johnson-V, B=Johnson-B
-
-  gain: 1.0                       # detector gain e-/ADU  (Seestar S50 ≈ 1.0)
-  read_noise: 5.0                 # read noise ADU  (conservative Seestar estimate)
-
-  # Target override — if set, overrides FITS header OBJECT/RA/DEC
-  # Leave blank to use the header values (normal operation once Seestar is scheduled)
+  enabled: false
+  node_id: node_001
+  filter_name: CV
+  gain: 1.0
+  read_noise: 5.0
   target:
-    name: ""                      # e.g. "SS Cyg" or "Nova Her 2025"
-    ra_deg:  ~                    # RA in decimal degrees (null = use FITS header)
-    dec_deg: ~                    # Dec in decimal degrees (null = use FITS header)
-
-  # Plate solving (only runs if FITS lacks WCS — Seestar usually provides it)
-  astap_path: "astap"             # path to ASTAP executable, or just "astap" if in PATH
-  astap_search_radius: 10         # degrees — search radius passed to ASTAP
-
-  # Aperture geometry (in units of FWHM)
-  aperture_factor: 2.5            # aperture radius = factor × FWHM
-  annulus_inner:   4.0            # inner sky annulus radius = factor × FWHM
-  annulus_outer:   6.0            # outer sky annulus radius = factor × FWHM
-
-  # Comparison star query
-  field_radius: 0.5               # degrees — half-width of field to search for comp stars
-  mag_limit:    15.0              # faintest comparison stars to use
-
-  # Quality thresholds (measurements outside these are flagged "poor")
+    name: ''
+    ra_deg: null
+    dec_deg: null
+  astap_path: astap
+  astap_search_radius: 10
+  aperture_factor: 2.5
+  annulus_inner: 4.0
+  annulus_outer: 6.0
+  field_radius: 0.5
+  mag_limit: 15.0
   min_comparison_stars: 3
-  snr_threshold:        20        # minimum signal-to-noise ratio
-  max_uncertainty:      0.3       # maximum magnitude uncertainty
-  max_airmass:          3.0
-
-  # FITS export — save enhanced copies with full observatory/processing headers
+  snr_threshold: 20
+  max_uncertainty: 0.3
+  max_airmass: 3.0
   fits_export:
-    enabled: true                 # write exported FITS after each successful photometry run
-    export_dir: "fits_export"     # directory for exported files (created automatically)
-
+    enabled: true
+    export_dir: fits_export
 aavso:
-  observer_code: ""             # AAVSO observer code (OBSCODE), e.g. "MXYZ"  ← required
-  username: ""                  # AAVSO website login username                 ← required to POST
-  password: ""                  # AAVSO website login password                 ← required to POST
-
-  audit_dir: "aavso_submissions"  # local directory for submission files and audit records
-  dry_run: false                  # if true, format and save but do not POST to AAVSO
-  submit_poor_quality: false      # if true, submit observations flagged quality=poor
-  chart_id: ""                    # VSP chart ID used for comparison stars (leave blank = "na")
-
+  observer_code: ''
+  username: ''
+  password: ''
+  audit_dir: aavso_submissions
+  dry_run: false
+  submit_poor_quality: false
+  chart_id: ''
 safety:
   enabled: true
-  disconnect_timeout: 600       # seconds — park after this long without telescope contact
-  heartbeat_interval: 30        # seconds between connection checks
-  reconnect_attempts: 3         # retries before declaring connection lost
-  reconnect_delay: 10           # seconds between reconnect attempts
-  park_at_dawn: true            # park automatically at dawn
-  dawn_type: astronomical       # astronomical (-18°), nautical (-12°), civil (-6°)
+  disconnect_timeout: 600
+  heartbeat_interval: 30
+  reconnect_attempts: 3
+  reconnect_delay: 10
+  park_at_dawn: true
+  dawn_type: astronomical
   observer:
-    latitude: 0.0               # decimal degrees N  ← set your location
-    longitude: 0.0              # decimal degrees E  (negative = West)
+    latitude: 0.0
+    longitude: 0.0
