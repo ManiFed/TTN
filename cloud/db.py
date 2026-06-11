@@ -141,6 +141,71 @@ CREATE TABLE IF NOT EXISTS interrupts (
     expires_at    TEXT NOT NULL,
     acked_by      TEXT DEFAULT '[]'              -- JSON list of node_ids
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id         TEXT PRIMARY KEY,
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    salt            TEXT NOT NULL,
+    auth_token_hash TEXT DEFAULT '',
+    role            TEXT DEFAULT 'member',       -- member | admin
+    created_at      TEXT NOT NULL,
+    last_login      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_token ON users(auth_token_hash);
+
+CREATE TABLE IF NOT EXISTS members (
+    user_id             TEXT PRIMARY KEY REFERENCES users(user_id),
+    display_name        TEXT DEFAULT '',
+    country             TEXT DEFAULT '',
+    notification_email  INTEGER DEFAULT 1,
+    notification_push   INTEGER DEFAULT 1,
+    push_token          TEXT DEFAULT '',
+    created_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS node_members (
+    node_id    TEXT NOT NULL,
+    user_id    TEXT NOT NULL REFERENCES users(user_id),
+    claimed_at TEXT NOT NULL,
+    PRIMARY KEY (node_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS night_summaries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id        TEXT NOT NULL,
+    night          TEXT NOT NULL,
+    n_targets      INTEGER DEFAULT 0,
+    n_observations INTEGER DEFAULT 0,
+    n_submitted    INTEGER DEFAULT 0,
+    summary_json   TEXT NOT NULL DEFAULT '{}',  -- per-target detail
+    generated_at   TEXT NOT NULL,
+    sent_at        TEXT,
+    UNIQUE (node_id, night)
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_node ON night_summaries(node_id, night);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id   TEXT NOT NULL REFERENCES users(user_id),
+    type      TEXT NOT NULL,
+    payload   TEXT DEFAULT '{}',
+    sent_at   TEXT NOT NULL,
+    read_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at);
+
+CREATE TABLE IF NOT EXISTS review_queue (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    measurement_id INTEGER NOT NULL REFERENCES measurements(id),
+    flagged_at     TEXT NOT NULL,
+    reason         TEXT DEFAULT '',
+    reviewer       TEXT DEFAULT '',
+    reviewed_at    TEXT,
+    decision       TEXT DEFAULT 'pending'        -- pending | accept | reject
+);
+CREATE INDEX IF NOT EXISTS idx_review_pending ON review_queue(decision);
 """
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from cloud import alerts, data_pipeline, db, registry, scheduler, scoring
+from cloud import alerts, data_pipeline, db, nights, registry, scheduler, scoring
 from cloud.server import create_app
 
 logger = logging.getLogger("cloud.main")
@@ -79,6 +79,7 @@ def main() -> None:
 
     def maintenance():
         data_pipeline.prune_raw_images(config)
+        nights.generate_pending_summaries(config)
         # Light pollution drifts on month scales — refresh on day 1
         if time.gmtime().tm_mday == 1:
             registry.refresh_light_pollution(

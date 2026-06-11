@@ -30,7 +30,7 @@ from functools import wraps
 
 from flask import Flask, jsonify, request
 
-from cloud import alerts, data_pipeline, db, registry, scheduler, scoring
+from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring
 
 logger = logging.getLogger("cloud.server")
 
@@ -275,3 +275,216 @@ def api_admin_replan():
 @app.route("/api/v1/health", methods=["GET"])
 def api_health():
     return jsonify({"ok": True, "server_time": _now()})
+
+
+# ── Member auth ────────────────────────────────────────────────────────────────
+
+@app.route("/api/v1/auth/register", methods=["POST"])
+def api_auth_register():
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        result = auth.register(
+            body.get("email", ""),
+            body.get("password", ""),
+            body.get("display_name", ""),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+@app.route("/api/v1/auth/login", methods=["POST"])
+def api_auth_login():
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        result = auth.login(body.get("email", ""), body.get("password", ""))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 401
+    return jsonify(result)
+
+
+# ── Member profile ─────────────────────────────────────────────────────────────
+
+@app.route("/api/v1/me", methods=["GET"])
+@auth.require_member
+def api_me(user):
+    member = db.query_one(
+        "SELECT display_name, country FROM members WHERE user_id = ?",
+        (user["user_id"],),
+    )
+    return jsonify({
+        "user_id":      user["user_id"],
+        "email":        user["email"],
+        "role":         user["role"],
+        "display_name": (member or {}).get("display_name", ""),
+        "country":      (member or {}).get("country", ""),
+        "created_at":   user["created_at"],
+        "last_login":   user["last_login"],
+    })
+
+
+@app.route("/api/v1/me/nodes", methods=["GET"])
+@auth.require_member
+def api_me_nodes(user):
+    """All nodes this member has claimed."""
+    rows = db.query(
+        """SELECT n.node_id, n.telescope_model, n.city, n.country, n.status,
+                  n.last_heartbeat, nm.claimed_at
+           FROM nodes n
+           JOIN node_members nm ON nm.node_id = n.node_id
+           WHERE nm.user_id = ?""",
+        (user["user_id"],),
+    )
+    for r in rows:
+        r["online"] = registry.is_online(r)
+    return jsonify({"nodes": rows})
+
+
+@app.route("/api/v1/me/nodes/<node_id>", methods=["POST"])
+@auth.require_member
+def api_me_claim_node(user, node_id):
+    """
+    Claim a node by presenting its api_key.
+    The member must know the node_id and api_key returned at registration.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    node = registry.authenticate(node_id, body.get("api_key", ""))
+    if node is None:
+        return jsonify({"error": "invalid node credentials"}), 401
+    if not db.query_one(
+        "SELECT 1 FROM node_members WHERE node_id = ? AND user_id = ?",
+        (node_id, user["user_id"]),
+    ):
+        db.execute(
+            "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (?,?,?)",
+            (node_id, user["user_id"], _now()),
+        )
+        logger.info("Node %s claimed by member %s", node_id, user["user_id"])
+    return jsonify({"ok": True, "node_id": node_id})
+
+
+@app.route("/api/v1/me/observations", methods=["GET"])
+@auth.require_member
+def api_me_observations(user):
+    """Observations from all nodes owned by this member."""
+    days = min(int(request.args.get("days", 90)), 365)
+    limit = min(int(request.args.get("limit", 200)), 1000)
+
+    node_ids = [r["node_id"] for r in db.query(
+        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+    if not node_ids:
+        return jsonify({"observations": [], "total": 0})
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    placeholders = ",".join("?" * len(node_ids))
+    rows = db.query(
+        f"""SELECT node_id, target_name, bjd, magnitude, uncertainty, filter,
+                   quality_flag, aavso_submitted, received_at
+            FROM measurements
+            WHERE node_id IN ({placeholders}) AND received_at >= ?
+            ORDER BY bjd DESC LIMIT ?""",
+        (*node_ids, cutoff, limit),
+    )
+    return jsonify({"observations": rows, "total": len(rows)})
+
+
+@app.route("/api/v1/me/stats", methods=["GET"])
+@auth.require_member
+def api_me_stats(user):
+    """Cumulative statistics for all nodes this member owns."""
+    node_ids = [r["node_id"] for r in db.query(
+        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+    if not node_ids:
+        return jsonify({
+            "total_observations": 0, "aavso_submitted": 0,
+            "targets_observed": 0, "clear_nights": 0, "node_count": 0,
+        })
+
+    placeholders = ",".join("?" * len(node_ids))
+    totals = db.query_one(
+        f"""SELECT COUNT(*) AS total,
+                   SUM(aavso_submitted) AS submitted,
+                   COUNT(DISTINCT target_name) AS targets
+            FROM measurements WHERE node_id IN ({placeholders})""",
+        tuple(node_ids),
+    ) or {}
+    clear = db.query_one(
+        f"""SELECT SUM(n_observations > 0) AS clear_nights
+            FROM night_summaries WHERE node_id IN ({placeholders})""",
+        tuple(node_ids),
+    ) or {}
+    return jsonify({
+        "total_observations": totals.get("total", 0) or 0,
+        "aavso_submitted":    int(totals.get("submitted", 0) or 0),
+        "targets_observed":   totals.get("targets", 0) or 0,
+        "clear_nights":       int(clear.get("clear_nights", 0) or 0),
+        "node_count":         len(node_ids),
+    })
+
+
+@app.route("/api/v1/me/nights", methods=["GET"])
+@auth.require_member
+def api_me_nights(user):
+    """Night summaries for this member's nodes, most recent first."""
+    limit = min(int(request.args.get("limit", 30)), 90)
+    node_ids = [r["node_id"] for r in db.query(
+        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+    if not node_ids:
+        return jsonify({"nights": []})
+
+    placeholders = ",".join("?" * len(node_ids))
+    rows = db.query(
+        f"""SELECT node_id, night, n_targets, n_observations, n_submitted,
+                   summary_json, generated_at
+            FROM night_summaries
+            WHERE node_id IN ({placeholders})
+            ORDER BY night DESC LIMIT ?""",
+        (*node_ids, limit),
+    )
+    for r in rows:
+        r["targets"] = db.loads(r.pop("summary_json"), {}).get("targets", {})
+    return jsonify({"nights": rows})
+
+
+@app.route("/api/v1/me/notifications", methods=["GET"])
+@auth.require_member
+def api_me_notifications(user):
+    limit = min(int(request.args.get("limit", 50)), 200)
+    rows = db.query(
+        """SELECT id, type, payload, sent_at, read_at
+           FROM notifications WHERE user_id = ? ORDER BY sent_at DESC LIMIT ?""",
+        (user["user_id"], limit),
+    )
+    for r in rows:
+        r["payload"] = db.loads(r["payload"], {})
+    unread = sum(1 for r in rows if r["read_at"] is None)
+    return jsonify({"notifications": rows, "unread": unread})
+
+
+@app.route("/api/v1/me/notifications/<int:notif_id>/read", methods=["POST"])
+@auth.require_member
+def api_me_notification_read(user, notif_id):
+    db.execute(
+        "UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ?",
+        (_now(), notif_id, user["user_id"]),
+    )
+    return jsonify({"ok": True})
+
+
+@app.route("/api/v1/me/notifications/prefs", methods=["PUT"])
+@auth.require_member
+def api_me_notification_prefs(user):
+    body = request.get_json(force=True, silent=True) or {}
+    fields, params = [], []
+    for col in ("notification_email", "notification_push"):
+        if col in body:
+            fields.append(f"{col} = ?")
+            params.append(1 if body[col] else 0)
+    if "push_token" in body:
+        fields.append("push_token = ?")
+        params.append(str(body["push_token"])[:500])
+    if not fields:
+        return jsonify({"error": "no updatable fields"}), 400
+    params.append(user["user_id"])
+    db.execute(f"UPDATE members SET {', '.join(fields)} WHERE user_id = ?", tuple(params))
+    return jsonify({"ok": True})
