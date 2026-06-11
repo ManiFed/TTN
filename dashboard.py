@@ -36,6 +36,7 @@ from aavso_submission import submit as _aavso_submit
 from fits_export import export_enhanced_fits as _export_fits
 from geolocation import enrich_config_with_location
 from stacking import LiveStacker
+from cloud_communicator import CloudCommunicator
 
 
 app = Flask(__name__)
@@ -487,6 +488,9 @@ def _run_photometry_bg(fits_path: str) -> None:
                     "AAVSO submission: status=%s accepted=%d rejected=%d — %s",
                     sub["status"], sub["accepted"], sub["rejected"], sub["message"],
                 )
+            if _cloud is not None:
+                _cloud.submit_measurement(
+                    result, conditions=_cloud_conditions(), fits_path=fits_path)
         else:
             logger.warning("Photometry pipeline returned no result for %s",
                            os.path.basename(fits_path))
@@ -495,6 +499,53 @@ def _run_photometry_bg(fits_path: str) -> None:
     finally:
         with _state_lock:
             _state["photometry"]["running"] = False
+
+
+# ── Cloud communicator ─────────────────────────────────────────────────────────
+
+_cloud: Optional[CloudCommunicator] = None
+
+
+def _cloud_conditions() -> dict:
+    """Local conditions snapshot included with cloud heartbeats."""
+    out: dict = {}
+    if _safety_mgr is not None:
+        try:
+            s = _safety_mgr.status()
+            out["safe"]   = s.get("safe")
+            out["reason"] = s.get("reason", "")
+        except Exception:
+            pass
+    with _sched_lock:
+        out["schedule_running"] = _sched_state["running"]
+    with _state_lock:
+        out["photometry_enabled"] = _state["photometry"]["enabled"]
+    return out
+
+
+def _on_cloud_plan(items: list) -> None:
+    """A new observation plan arrived from the cloud.  Validate it with the
+    same gate as /api/schedule/run; execute it only when auto_run_plans is on
+    and no schedule is already running."""
+    valid, err = _validate_schedule_items(items)
+    if err is not None:
+        logger.warning("Cloud plan rejected by validator: %s", err)
+        return
+    cfg = _load_config()
+    if not cfg.get("cloud", {}).get("auto_run_plans", False):
+        logger.info("Cloud plan received (%d items) — auto_run_plans is off, "
+                    "review it in the dashboard scheduler", len(valid))
+        return
+    with _sched_lock:
+        if _sched_state["running"]:
+            logger.info("Cloud plan received but a schedule is already "
+                        "running — not starting it")
+            return
+    threading.Thread(
+        target=_run_schedule_bg, args=(valid,),
+        daemon=True, name="sched-runner-cloud",
+    ).start()
+    logger.info("Cloud plan started: %d observations", len(valid))
 
 
 # ── Safety manager ─────────────────────────────────────────────────────────────
@@ -1889,6 +1940,13 @@ def api_abort_exposure():
         logger.error("Abort exposure failed: %s", exc)
         return jsonify({"error": str(exc)}), 500
     return jsonify({"ok": True})
+
+
+@app.route("/api/cloud")
+def api_cloud():
+    if _cloud is None:
+        return jsonify({"enabled": False})
+    return jsonify({"enabled": True, **_cloud.status})
 
 
 @app.route("/api/safety")
@@ -8017,7 +8075,7 @@ setInterval(async () => {
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def launch(port: int = 5173) -> None:
-    global _safety_mgr, _image_watcher
+    global _safety_mgr, _image_watcher, _cloud
 
     import urllib.request
     import webbrowser
@@ -8050,6 +8108,15 @@ def launch(port: int = 5173) -> None:
         with _state_lock:
             _state["photometry"]["enabled"] = True
         logger.info("Photometry pipeline enabled (node_id=%s)", phot_cfg.get("node_id", "?"))
+
+    cloud_cfg = cfg.get("cloud", {})
+    if cloud_cfg.get("enabled", False):
+        _cloud = CloudCommunicator(
+            cfg,
+            get_conditions=_cloud_conditions,
+            on_plan=_on_cloud_plan,
+        )
+        _cloud.start()
 
     pc_cfg = cfg.get("pier_cam", {})
     if pc_cfg.get("enabled", False):
@@ -8086,6 +8153,8 @@ def launch(port: int = 5173) -> None:
         print("\n  Shutting down.", file=sys.__stdout__)
     finally:
         _pier_cam_stop.set()
+        if _cloud is not None:
+            _cloud.stop()
         if _safety_mgr is not None:
             _safety_mgr.stop()
         if _image_watcher is not None:

@@ -1,0 +1,79 @@
+server:
+  host: 0.0.0.0
+  port: 8800
+  admin_key: ''            # required for POST /interrupts and /admin endpoints
+
+database:
+  path: cloud_data/cloud.db
+
+light_pollution:
+  api_key: ''              # lightpollutionmap.info key; blank = default 20.0 mpsas
+
+alerts:
+  interval_minutes: 60
+  expire_days: 45          # deactivate transients unseen by any source this long
+  alerce:
+    enabled: true
+    mag_limit: 16.0
+    days_back: 14
+  gaia:
+    enabled: true
+    mag_limit: 16.0
+    days_back: 30
+  tns:
+    enabled: true          # silently skipped until api_key + bot_id are set
+    api_key: ''
+    bot_id: ''
+    bot_name: ''
+    mag_limit: 16.5
+    days_back: 7
+  atlas:
+    enabled: true
+    mag_limit: 16.5
+  asassn:
+    enabled: true
+    mag_limit: 16.5
+  aavso:
+    enabled: true
+    default_watchlist: true
+    vsx_names: []          # extra VSX identifiers to keep on the programme
+
+scoring:
+  weights:                 # relative importance of composite components
+    brightness: 0.20
+    science: 0.25
+    time: 0.15
+    coverage: 0.15
+    observe: 0.25
+  observability_weights:
+    light_pollution: 0.20
+    weather: 0.25
+    moon: 0.15
+    airmass: 0.15
+    window: 0.15
+    telescope: 0.10
+
+scheduler:
+  replan_interval_minutes: 120
+  min_score: 0.25          # targets below this never get scheduled
+  max_targets_per_night: 12
+  sun_altitude_limit: -12  # nautical darkness
+
+aavso:
+  observer_code: ''        # the NETWORK observer code (Extended Format OBSCODE)
+  username: ''
+  password: ''
+  chart_id: ''
+  dry_run: true            # format + save batches without POSTing until ready
+  batch_interval_minutes: 360
+  single_node_holdback_hours: 6
+  audit_dir: cloud_data/aavso_batches
+
+storage:
+  raw_image_dir: cloud_data/raw_images
+  raw_image_retention_days: 14
+  max_image_mb: 64
+
+logging:
+  level: INFO
+  format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'

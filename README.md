@@ -241,12 +241,65 @@ dashboard.py (Flask, port 5173)
   │   ├─ Differential photometry + quality flag
   │   └─ → AAVSO submission + FITS export
   │
+  ├─ CloudCommunicator (daemon threads, when cloud.enabled)
+  │   ├─ Auto-registration with the Boundless Skies cloud
+  │   ├─ Heartbeats with local conditions
+  │   ├─ Observation-plan polling → schedule runner
+  │   ├─ Interrupt polling (high-priority targets)
+  │   └─ Measurement upload after each photometry run (disk-backed retry queue)
+  │
   └─ DeviceManager → AlpacaClient (HTTP/JSON)
        ├─ Telescope
        ├─ Camera
        ├─ Focuser (optional)
        └─ FilterWheel (optional)
 ```
+
+---
+
+## Cloud Layer (`cloud/`)
+
+The cloud coordinates many nodes into one network. Run it anywhere with
+Python + this repo:
+
+```bash
+python -m cloud.main              # uses cloud/config.yaml, serves on :8800
+```
+
+What it does:
+
+- **Node registry** — nodes auto-register with location + telescope details
+  and get an API key; light pollution is fetched automatically for each
+  location (`lightpollutionmap.info` key optional).
+- **Alert ingestion** — pulls ALeRCE, Gaia Alerts, TNS, ATLAS, ASAS-SN, and
+  the AAVSO/VSX watch list on an interval, deduplicating by 3″ cross-match.
+- **Scoring engine** — composite score per (target, node): brightness match,
+  scientific value, time criticality, network coverage gap, and observability
+  (light pollution, weather forecast, moon, airmass, visibility window,
+  telescope match).
+- **Scheduler** — generates a nightly plan per node in the exact JSON the
+  node schedule runner consumes, packed by altitude inside the node's dark
+  window, with start times in the node's local clock.
+- **Data pipeline** — ingests every measurement with capture-time conditions,
+  cross-validates co-temporal measurements across nodes, serves aggregated
+  light curves, and batch-submits validated results to AAVSO in Extended
+  Format under the network observer code (dry-run by default).
+- **APIs** — node endpoints (register/heartbeat/plan/measurements/images/
+  interrupts) plus query endpoints (`/api/v1/targets`, `/api/v1/lightcurves/
+  <name>`, `/api/v1/network/status`) for the future member dashboard and app.
+
+To connect this node to a cloud, set in `config.yaml`:
+
+```yaml
+cloud:
+  enabled: true
+  url: https://cloud.example.org
+  auto_run_plans: true     # execute the nightly plan automatically
+```
+
+Leave `node_id`/`api_key` blank — the node registers itself on first start
+and persists its credentials in `data/cloud_state.json`. Cloud status is
+visible at `/api/cloud` on the dashboard.
 
 ---
 

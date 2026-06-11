@@ -101,6 +101,15 @@ aavso:
   dry_run: false
   submit_poor_quality: false
   chart_id: ''
+cloud:
+  enabled: false
+  url: ''                      # e.g. https://cloud.boundless-skies.org
+  node_id: ''                  # blank = auto-register on first start
+  api_key: ''                  # blank = auto-register on first start
+  heartbeat_interval: 60       # seconds between heartbeats (with conditions)
+  plan_poll_interval: 300      # seconds between observation-plan polls
+  auto_run_plans: false        # execute cloud plans automatically when idle
+  upload_images: false         # also upload raw FITS after each measurement
 safety:
   enabled: true
   disconnect_timeout: 600
