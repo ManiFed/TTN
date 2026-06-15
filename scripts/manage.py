@@ -242,14 +242,13 @@ def cmd_check_aavso(config: dict) -> None:
     print(formatted)
     _sep()
 
-    # Attempt a network connection to WebObs (without submitting)
+    # Attempt a network connection to AAVSO (without submitting)
     if not issues:
-        print("Testing network connection to AAVSO WebObs...")
+        print("Testing network connection to AAVSO...")
         try:
             import requests
-            resp = requests.get("https://www.aavso.org/apps/webobs/submit/",
-                                timeout=10)
-            print(f"  AAVSO WebObs reachable: HTTP {resp.status_code}")
+            resp = requests.get("https://www.aavso.org/", timeout=10)
+            print(f"  AAVSO reachable: HTTP {resp.status_code}")
         except Exception as exc:
             print(f"  WARNING: could not reach AAVSO WebObs: {exc}")
     print()

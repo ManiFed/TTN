@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     -- Hardware: photometry capability
     filter_set             TEXT DEFAULT '["CV"]',  -- JSON list, e.g. ["B","V","R","I"]
+    filters                TEXT DEFAULT 'CV',      -- legacy comma-separated, kept for compat
     mag_bright_limit       REAL DEFAULT 6.0,       -- saturates brighter than this
     mag_faint_limit        REAL DEFAULT 15.5,      -- SNR < threshold fainter than this
     min_altitude_deg       REAL DEFAULT 25.0,
@@ -265,6 +266,31 @@ CREATE TABLE IF NOT EXISTS review_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_review_pending ON review_queue(decision);
 
+-- ── Scoring weight tuning ───────────────────────────────────────────────────
+-- The observability sub-weights are the one part of the scoring formula that is
+-- auto-tuned (nightly) by the Claude monitor in cloud/tuning.py.  The scoring
+-- engine reads the *active* weights from here on every run, so changes take
+-- effect without a process restart.  `config.yaml` is only the seed/default.
+CREATE TABLE IF NOT EXISTS tuning_state (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),  -- single active row
+    obs_weights     TEXT NOT NULL DEFAULT '{}',          -- JSON: the 6 sub-weights
+    updated_at      TEXT NOT NULL
+);
+
+-- Append-only audit of every weight change (auto-applied, but fully traceable
+-- and reversible — see /api/v1/admin/tuning/rollback).
+CREATE TABLE IF NOT EXISTS weight_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at      TEXT NOT NULL,
+    old_weights     TEXT NOT NULL DEFAULT '{}',          -- JSON
+    new_weights     TEXT NOT NULL DEFAULT '{}',          -- JSON (clamped + normalized)
+    rationale       TEXT DEFAULT '',                     -- Claude's explanation
+    evidence_digest TEXT DEFAULT '{}',                   -- JSON brief the decision was based on
+    model           TEXT DEFAULT '',                     -- model id used
+    applied         INTEGER DEFAULT 1                    -- 1 = applied, 0 = proposed only
+);
+CREATE INDEX IF NOT EXISTS idx_weight_history_time ON weight_history(changed_at);
+
 CREATE TABLE IF NOT EXISTS activation_codes (
     code         TEXT PRIMARY KEY,
     user_id      TEXT REFERENCES users(user_id), -- NULL = generic (not pre-linked)
@@ -287,6 +313,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "mount_type",         "TEXT DEFAULT 'alt_az'"),
     ("nodes", "cooled_camera",      "INTEGER DEFAULT 0"),
     ("nodes", "filter_set",         'TEXT DEFAULT \'["CV"]\''),
+    ("nodes", "filters",            "TEXT DEFAULT 'CV'"),
     ("nodes", "horizon_mask",       "TEXT DEFAULT '[]'"),
     ("nodes", "has_dew_heater",     "INTEGER DEFAULT 0"),
     ("nodes", "has_power_mgmt",     "INTEGER DEFAULT 0"),

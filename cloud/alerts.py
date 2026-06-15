@@ -220,11 +220,36 @@ def fetch_tns(cfg: dict) -> list:
 
 
 def fetch_atlas(cfg: dict) -> list:
-    """ATLAS transient server (QUB) — public recent-transient JSON feed."""
+    """ATLAS transient server (QUB) — token-auth JSON feed.
+
+    Requires a free account at https://star.pst.qub.ac.uk/sne/atlas4/
+    Set alerts.atlas.username and alerts.atlas.password in cloud/config.yaml.
+    """
+    import requests
+
+    username = str(cfg.get("username", "") or "").strip()
+    password = str(cfg.get("password", "") or "").strip()
+    if not username or not password:
+        logger.debug("ATLAS skipped — username/password not configured "
+                     "(register free at https://star.pst.qub.ac.uk/sne/atlas4/)")
+        return []
+
+    token_resp = requests.post(
+        "https://star.pst.qub.ac.uk/sne/atlas4/api-auth-token/",
+        data={"username": username, "password": password},
+        timeout=30,
+    )
+    if token_resp.status_code != 200:
+        raise RuntimeError(f"ATLAS auth failed: HTTP {token_resp.status_code}")
+    token = token_resp.json().get("token", "")
+    if not token:
+        raise RuntimeError("ATLAS auth returned no token")
+
     mag_limit = float(cfg.get("mag_limit", 16.5))
     payload = _http_get_json(
         "https://star.pst.qub.ac.uk/sne/atlas4/api/objectlist/",
-        params={"objectlistid": 2, "format": "json"},  # 2 = good candidates
+        params={"objectlistid": 2, "format": "json"},
+        headers={"Authorization": f"Token {token}"},
         timeout=60,
     )
     rows = payload if isinstance(payload, list) else payload.get("results", [])
@@ -252,36 +277,52 @@ def fetch_atlas(cfg: dict) -> list:
 
 
 def fetch_asassn(cfg: dict) -> list:
-    """ASAS-SN transients — public CSV from the ASAS-SN transients page."""
+    """ASAS-SN Sky Patrol v2 — transient alerts via the REST API.
+
+    Requires a free account at https://asas-sn.osu.edu/sky-patrol/
+    Set alerts.asassn.api_key in cloud/config.yaml.
+    """
     import csv
     import io
     import requests
 
+    api_key = str(cfg.get("api_key", "") or "").strip()
+    if not api_key:
+        logger.debug("ASAS-SN skipped — api_key not configured "
+                     "(register free at https://asas-sn.osu.edu/sky-patrol/)")
+        return []
+
     mag_limit = float(cfg.get("mag_limit", 16.5))
+    headers = {"Authorization": f"Token {api_key}"}
     resp = requests.get(
-        "https://asas-sn.osu.edu/photometry/transients.csv", timeout=60
+        "https://asas-sn.osu.edu/sky-patrol/api/transients/",
+        headers=headers,
+        params={"format": "json", "limit": 200},
+        timeout=60,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"HTTP {resp.status_code} from ASAS-SN")
+        raise RuntimeError(f"HTTP {resp.status_code} from ASAS-SN Sky Patrol")
 
+    results = resp.json()
+    rows = results if isinstance(results, list) else results.get("results", [])
     out = []
-    for row in csv.DictReader(io.StringIO(resp.text)):
+    for row in rows:
         try:
-            name = (row.get("name") or row.get("ASAS-SN") or "").strip()
+            name = (row.get("name") or row.get("asassn_name") or "").strip()
             ra = float(row.get("ra") or row.get("raj2000"))
             dec = float(row.get("dec") or row.get("dej2000"))
         except (TypeError, ValueError):
             continue
         if not name:
             continue
-        mag = row.get("mag") or row.get("V")
+        mag = row.get("mag") or row.get("peak_mag") or row.get("V")
         try:
             mag = float(mag) if mag else None
         except (TypeError, ValueError):
             mag = None
         if mag is not None and mag > mag_limit:
             continue
-        ttype = (row.get("type") or "unknown").strip().upper()
+        ttype = (row.get("type") or row.get("classification") or "unknown").strip().upper()
         ttype = "SN" if ttype.startswith("SN") else ("CV" if "CV" in ttype else "unknown")
         out.append({
             "name": name, "ra_deg": ra, "dec_deg": dec,

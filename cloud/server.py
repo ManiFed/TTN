@@ -21,6 +21,8 @@ Admin endpoints (X-Admin-Key header):
     POST /api/v1/interrupts              → broadcast a high-priority target
     POST /api/v1/admin/ingest            → run alert ingestion now
     POST /api/v1/admin/replan            → rescore + regenerate all plans
+    GET  /api/v1/admin/tuning            → active scoring weights + tuning history
+    POST /api/v1/admin/tuning/rollback   → restore the previous scoring weights
 """
 
 import json
@@ -33,7 +35,7 @@ from functools import wraps
 
 from flask import Flask, jsonify, request
 
-from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring
+from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
 
 logger = logging.getLogger("cloud.server")
 
@@ -337,6 +339,38 @@ def api_admin_replan():
     scored = scoring.score_all(_config)
     plans = scheduler.generate_all_plans(_config)
     return jsonify({"scored_pairs": scored, "plans_generated": plans})
+
+
+@app.route("/api/v1/admin/tuning", methods=["GET"])
+@require_admin
+def api_admin_tuning():
+    """Active observability weights plus recent auto-tuning history."""
+    history = db.query(
+        """SELECT id, changed_at, old_weights, new_weights, rationale,
+                  model, applied
+           FROM weight_history ORDER BY changed_at DESC LIMIT 20""")
+    for row in history:
+        row["old_weights"] = db.loads(row["old_weights"], {})
+        row["new_weights"] = db.loads(row["new_weights"], {})
+    return jsonify({
+        "active_weights": tuning.active_obs_weights(_config),
+        "history": history,
+    })
+
+
+@app.route("/api/v1/admin/tuning/rollback", methods=["POST"])
+@require_admin
+def api_admin_tuning_rollback():
+    """Restore the previous weights from the audit log (manual safety valve)."""
+    last = db.query_one(
+        "SELECT old_weights, rationale FROM weight_history "
+        "ORDER BY changed_at DESC LIMIT 1")
+    if not last:
+        return jsonify({"error": "no tuning history to roll back"}), 404
+    restored = db.loads(last["old_weights"], {})
+    tuning.restore_weights(
+        restored, f"manual rollback (was: {last.get('rationale','')})", _config)
+    return jsonify({"restored_weights": tuning.active_obs_weights(_config)})
 
 
 @app.route("/api/v1/health", methods=["GET"])
