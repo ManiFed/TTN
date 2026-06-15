@@ -1,7 +1,7 @@
 server:
   host: 0.0.0.0
   port: 8800
-  admin_key: ''            # required for POST /interrupts and /admin endpoints
+  admin_key: '${CLOUD_ADMIN_KEY}'  # local test admin key
 
 database:
   path: cloud_data/cloud.db
@@ -30,9 +30,13 @@ alerts:
   atlas:
     enabled: true
     mag_limit: 16.5
+    username: ''          # register free at https://star.pst.qub.ac.uk/sne/atlas4/
+    password: ''          # skipped automatically when blank
   asassn:
     enabled: true
     mag_limit: 16.5
+    api_key: ''           # register free at https://asas-sn.osu.edu/sky-patrol/
+                          # skipped automatically when blank
   aavso:
     enabled: true
     default_watchlist: true
@@ -45,13 +49,27 @@ scoring:
     time: 0.15
     coverage: 0.15
     observe: 0.25
-  observability_weights:
+  observability_weights:   # seed only — auto-tuned live values live in the DB
     light_pollution: 0.20
     weather: 0.25
     moon: 0.15
     airmass: 0.15
     window: 0.15
     telescope: 0.10
+
+tuning:
+  # Nightly Claude monitor that reviews observing outcomes and adjusts the six
+  # observability_weights above. The hot path (ingestion, scoring, scheduling)
+  # stays 100% procedural; Claude is advisory only. Ships OFF — behavior is
+  # unchanged until an operator opts in. See cloud/tuning.py.
+  enabled: false
+  api_key: ''                # blank → falls back to ANTHROPIC_API_KEY env var
+  model: claude-opus-4-8     # latest Opus; set claude-sonnet-4-6 to cut cost
+  lookback_nights: 14        # how many nights of outcomes to summarize
+  max_delta: 0.05            # hard cap on per-run change to any single weight
+  min_nights_data: 7         # don't tune until this many nights of data exist
+  min_measurements: 30       # ...and not until this many measurements exist
+  min_change: 0.005          # skip apply/notify if no weight moves more than this
 
 scheduler:
   replan_interval_minutes: 120
@@ -60,9 +78,9 @@ scheduler:
   sun_altitude_limit: -12  # nautical darkness
 
 aavso:
-  observer_code: ''        # the NETWORK observer code (Extended Format OBSCODE)
-  username: ''
-  password: ''
+  observer_code: 'EGBA'
+  username: '${AAVSO_USERNAME}'
+  password: '${AAVSO_PASSWORD}'
   chart_id: ''
   dry_run: true            # format + save batches without POSTing until ready
   batch_interval_minutes: 360

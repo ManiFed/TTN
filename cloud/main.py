@@ -20,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from cloud import alerts, data_pipeline, db, nights, registry, scheduler, scoring
+from cloud import alerts, data_pipeline, db, nights, registry, scheduler, scoring, tuning
 from cloud.server import create_app
 
 logger = logging.getLogger("cloud.main")
@@ -85,6 +85,9 @@ def main() -> None:
         if time.gmtime().tm_mday == 1:
             registry.refresh_light_pollution(
                 config.get("light_pollution", {}).get("api_key", ""))
+        # Claude reviews recent outcomes and adjusts the scoring weights.
+        # No-op unless tuning.enabled and an API key are configured.
+        tuning.run_nightly(config)
 
     _loop("alert-ingest",
           float(alerts_cfg.get("interval_minutes", 60)) * 60, ingest_and_rescore)

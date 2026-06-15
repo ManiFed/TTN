@@ -25,7 +25,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from cloud import db, registry
+from cloud import db, registry, tuning
 from cloud.conditions import (
     airmass_from_alt, altitude_curve, angular_separation_deg,
     cloud_cover_at, fetch_weather, moon_state, night_window,
@@ -41,14 +41,10 @@ DEFAULT_WEIGHTS = {
     "observe":    0.25,
 }
 
-DEFAULT_OBS_WEIGHTS = {
-    "light_pollution": 0.20,
-    "weather":         0.25,
-    "moon":            0.15,
-    "airmass":         0.15,
-    "window":          0.15,
-    "telescope":       0.10,
-}
+# The observability sub-weights are auto-tuned: they are seeded from
+# config.yaml (scoring.observability_weights) but read live from the DB on every
+# run via tuning.active_obs_weights(), so the nightly Claude monitor can adjust
+# them without a restart.  See cloud/tuning.py.
 
 
 def _now() -> str:
@@ -207,11 +203,17 @@ def observability(target: dict, node: dict, night: Optional[tuple],
 
 
 def score_target_for_node(target: dict, node: dict, night: Optional[tuple],
-                          weather: float, config: dict) -> dict:
-    """Full composite score with component breakdown."""
+                          weather: float, config: dict,
+                          obs_weights: Optional[dict] = None) -> dict:
+    """Full composite score with component breakdown.
+
+    obs_weights, when provided, are the live observability sub-weights; score_all
+    fetches them once per run to avoid a DB read per (target, node) pair.  When
+    omitted (ad-hoc callers) they are read from the DB-backed tuning state.
+    """
     weights = {**DEFAULT_WEIGHTS, **config.get("scoring", {}).get("weights", {})}
-    obs_weights = {**DEFAULT_OBS_WEIGHTS,
-                   **config.get("scoring", {}).get("observability_weights", {})}
+    if obs_weights is None:
+        obs_weights = tuning.active_obs_weights(config)
 
     obs, vis_min, best_alt = observability(target, node, night, weather, obs_weights)
     components = {
@@ -258,13 +260,17 @@ def score_all(config: dict) -> int:
         logger.info("Scoring skipped — %d targets, %d nodes", len(targets), len(nodes))
         return 0
 
+    # Read the live (auto-tuned) observability weights once for the whole run.
+    obs_weights = tuning.active_obs_weights(config)
+
     count = 0
     for node in nodes:
         night = night_window(node["latitude"], node["longitude"])
         weather = weather_factor(node, night)
         for target in targets:
             try:
-                comp = score_target_for_node(target, node, night, weather, config)
+                comp = score_target_for_node(
+                    target, node, night, weather, config, obs_weights)
             except Exception as exc:
                 logger.warning("Scoring failed %s @ %s: %s",
                                target["name"], node["node_id"], exc)
