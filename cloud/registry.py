@@ -52,7 +52,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     # Re-registration: same node_id with matching key updates details in place
     existing = None
     if node.node_id:
-        existing = db.query_one("SELECT * FROM nodes WHERE node_id = ?", (node.node_id,))
+        existing = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node.node_id,))
         if existing and existing["api_key"] != info.get("api_key", ""):
             raise ValueError("node_id already registered with a different API key")
 
@@ -76,7 +76,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                has_dew_heater, has_power_mgmt, has_enclosure, has_ups,
                horizon_mask, scheduling_notes, preferred_targets,
                status, registered_at, last_heartbeat)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id) DO UPDATE SET
                owner_name=excluded.owner_name, owner_email=excluded.owner_email,
                latitude=excluded.latitude, longitude=excluded.longitude,
@@ -147,7 +147,7 @@ def authenticate(node_id: str, api_key: str) -> Optional[dict]:
     """Return the node row when node_id + api_key are valid, else None."""
     if not node_id or not api_key:
         return None
-    row = db.query_one("SELECT * FROM nodes WHERE node_id = ?", (node_id,))
+    row = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
     if row is None or not secrets.compare_digest(row["api_key"], api_key):
         return None
     return row
@@ -159,21 +159,21 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     """Record a heartbeat, optionally with current local conditions
     (sky temperature, detected cloud, safety state, utc_offset_hours, ...)."""
     params: list = [_now()]
-    sql = "UPDATE nodes SET last_heartbeat = ?, status = 'active'"
+    sql = "UPDATE nodes SET last_heartbeat = %s, status = 'active'"
     if conditions:
-        sql += ", last_conditions = ?"
+        sql += ", last_conditions = %s"
         params.append(json.dumps(conditions))
         offset = conditions.get("utc_offset_hours")
         if isinstance(offset, (int, float)) and -14.0 <= offset <= 14.0:
-            sql += ", utc_offset_hours = ?"
+            sql += ", utc_offset_hours = %s"
             params.append(float(offset))
-    sql += " WHERE node_id = ?"
+    sql += " WHERE node_id = %s"
     params.append(node_id)
     db.execute(sql, tuple(params))
 
 
 def get_node(node_id: str) -> Optional[dict]:
-    return db.query_one("SELECT * FROM nodes WHERE node_id = ?", (node_id,))
+    return db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
 
 
 def list_nodes(active_only: bool = False) -> list:
@@ -232,7 +232,7 @@ def refresh_node_performance(node_id: str) -> dict:
                AVG(CASE WHEN quality_flag != 'poor' THEN uncertainty END)   AS mean_unc,
                AVG(CASE WHEN quality_flag != 'poor' AND fwhm IS NOT NULL
                          THEN fwhm END)                                AS mean_fwhm
-           FROM measurements WHERE node_id = ?""",
+           FROM measurements WHERE node_id = %s""",
         (node_id,),
     ) or {}
 
@@ -246,7 +246,7 @@ def refresh_node_performance(node_id: str) -> dict:
     # (i.e. they disagreed with other nodes' simultaneous measurements)
     rejected_row = db.query_one(
         """SELECT COUNT(*) AS n FROM measurements
-           WHERE node_id = ? AND validation_status = 'outlier'
+           WHERE node_id = %s AND validation_status = 'outlier'
              AND quality_flag IN ('good', 'acceptable')""",
         (node_id,),
     ) or {}
@@ -258,7 +258,7 @@ def refresh_node_performance(node_id: str) -> dict:
     cutoff_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     clear_row = db.query_one(
         """SELECT COUNT(DISTINCT date(received_at)) AS n
-           FROM measurements WHERE node_id = ? AND received_at >= ?""",
+           FROM measurements WHERE node_id = %s AND received_at >= %s""",
         (node_id, cutoff_30d),
     ) or {}
     clear_nights = int((clear_row or {}).get("n", 0) or 0)
@@ -277,16 +277,16 @@ def refresh_node_performance(node_id: str) -> dict:
 
     db.execute(
         """UPDATE nodes SET
-               total_observations = ?,
-               aavso_accepted     = ?,
-               aavso_rejected     = ?,
-               mean_uncertainty   = ?,
-               mean_fwhm          = ?,
-               clear_nights_30d   = ?,
-               outlier_rate       = ?,
-               reliability_score  = ?,
-               perf_updated_at    = ?
-           WHERE node_id = ?""",
+               total_observations = %s,
+               aavso_accepted     = %s,
+               aavso_rejected     = %s,
+               mean_uncertainty   = %s,
+               mean_fwhm          = %s,
+               clear_nights_30d   = %s,
+               outlier_rate       = %s,
+               reliability_score  = %s,
+               perf_updated_at    = %s
+           WHERE node_id = %s""",
         (total, accepted, rejected, round(mean_unc, 4), round(mean_fwhm, 2),
          clear_nights, round(outlier_rate, 4), reliability, _now(), node_id),
     )
@@ -325,6 +325,6 @@ def refresh_light_pollution(lp_api_key: str = "") -> None:
     for row in db.query("SELECT node_id, latitude, longitude FROM nodes"):
         mpsas, bortle = fetch_light_pollution(row["latitude"], row["longitude"], lp_api_key)
         db.execute(
-            "UPDATE nodes SET light_pollution_mpsas = ?, bortle = ? WHERE node_id = ?",
+            "UPDATE nodes SET light_pollution_mpsas = %s, bortle = %s WHERE node_id = %s",
             (mpsas, bortle, row["node_id"]),
         )

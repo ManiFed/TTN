@@ -87,7 +87,7 @@ def coverage_gap(target: dict) -> float:
     when it has been measured more recently than the desired cadence."""
     cadence_h = max(1.0, float(target.get("cadence_hours", 24.0)))
     row = db.query_one(
-        "SELECT MAX(received_at) AS last FROM measurements WHERE target_name = ?",
+        "SELECT MAX(received_at) AS last FROM measurements WHERE target_name = %s",
         (target["name"],),
     )
     if not row or not row["last"]:
@@ -277,7 +277,7 @@ def score_all(config: dict) -> int:
                 continue
             db.execute(
                 """INSERT INTO scores (target_id, node_id, scored_at, total, components)
-                   VALUES (?,?,?,?,?)
+                   VALUES (%s,%s,%s,%s,%s)
                    ON CONFLICT(target_id, node_id) DO UPDATE SET
                        scored_at=excluded.scored_at, total=excluded.total,
                        components=excluded.components""",

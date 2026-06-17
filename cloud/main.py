@@ -74,7 +74,7 @@ def main() -> None:
         format=log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
     )
 
-    db.init(config.get("database", {}).get("path", "cloud_data/cloud.db"))
+    db.init(config.get("database", {}).get("url", ""))
 
     # ── Background loops ───────────────────────────────────────────────────────
     alerts_cfg = config.get("alerts", {})

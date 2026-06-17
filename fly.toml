@@ -19,6 +19,4 @@ primary_region = "iad"
   cpu_kind = "shared"
   cpus = 1
 
-[mounts]
-  source = "cloud_data"
-  destination = "/data"
+# No volume needed — database is PostgreSQL (Railway/Fly managed service)

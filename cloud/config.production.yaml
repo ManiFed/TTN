@@ -4,7 +4,7 @@ server:
   admin_key: '${CLOUD_ADMIN_KEY}'
 
 database:
-  path: /data/cloud.db
+  url: '${DATABASE_URL}'
 
 light_pollution:
   api_key: '${LIGHT_POLLUTION_API_KEY}'

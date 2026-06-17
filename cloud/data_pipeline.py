@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import psycopg2.errors
+
 from cloud import db
 from src.shared_models import Measurement
 
@@ -60,14 +62,15 @@ def ingest_measurement(node_id: str, payload: dict,
                    (node_id, target_name, bjd, magnitude, uncertainty, filter,
                     airmass, fwhm, snr, comparison_stars, quality_flag,
                     zero_point, zp_scatter, fits_file, conditions, received_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (m.node_id, m.target_name, m.bjd, m.magnitude, m.uncertainty,
              m.filter, m.airmass, m.fwhm, m.snr, m.comparison_stars,
              m.quality_flag, m.zero_point, m.zp_scatter, m.fits_file,
              json.dumps(conditions or {}), _now()),
+            returning_id=True,
         )
     except Exception as exc:
-        if "UNIQUE" in str(exc):
+        if isinstance(exc, psycopg2.errors.UniqueViolation):
             logger.info("Duplicate measurement ignored: %s %s bjd=%.5f",
                         node_id, m.target_name, m.bjd)
             return {"ok": True, "id": None, "duplicate": True}
@@ -89,12 +92,12 @@ def cross_validate(target_name: str, bjd: float) -> None:
     """
     rows = db.query(
         """SELECT id, node_id, magnitude, uncertainty FROM measurements
-           WHERE target_name = ? AND bjd BETWEEN ? AND ?""",
+           WHERE target_name = %s AND bjd BETWEEN %s AND %s""",
         (target_name, bjd - XVAL_WINDOW_DAYS, bjd + XVAL_WINDOW_DAYS),
     )
     if len(rows) < 2:
         for r in rows:
-            db.execute("UPDATE measurements SET validation_status='single' WHERE id=?",
+            db.execute("UPDATE measurements SET validation_status='single' WHERE id=%s",
                        (r["id"],))
         return
 
@@ -106,7 +109,7 @@ def cross_validate(target_name: str, bjd: float) -> None:
         status = ("outlier"
                   if dev > XVAL_OUTLIER_MAG and dev > 3.0 * sigma
                   else "consistent")
-        db.execute("UPDATE measurements SET validation_status=? WHERE id=?",
+        db.execute("UPDATE measurements SET validation_status=%s WHERE id=%s",
                    (status, r["id"]))
         if status == "outlier":
             logger.warning("Cross-validation outlier: %s on %s — %.3f vs median %.3f",
@@ -121,7 +124,7 @@ def light_curve(target_name: str, days: float = 365.0) -> list:
         """SELECT node_id, bjd, magnitude, uncertainty, filter, airmass, snr,
                   quality_flag, validation_status, aavso_submitted, received_at
            FROM measurements
-           WHERE target_name = ? AND validation_status != 'outlier'
+           WHERE target_name = %s AND validation_status != 'outlier'
            ORDER BY bjd""",
         (target_name,),
     )
@@ -155,7 +158,7 @@ def submit_pending_batch(config: dict) -> dict:
            WHERE aavso_submitted = 0
              AND quality_flag IN ('good', 'acceptable')
              AND (validation_status = 'consistent'
-                  OR (validation_status = 'single' AND received_at < ?))
+                  OR (validation_status = 'single' AND received_at < %s))
            ORDER BY target_name, bjd LIMIT 500""",
         (cutoff,),
     )
@@ -178,13 +181,13 @@ def submit_pending_batch(config: dict) -> dict:
             aavso_cfg.get("submit_url", _WEBOBS_URL))
 
     if status in ("accepted", "dry_run"):
-        db.executemany("UPDATE measurements SET aavso_submitted = 1 WHERE id = ?",
+        db.executemany("UPDATE measurements SET aavso_submitted = 1 WHERE id = %s",
                        [(r["id"],) for r in rows])
 
     db.execute(
         """INSERT INTO aavso_batches
                (submitted_at, file_path, n_obs, status, accepted, rejected, message)
-           VALUES (?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
         (_now(), str(file_path), len(rows), status, accepted, rejected, message),
     )
     logger.info("AAVSO batch: %d obs, status=%s (%s)", len(rows), status, message)

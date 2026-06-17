@@ -396,7 +396,7 @@ def _find_crossmatch(ra_deg: float, dec_deg: float) -> Optional[dict]:
     cos_dec = max(0.05, math.cos(math.radians(dec_deg)))
     rows = db.query(
         """SELECT * FROM targets
-           WHERE dec_deg BETWEEN ? AND ? AND ra_deg BETWEEN ? AND ?""",
+           WHERE dec_deg BETWEEN %s AND %s AND ra_deg BETWEEN %s AND %s""",
         (dec_deg - box, dec_deg + box,
          ra_deg - box / cos_dec, ra_deg + box / cos_dec),
     )
@@ -427,12 +427,12 @@ def _store(candidate: dict) -> bool:
         if new_type in ("unknown", "VAR") and ttype not in ("unknown",):
             new_type = ttype
         db.execute(
-            """UPDATE targets SET mag = COALESCE(?, mag),
-                   mag_band = CASE WHEN ? IS NULL THEN mag_band ELSE ? END,
-                   target_type = ?, priority = MAX(priority, ?),
-                   time_critical = MAX(time_critical, ?),
-                   sources = ?, last_updated = ?, active = 1
-               WHERE target_id = ?""",
+            """UPDATE targets SET mag = COALESCE(%s, mag),
+                   mag_band = CASE WHEN %s IS NULL THEN mag_band ELSE %s END,
+                   target_type = %s, priority = MAX(priority, %s),
+                   time_critical = MAX(time_critical, %s),
+                   sources = %s, last_updated = %s, active = 1
+               WHERE target_id = %s""",
             (candidate.get("mag"), candidate.get("mag"), candidate.get("mag_band"),
              new_type, TYPE_PRIORITY.get(new_type, 0.4),
              1 if candidate.get("time_critical") else 0,
@@ -441,11 +441,12 @@ def _store(candidate: dict) -> bool:
         return False
 
     db.execute(
-        """INSERT OR IGNORE INTO targets
+        """INSERT INTO targets
                (target_id, name, ra_deg, dec_deg, mag, mag_band, target_type,
                 priority, time_critical, cadence_hours, sources,
                 discovered_at, last_updated, active)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+           ON CONFLICT DO NOTHING""",
         (_target_id_for(name), name, candidate["ra_deg"], candidate["dec_deg"],
          candidate.get("mag"), candidate.get("mag_band", ""),
          ttype, priority, 1 if candidate.get("time_critical") else 0,
@@ -499,7 +500,7 @@ def _expire_stale_targets(alerts_cfg: dict) -> None:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     db.execute(
         """UPDATE targets SET active = 0
-           WHERE active = 1 AND last_updated < ? AND sources NOT LIKE '%aavso%'""",
+           WHERE active = 1 AND last_updated < %s AND sources NOT LIKE '%aavso%'""",
         (cutoff,),
     )
 
