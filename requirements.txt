@@ -10,3 +10,4 @@ astroquery>=0.4.6
 zwoasi>=0.0.22
 pyongc>=1.2
 anthropic>=0.92        # cloud weight-tuning monitor only (cloud/tuning.py)
+google-auth>=2.28.0    # cloud/push.py — FCM HTTP v1 API OAuth2 tokens

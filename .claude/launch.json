@@ -10,8 +10,8 @@
     {
       "name": "website",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4180", "--directory", "website"],
-      "port": 4180
+      "runtimeArgs": ["-m", "http.server", "4187", "--directory", "website"],
+      "port": 4187
     },
     {
       "name": "cloud-api",

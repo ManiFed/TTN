@@ -102,8 +102,8 @@ aavso:
   submit_poor_quality: false
   chart_id: ''
 cloud:
-  enabled: false
-  url: ''                      # e.g. https://cloud.boundlessskies.org
+  enabled: true
+  url: 'http://localhost:8800'  # local cloud for testing
   activation_code: ''          # BS-YYYY-XXXXXXXX from your account page; used once on first boot
   node_id: ''                  # set automatically after first registration
   api_key: ''                  # set automatically after first registration

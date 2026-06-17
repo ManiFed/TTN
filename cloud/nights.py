@@ -132,20 +132,55 @@ def generate_pending_summaries(config: dict) -> int:
         summary = generate_night_summary(nid, yesterday)
         if summary:
             generated += 1
-            _dispatch_notifications(nid, yesterday, summary)
+            _dispatch_notifications(nid, yesterday, summary, config)
     return generated
 
 
-def _dispatch_notifications(node_id: str, night: str, summary: dict) -> None:
-    """Write a notification record for every member who owns this node."""
+def _dispatch_notifications(
+    node_id: str, night: str, summary: dict, config: dict | None = None
+) -> None:
+    """
+    Write a notification record for every member who owns this node, and fire
+    an FCM push if the member has a registered device token.
+    """
+    from cloud import push  # local import to avoid circular dependency
+
     members = db.query(
-        "SELECT user_id FROM node_members WHERE node_id = ?", (node_id,))
+        """SELECT nm.user_id, m.push_token, m.notification_push
+           FROM node_members nm
+           JOIN members m ON m.user_id = nm.user_id
+           WHERE nm.node_id = ?""",
+        (node_id,),
+    )
     payload = json.dumps({"node_id": node_id, "night": night, "summary": summary})
+
+    n_targets = summary.get("n_targets", 0)
+    n_submitted = summary.get("n_submitted", 0)
+
     for m in members:
         db.execute(
             "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (?,?,?,?)",
             (m["user_id"], "night_summary", payload, _now()),
         )
+
+        # Fire FCM push if the member opted in and has a device token.
+        if config and m.get("notification_push") and m.get("push_token"):
+            target_word = "target" if n_targets == 1 else "targets"
+            push.send(
+                fcm_token=m["push_token"],
+                title=f"Night summary · {night}",
+                body=(
+                    f"{n_targets} {target_word} observed, "
+                    f"{n_submitted} submitted to AAVSO."
+                ),
+                data={
+                    "type": "night_summary",
+                    "node_id": node_id,
+                    "night": night,
+                },
+                config=config,
+            )
+
     if members:
         logger.info(
             "Dispatched night_summary notifications: %d member(s) for %s %s",
