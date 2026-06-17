@@ -27,13 +27,14 @@ Admin endpoints (X-Admin-Key header):
 
 import json
 import logging
+import os
 import re
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
 
@@ -44,11 +45,26 @@ app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
 _config: dict = {}   # set by create_app()
 
+_WEBSITE_DIR = os.path.join(os.path.dirname(__file__), "..", "website")
+
 
 def create_app(config: dict) -> Flask:
     global _config
     _config = config
     return app
+
+
+@app.route("/")
+def serve_index():
+    return send_from_directory(_WEBSITE_DIR, "index.html")
+
+
+@app.route("/<path:filename>")
+def serve_website(filename):
+    full = os.path.join(_WEBSITE_DIR, filename)
+    if os.path.isfile(full):
+        return send_from_directory(_WEBSITE_DIR, filename)
+    return send_from_directory(_WEBSITE_DIR, "index.html")
 
 
 @app.after_request
