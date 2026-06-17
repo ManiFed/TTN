@@ -1,0 +1,92 @@
+server:
+  host: 0.0.0.0
+  port: 8800
+  admin_key: '${CLOUD_ADMIN_KEY}'
+
+database:
+  path: /data/cloud.db
+
+light_pollution:
+  api_key: '${LIGHT_POLLUTION_API_KEY}'
+
+alerts:
+  interval_minutes: 60
+  expire_days: 45
+  alerce:
+    enabled: true
+    mag_limit: 16.0
+    days_back: 14
+  gaia:
+    enabled: true
+    mag_limit: 16.0
+    days_back: 30
+  tns:
+    enabled: true
+    api_key: '${TNS_API_KEY}'
+    bot_id: '${TNS_BOT_ID}'
+    bot_name: '${TNS_BOT_NAME}'
+    mag_limit: 16.5
+    days_back: 7
+  atlas:
+    enabled: true
+    mag_limit: 16.5
+    username: '${ATLAS_USERNAME}'
+    password: '${ATLAS_PASSWORD}'
+  asassn:
+    enabled: true
+    mag_limit: 16.5
+    api_key: '${ASASSN_API_KEY}'
+  aavso:
+    enabled: true
+    default_watchlist: true
+    vsx_names: []
+
+scoring:
+  weights:
+    brightness: 0.20
+    science: 0.25
+    time: 0.15
+    coverage: 0.15
+    observe: 0.25
+  observability_weights:
+    light_pollution: 0.20
+    weather: 0.25
+    moon: 0.15
+    airmass: 0.15
+    window: 0.15
+    telescope: 0.10
+
+tuning:
+  enabled: false
+  api_key: '${ANTHROPIC_API_KEY}'
+  model: claude-sonnet-4-6
+  lookback_nights: 14
+  max_delta: 0.05
+  min_nights_data: 7
+  min_measurements: 30
+  min_change: 0.005
+
+scheduler:
+  replan_interval_minutes: 120
+  min_score: 0.25
+  max_targets_per_night: 12
+  sun_altitude_limit: -12
+
+aavso:
+  observer_code: 'EGBA'
+  username: '${AAVSO_USERNAME}'
+  password: '${AAVSO_PASSWORD}'
+  chart_id: ''
+  dry_run: true
+  batch_interval_minutes: 360
+  single_node_holdback_hours: 6
+  audit_dir: /data/aavso_batches
+
+storage:
+  raw_image_dir: /data/raw_images
+  raw_image_retention_days: 14
+  max_image_mb: 64
+
+logging:
+  level: INFO
+  format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
