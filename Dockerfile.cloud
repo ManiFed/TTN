@@ -10,10 +10,10 @@ RUN pip install --no-cache-dir -r cloud/requirements.txt
 COPY cloud/ cloud/
 COPY src/ src/
 
-RUN mkdir -p /data/aavso_batches /data/raw_images
+RUN mkdir -p /app/cloud_data/aavso_batches /app/cloud_data/raw_images
 
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 8800
+EXPOSE ${PORT:-8800}
 
 CMD ["python", "-m", "cloud.main", "cloud/config.production.yaml"]

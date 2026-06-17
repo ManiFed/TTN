@@ -35,7 +35,7 @@ def generate_night_summary(node_id: str, night: str) -> dict | None:
     Returns the summary dict, or None if no measurements exist for that night.
     """
     node = db.query_one(
-        "SELECT utc_offset_hours FROM nodes WHERE node_id = ?", (node_id,))
+        "SELECT utc_offset_hours FROM nodes WHERE node_id = %s", (node_id,))
     offset_h = float((node or {}).get("utc_offset_hours", 0.0))
 
     # Night window in UTC: local 18:00 → next-day local 06:00
@@ -47,7 +47,7 @@ def generate_night_summary(node_id: str, night: str) -> dict | None:
         """SELECT target_name, bjd, magnitude, uncertainty,
                   quality_flag, validation_status, aavso_submitted
            FROM measurements
-           WHERE node_id = ? AND received_at >= ? AND received_at < ?
+           WHERE node_id = %s AND received_at >= %s AND received_at < %s
            ORDER BY bjd""",
         (node_id, window_start, window_end),
     )
@@ -98,7 +98,7 @@ def generate_night_summary(node_id: str, night: str) -> dict | None:
         """INSERT INTO night_summaries
                (node_id, night, n_targets, n_observations, n_submitted,
                 summary_json, generated_at)
-           VALUES (?,?,?,?,?,?,?)
+           VALUES (%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id, night) DO UPDATE SET
                n_targets      = excluded.n_targets,
                n_observations = excluded.n_observations,
@@ -125,7 +125,7 @@ def generate_pending_summaries(config: dict) -> int:
     for node in db.query("SELECT node_id FROM nodes WHERE status = 'active'"):
         nid = node["node_id"]
         if db.query_one(
-            "SELECT id FROM night_summaries WHERE node_id = ? AND night = ?",
+            "SELECT id FROM night_summaries WHERE node_id = %s AND night = %s",
             (nid, yesterday),
         ):
             continue
@@ -149,7 +149,7 @@ def _dispatch_notifications(
         """SELECT nm.user_id, m.push_token, m.notification_push
            FROM node_members nm
            JOIN members m ON m.user_id = nm.user_id
-           WHERE nm.node_id = ?""",
+           WHERE nm.node_id = %s""",
         (node_id,),
     )
     payload = json.dumps({"node_id": node_id, "night": night, "summary": summary})
@@ -159,7 +159,7 @@ def _dispatch_notifications(
 
     for m in members:
         db.execute(
-            "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (?,?,?,?)",
+            "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (%s,%s,%s,%s)",
             (m["user_id"], "night_summary", payload, _now()),
         )
 

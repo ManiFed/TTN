@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.cloud"
+
+[deploy]
+startCommand = "python -m cloud.main cloud/config.production.yaml"
+healthcheckPath = "/api/v1/health"
+healthcheckTimeout = 30
+restartPolicyType = "always"

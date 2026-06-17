@@ -65,7 +65,7 @@ def register(email: str, password: str, display_name: str = "") -> dict:
     if len(password) < 8:
         raise ValueError("password must be at least 8 characters")
 
-    if db.query_one("SELECT user_id FROM users WHERE email = ?", (email,)):
+    if db.query_one("SELECT user_id FROM users WHERE email = %s", (email,)):
         raise ValueError("email already registered")
 
     user_id = f"u_{secrets.token_hex(8)}"
@@ -77,11 +77,11 @@ def register(email: str, password: str, display_name: str = "") -> dict:
     db.execute(
         """INSERT INTO users
                (user_id, email, password_hash, salt, auth_token_hash, created_at, last_login)
-           VALUES (?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
         (user_id, email, pw_hash, salt, token_hash, _now(), _now()),
     )
     db.execute(
-        "INSERT INTO members (user_id, display_name, created_at) VALUES (?,?,?)",
+        "INSERT INTO members (user_id, display_name, created_at) VALUES (%s,%s,%s)",
         (user_id, display_name.strip() or email.split("@")[0], _now()),
     )
     logger.info("New member registered: %s (%s)", user_id, email)
@@ -94,7 +94,7 @@ def login(email: str, password: str) -> dict:
     Raises ValueError on bad credentials (deliberately vague error to prevent enumeration).
     """
     email = email.strip().lower()
-    row = db.query_one("SELECT * FROM users WHERE email = ?", (email,))
+    row = db.query_one("SELECT * FROM users WHERE email = %s", (email,))
     if row is None:
         # Constant-time dummy check to prevent timing enumeration
         _hash_password("dummy", "dummy")
@@ -106,7 +106,7 @@ def login(email: str, password: str) -> dict:
 
     token = secrets.token_urlsafe(32)
     db.execute(
-        "UPDATE users SET auth_token_hash = ?, last_login = ? WHERE user_id = ?",
+        "UPDATE users SET auth_token_hash = %s, last_login = %s WHERE user_id = %s",
         (_hash_token(token), _now(), row["user_id"]),
     )
     logger.info("Member login: %s", row["user_id"])
@@ -118,7 +118,7 @@ def verify_token(token: str) -> Optional[dict]:
     if not token:
         return None
     return db.query_one(
-        "SELECT * FROM users WHERE auth_token_hash = ?", (_hash_token(token),)
+        "SELECT * FROM users WHERE auth_token_hash = %s", (_hash_token(token),)
     )
 
 

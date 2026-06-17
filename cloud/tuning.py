@@ -80,7 +80,7 @@ def _load_state_weights() -> dict | None:
 def _write_state_weights(weights: dict) -> None:
     db.execute(
         """INSERT INTO tuning_state (id, obs_weights, updated_at)
-           VALUES (1, ?, ?)
+           VALUES (1, %s, %s)
            ON CONFLICT(id) DO UPDATE SET
                obs_weights = excluded.obs_weights,
                updated_at  = excluded.updated_at""",
@@ -138,7 +138,7 @@ def gather_evidence(config: dict) -> dict:
         """SELECT target_name, node_id, magnitude, uncertainty, airmass, fwhm,
                   snr, quality_flag, validation_status, conditions, received_at
            FROM measurements
-           WHERE received_at >= ?""",
+           WHERE received_at >= %s""",
         (since,),
     )
     n_total = len(meas)
@@ -186,7 +186,7 @@ def gather_evidence(config: dict) -> dict:
 
     # Plan vs. observed completion (per night), the main weather/window proxy.
     plans = db.query(
-        "SELECT plan_json, night FROM plans WHERE generated_at >= ?", (since,))
+        "SELECT plan_json, night FROM plans WHERE generated_at >= %s", (since,))
     planned_targets: set = set()
     per_night_completion: list = []
     for p in plans:
@@ -417,7 +417,7 @@ def apply_and_notify(current: dict, proposed: dict, rationale: str,
         """INSERT INTO weight_history
                (changed_at, old_weights, new_weights, rationale,
                 evidence_digest, model, applied)
-           VALUES (?,?,?,?,?,?,1)""",
+           VALUES (%s,%s,%s,%s,%s,%s,1)""",
         (_now(), json.dumps(current), json.dumps(new_weights), rationale,
          json.dumps(evidence), model),
     )
@@ -436,7 +436,7 @@ def restore_weights(weights: dict, rationale: str, config: dict) -> dict:
         """INSERT INTO weight_history
                (changed_at, old_weights, new_weights, rationale,
                 evidence_digest, model, applied)
-           VALUES (?,?,?,?,?,?,1)""",
+           VALUES (%s,%s,%s,%s,%s,%s,1)""",
         (_now(), json.dumps(current), json.dumps(restored), rationale,
          "{}", "manual"),
     )
@@ -455,7 +455,7 @@ def _notify_admins(old_weights: dict, new_weights: dict, rationale: str) -> None
     })
     for a in admins:
         db.execute(
-            "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (?,?,?,?)",
+            "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (%s,%s,%s,%s)",
             (a["user_id"], "weight_tuning", payload, _now()),
         )
     if admins:

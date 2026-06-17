@@ -87,7 +87,7 @@ def generate_plan(node: dict, config: dict) -> Optional[ObservationPlan]:
     rows = db.query(
         """SELECT s.total, s.components, t.* FROM scores s
            JOIN targets t ON t.target_id = s.target_id
-           WHERE s.node_id = ? AND t.active = 1 AND s.total >= ?
+           WHERE s.node_id = %s AND t.active = 1 AND s.total >= %s
            ORDER BY s.total DESC LIMIT 60""",
         (node["node_id"], min_score),
     )
@@ -171,10 +171,10 @@ def generate_plan(node: dict, config: dict) -> Optional[ObservationPlan]:
 
 def _save_plan(plan: ObservationPlan) -> None:
     db.execute("UPDATE plans SET status = 'superseded' "
-               "WHERE node_id = ? AND status = 'current'", (plan.node_id,))
+               "WHERE node_id = %s AND status = 'current'", (plan.node_id,))
     db.execute(
         """INSERT INTO plans (plan_id, node_id, night, generated_at, plan_json, status)
-           VALUES (?,?,?,?,?,'current')""",
+           VALUES (%s,%s,%s,%s,%s,'current')""",
         (plan.plan_id, plan.node_id, plan.night, plan.generated_at,
          json.dumps(plan.to_dict())),
     )
@@ -183,7 +183,7 @@ def _save_plan(plan: ObservationPlan) -> None:
 def current_plan(node_id: str) -> Optional[dict]:
     """The node's current plan as a dict, or None."""
     row = db.query_one(
-        "SELECT plan_json FROM plans WHERE node_id = ? AND status = 'current' "
+        "SELECT plan_json FROM plans WHERE node_id = %s AND status = 'current' "
         "ORDER BY generated_at DESC LIMIT 1", (node_id,))
     return db.loads(row["plan_json"]) if row else None
 

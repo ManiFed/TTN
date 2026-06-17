@@ -107,7 +107,7 @@ def _validate_and_consume_code(code: str, node_id: str) -> str | None:
     Returns the associated user_id (may be None for generic codes), or raises
     ValueError if the code is invalid, expired, or already used.
     """
-    row = db.query_one("SELECT * FROM activation_codes WHERE code = ?", (code,))
+    row = db.query_one("SELECT * FROM activation_codes WHERE code = %s", (code,))
     if row is None:
         raise ValueError(f"activation code not found: {code}")
     if row["used_at"]:
@@ -116,7 +116,7 @@ def _validate_and_consume_code(code: str, node_id: str) -> str | None:
         raise ValueError("activation code expired")
 
     db.execute(
-        "UPDATE activation_codes SET used_at = ?, node_id = ? WHERE code = ?",
+        "UPDATE activation_codes SET used_at = %s, node_id = %s WHERE code = %s",
         (_now(), node_id, code),
     )
     return row["user_id"]  # may be None
@@ -144,12 +144,12 @@ def api_register():
         else:
             if user_id:
                 if not db.query_one(
-                    "SELECT 1 FROM node_members WHERE node_id = ? AND user_id = ?",
+                    "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
                     (creds["node_id"], user_id),
                 ):
                     db.execute(
                         "INSERT INTO node_members (node_id, user_id, claimed_at)"
-                        " VALUES (?,?,?)",
+                        " VALUES (%s,%s,%s)",
                         (creds["node_id"], user_id, _now()),
                     )
             logger.info("Activation code %s consumed — node %s linked to user %s",
@@ -218,7 +218,7 @@ def api_images(node):
 @require_node
 def api_interrupts_get(node):
     rows = db.query(
-        "SELECT * FROM interrupts WHERE expires_at > ?", (_now(),))
+        "SELECT * FROM interrupts WHERE expires_at > %s", (_now(),))
     out = []
     for r in rows:
         node_ids = db.loads(r["node_ids"], None)
@@ -239,13 +239,13 @@ def api_interrupts_get(node):
 @app.route("/api/v1/interrupts/<int:interrupt_id>/ack", methods=["POST"])
 @require_node
 def api_interrupt_ack(node, interrupt_id: int):
-    row = db.query_one("SELECT acked_by FROM interrupts WHERE id = ?", (interrupt_id,))
+    row = db.query_one("SELECT acked_by FROM interrupts WHERE id = %s", (interrupt_id,))
     if row is None:
         return jsonify({"error": "unknown interrupt"}), 404
     acked = db.loads(row["acked_by"], [])
     if node["node_id"] not in acked:
         acked.append(node["node_id"])
-        db.execute("UPDATE interrupts SET acked_by = ? WHERE id = ?",
+        db.execute("UPDATE interrupts SET acked_by = %s WHERE id = %s",
                    (json.dumps(acked), interrupt_id))
     return jsonify({"ok": True})
 
@@ -265,7 +265,7 @@ def api_interrupts_post():
         """INSERT INTO interrupts
                (target_id, name, ra_deg, dec_deg, mag, reason, node_ids,
                 created_at, expires_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (body.get("target_id"), name, ra_deg, dec_deg, body.get("mag"),
          str(body.get("reason", "")),
          json.dumps(body["node_ids"]) if body.get("node_ids") else None,
@@ -305,7 +305,7 @@ def api_network_status():
     nodes = [registry.public_view(n) for n in registry.list_nodes()]
     meas = db.query_one("SELECT COUNT(*) AS n FROM measurements") or {"n": 0}
     meas_24h = db.query_one(
-        "SELECT COUNT(*) AS n FROM measurements WHERE received_at > ?",
+        "SELECT COUNT(*) AS n FROM measurements WHERE received_at > %s",
         ((datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),),
     ) or {"n": 0}
     targets = db.query_one("SELECT COUNT(*) AS n FROM targets WHERE active = 1") or {"n": 0}
@@ -410,7 +410,7 @@ def api_auth_login():
 @auth.require_member
 def api_me(user):
     member = db.query_one(
-        "SELECT display_name, country FROM members WHERE user_id = ?",
+        "SELECT display_name, country FROM members WHERE user_id = %s",
         (user["user_id"],),
     )
     return jsonify({
@@ -433,7 +433,7 @@ def api_me_nodes(user):
                   n.last_heartbeat, nm.claimed_at
            FROM nodes n
            JOIN node_members nm ON nm.node_id = n.node_id
-           WHERE nm.user_id = ?""",
+           WHERE nm.user_id = %s""",
         (user["user_id"],),
     )
     for r in rows:
@@ -453,11 +453,11 @@ def api_me_claim_node(user, node_id):
     if node is None:
         return jsonify({"error": "invalid node credentials"}), 401
     if not db.query_one(
-        "SELECT 1 FROM node_members WHERE node_id = ? AND user_id = ?",
+        "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
         (node_id, user["user_id"]),
     ):
         db.execute(
-            "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (?,?,?)",
+            "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (%s,%s,%s)",
             (node_id, user["user_id"], _now()),
         )
         logger.info("Node %s claimed by member %s", node_id, user["user_id"])
@@ -472,7 +472,7 @@ def api_me_observations(user):
     limit = min(int(request.args.get("limit", 200)), 1000)
 
     node_ids = [r["node_id"] for r in db.query(
-        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+        "SELECT node_id FROM node_members WHERE user_id = %s", (user["user_id"],))]
     if not node_ids:
         return jsonify({"observations": [], "total": 0})
 
@@ -482,8 +482,8 @@ def api_me_observations(user):
         f"""SELECT node_id, target_name, bjd, magnitude, uncertainty, filter,
                    quality_flag, aavso_submitted, received_at
             FROM measurements
-            WHERE node_id IN ({placeholders}) AND received_at >= ?
-            ORDER BY bjd DESC LIMIT ?""",
+            WHERE node_id IN ({placeholders}) AND received_at >= %s
+            ORDER BY bjd DESC LIMIT %s""",
         (*node_ids, cutoff, limit),
     )
     return jsonify({"observations": rows, "total": len(rows)})
@@ -494,7 +494,7 @@ def api_me_observations(user):
 def api_me_stats(user):
     """Cumulative statistics for all nodes this member owns."""
     node_ids = [r["node_id"] for r in db.query(
-        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+        "SELECT node_id FROM node_members WHERE user_id = %s", (user["user_id"],))]
     if not node_ids:
         return jsonify({
             "total_observations": 0, "aavso_submitted": 0,
@@ -529,7 +529,7 @@ def api_me_nights(user):
     """Night summaries for this member's nodes, most recent first."""
     limit = min(int(request.args.get("limit", 30)), 90)
     node_ids = [r["node_id"] for r in db.query(
-        "SELECT node_id FROM node_members WHERE user_id = ?", (user["user_id"],))]
+        "SELECT node_id FROM node_members WHERE user_id = %s", (user["user_id"],))]
     if not node_ids:
         return jsonify({"nights": []})
 
@@ -539,7 +539,7 @@ def api_me_nights(user):
                    summary_json, generated_at
             FROM night_summaries
             WHERE node_id IN ({placeholders})
-            ORDER BY night DESC LIMIT ?""",
+            ORDER BY night DESC LIMIT %s""",
         (*node_ids, limit),
     )
     for r in rows:
@@ -553,7 +553,7 @@ def api_me_notifications(user):
     limit = min(int(request.args.get("limit", 50)), 200)
     rows = db.query(
         """SELECT id, type, payload, sent_at, read_at
-           FROM notifications WHERE user_id = ? ORDER BY sent_at DESC LIMIT ?""",
+           FROM notifications WHERE user_id = %s ORDER BY sent_at DESC LIMIT %s""",
         (user["user_id"], limit),
     )
     for r in rows:
@@ -566,7 +566,7 @@ def api_me_notifications(user):
 @auth.require_member
 def api_me_notification_read(user, notif_id):
     db.execute(
-        "UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ?",
+        "UPDATE notifications SET read_at = %s WHERE id = %s AND user_id = %s",
         (_now(), notif_id, user["user_id"]),
     )
     return jsonify({"ok": True})
@@ -583,7 +583,7 @@ def api_me_generate_activation_code(user):
     expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     db.execute(
         "INSERT INTO activation_codes (code, user_id, created_at, expires_at)"
-        " VALUES (?,?,?,?)",
+        " VALUES (%s,%s,%s,%s)",
         (code, user["user_id"], _now(), expires),
     )
     logger.info("Activation code generated for member %s: %s", user["user_id"], code)
@@ -604,7 +604,7 @@ def api_admin_generate_code():
         code = _generate_activation_code()
         db.execute(
             "INSERT INTO activation_codes (code, user_id, created_at, expires_at)"
-            " VALUES (?,?,?,?)",
+            " VALUES (%s,%s,%s,%s)",
             (code, user_id, _now(), expires),
         )
         codes.append(code)
@@ -618,13 +618,13 @@ def api_me_notification_prefs(user):
     fields, params = [], []
     for col in ("notification_email", "notification_push"):
         if col in body:
-            fields.append(f"{col} = ?")
+            fields.append(f"{col} = %s")
             params.append(1 if body[col] else 0)
     if "push_token" in body:
-        fields.append("push_token = ?")
+        fields.append("push_token = %s")
         params.append(str(body["push_token"])[:500])
     if not fields:
         return jsonify({"error": "no updatable fields"}), 400
     params.append(user["user_id"])
-    db.execute(f"UPDATE members SET {', '.join(fields)} WHERE user_id = ?", tuple(params))
+    db.execute(f"UPDATE members SET {', '.join(fields)} WHERE user_id = %s", tuple(params))
     return jsonify({"ok": True})

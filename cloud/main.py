@@ -74,7 +74,7 @@ def main() -> None:
         format=log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
     )
 
-    db.init(config.get("database", {}).get("path", "cloud_data/cloud.db"))
+    db.init(config.get("database", {}).get("url", ""))
 
     # ── Background loops ───────────────────────────────────────────────────────
     alerts_cfg = config.get("alerts", {})
@@ -115,7 +115,7 @@ def main() -> None:
     # ── API server ─────────────────────────────────────────────────────────────
     server_cfg = config.get("server", {})
     host = server_cfg.get("host", "0.0.0.0")
-    port = int(server_cfg.get("port", 8800))
+    port = int(os.environ.get("PORT", server_cfg.get("port", 8800)))
     app = create_app(config)
     logger.info("Boundless Skies cloud starting on %s:%d", host, port)
     app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
