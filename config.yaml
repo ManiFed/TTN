@@ -70,22 +70,37 @@ observatory:
   instrument: ZWO Seestar S50 IMX462
   observer: ''
 photometry:
-  enabled: false
-  node_id: node_001
+  enabled: true
+  node_id: seestar-live-001
   filter_name: CV
   gain: 1.0
   read_noise: 5.0
   target:
-    name: ''
-    ra_deg: null
-    dec_deg: null
+    name: 'Z Cam'
+    ra_deg: 126.30492
+    dec_deg: 73.11086
+  # Plate solving. solver: "astap" or "astrometry" (Astrometry.net solve-field).
+  # force_plate_solve re-solves every stack from scratch, discarding the Seestar's
+  # onboard WCS so its alt-az pointing error can't leak into the cross-match.
+  solver: astrometry
   astap_path: astap
+  solve_field_path: /opt/homebrew/bin/solve-field
+  force_plate_solve: true
+  # pixel_scale is also required for the pointing-WCS fallback (_inject_pointing_wcs)
+  # used when ASTAP is unavailable. Alt-az mounts (e.g. Seestar S50) must set this
+  # or the pipeline will abort with "cannot construct fallback WCS".
+  pixel_scale: 2.4          # arcsec/px — Seestar S50 IMX462 at 250mm focal length
   astap_search_radius: 10
-  aperture_factor: 2.5
+  aperture_factor: 1.5
   annulus_inner: 4.0
   annulus_outer: 6.0
   field_radius: 0.5
+  mag_min: 10.0             # skip stars brighter than this — likely saturated on 30s Seestar frames
   mag_limit: 15.0
+  # Comparison-star catalogs, queried in order until comparison_target_count is
+  # reached. APASS gives Johnson V directly; ATLAS reaches fainter; Gaia backstops.
+  comparison_catalogs: [aavso, apass, gaia]
+  comparison_target_count: 8
   min_comparison_stars: 3
   snr_threshold: 20
   max_uncertainty: 0.3
@@ -94,9 +109,10 @@ photometry:
     enabled: true
     export_dir: fits_export
 aavso:
-  observer_code: ''
-  username: ''
-  password: ''
+  observer_code: 'EGBA'
+  username: '${AAVSO_USERNAME}'
+  password: '${AAVSO_PASSWORD}'
+  api_key: '${AAVSO_API_KEY}'
   audit_dir: aavso_submissions
   dry_run: false
   submit_poor_quality: false
@@ -105,8 +121,8 @@ cloud:
   enabled: true
   url: 'http://localhost:8800'  # local cloud for testing
   activation_code: ''          # BS-YYYY-XXXXXXXX from your account page; used once on first boot
-  node_id: ''                  # set automatically after first registration
-  api_key: ''                  # set automatically after first registration
+  node_id: 'seestar-live-001'
+  api_key: '${CLOUD_NODE_API_KEY}'
   heartbeat_interval: 60       # seconds between heartbeats (with conditions)
   plan_poll_interval: 300      # seconds between observation-plan polls
   auto_run_plans: false        # execute cloud plans automatically when idle

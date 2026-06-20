@@ -85,7 +85,7 @@
 
     function reticle(x, y, p, locked, label) {
       var R = (locked ? 17 : (46 - 29 * p)) * DPR;   // ring contracts while acquiring
-      var col = locked ? "232,169,58" : "150,175,255";
+      var col = locked ? "255,148,56" : "37,232,160";   // amber lock / green scan
       ctx.strokeStyle = "rgba(" + col + "," + (locked ? 0.9 : 0.5 + 0.4 * p) + ")";
       ctx.lineWidth = 1 * DPR;
       // ring
@@ -125,7 +125,7 @@
       // drift (sidereal-ish) + wrap
       var dx = 0.004 * DPR * dt, dy = 0.0016 * DPR * dt;
       // constellation links
-      ctx.strokeStyle = "rgba(150,175,255,0.10)"; ctx.lineWidth = 0.6 * DPR;
+      ctx.strokeStyle = "rgba(37,232,160,0.10)"; ctx.lineWidth = 0.6 * DPR;
       links.forEach(function (l) {
         ctx.beginPath(); ctx.moveTo(l[0].x, l[0].y); ctx.lineTo(l[1].x, l[1].y); ctx.stroke();
       });
@@ -207,7 +207,7 @@
       for (var g = pad; g < H; g += (H - pad) / 4) { ctx.beginPath(); ctx.moveTo(0, g); ctx.lineTo(W, g); ctx.stroke(); }
     }
     var lim = Math.floor(progress * pts.length);
-    ctx.beginPath(); ctx.strokeStyle = "rgba(79,139,255,0.45)"; ctx.lineWidth = opts.thin ? 1.1 : 1.6;
+    ctx.beginPath(); ctx.strokeStyle = "rgba(37,232,160,0.45)"; ctx.lineWidth = opts.thin ? 1.1 : 1.6;
     for (var i = 0; i < lim; i++) { var p = xy(i); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }
     ctx.stroke();
     for (var j = 0; j < lim; j++) {
@@ -217,24 +217,42 @@
     }
     if (lim > 0) {
       var e = xy(lim - 1);
-      ctx.beginPath(); ctx.arc(e[0], e[1], opts.thin ? 3 : 5, 0, 6.2832); ctx.fillStyle = "rgba(79,139,255,0.3)"; ctx.fill();
-      ctx.beginPath(); ctx.arc(e[0], e[1], opts.thin ? 2 : 3, 0, 6.2832); ctx.fillStyle = "#4F8BFF"; ctx.fill();
+      ctx.beginPath(); ctx.arc(e[0], e[1], opts.thin ? 3 : 5, 0, 6.2832); ctx.fillStyle = "rgba(37,232,160,0.3)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(e[0], e[1], opts.thin ? 2 : 3, 0, 6.2832); ctx.fillStyle = "#25E8A0"; ctx.fill();
     }
   }
 
   function animateCurve(canvas, pts, opts, dur) {
     if (!canvas || !pts || !pts.length) return;
-    var start = null;
+    var started = false, start = null;
     function step(ts) {
       if (!start) start = ts;
       var p = Math.min((ts - start) / dur, 1);
       drawCurve(canvas, pts, p, opts);
       if (p < 1) requestAnimationFrame(step);
     }
+    function run() {
+      if (started) return; started = true;
+      requestAnimationFrame(step);
+      // if rAF hasn't produced a single frame shortly after we start (throttled
+      // preview / background tab), paint the final curve outright so it's never blank
+      setTimeout(function () { if (start === null) drawCurve(canvas, pts, 1, opts); }, 350);
+    }
+    function inView() {
+      var r = canvas.getBoundingClientRect();
+      return r.top < (window.innerHeight || document.documentElement.clientHeight) && r.bottom > 0;
+    }
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce || inView() || !("IntersectionObserver" in window)) { run(); return; }
     var io = new IntersectionObserver(function (es) {
-      es.forEach(function (e) { if (e.isIntersecting) { requestAnimationFrame(step); io.disconnect(); } });
-    }, { threshold: 0.25 });
+      es.forEach(function (e) { if (e.isIntersecting) { run(); io.disconnect(); } });
+    }, { threshold: 0.2 });
     io.observe(canvas);
+    // safety net: if the observer never fires, paint once it's scrolled near
+    var guard = setInterval(function () {
+      if (inView()) { run(); io.disconnect(); clearInterval(guard); }
+    }, 500);
+    setTimeout(function () { clearInterval(guard); }, 30000);
   }
 
   /* =========================================================
@@ -245,7 +263,7 @@
     var ctx = c.getContext("2d"), W = c.width, H = c.height, cx = W / 2, cy = H - 8, rad = 70;
     ctx.clearRect(0, 0, W, H); ctx.lineWidth = 9; ctx.lineCap = "round";
     ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, 2 * Math.PI); ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.stroke();
-    var col = value >= 0.85 ? "#54D98C" : value >= 0.65 ? "#4F8BFF" : "#E8A93A";
+    var col = value >= 0.85 ? "#54D98C" : value >= 0.65 ? "#25E8A0" : "#E8A93A";
     ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, Math.PI + value * Math.PI); ctx.strokeStyle = col; ctx.stroke();
   }
 
@@ -399,7 +417,7 @@
         '<ellipse cx="100" cy="150" rx="62" ry="10" fill="#000" opacity="0.4"/>' +
         '<rect x="56" y="56" width="88" height="58" rx="6" fill="url(#lc' + uid + ')" stroke="#565b66" stroke-width="1"/>' +
         '<rect x="62" y="62" width="76" height="46" rx="3" fill="#0c1422"/>' +
-        '<rect x="66" y="66" width="40" height="3" rx="1.5" fill="#4F8BFF" opacity="0.7"/>' +
+        '<rect x="66" y="66" width="40" height="3" rx="1.5" fill="#25E8A0" opacity="0.7"/>' +
         '<rect x="66" y="74" width="58" height="2" rx="1" fill="#3a567f" opacity="0.6"/>' +
         '<path d="M44 114 H156 L150 134 H50 Z" fill="#9aa0a8"/>' +
         '<path d="M44 114 H156 L154.5 119 H45.5 Z" fill="#c7ccd3"/>' +
@@ -408,8 +426,8 @@
 
     // small filled glyphs for add-ons (badges + thumbnails)
     function glyph(id) {
-      var c = { power: "#4F8BFF", switchbot: "#b9aefb", ups: "#54D98C", solar: "#E8A93A",
-                enclosure: "#6E59F2", dew: "#E8A93A", wifi: "#4F8BFF" }[id] || "#4F8BFF";
+      var c = { power: "#25E8A0", switchbot: "#8FEFC9", ups: "#54D98C", solar: "#E8A93A",
+                enclosure: "#25E8A0", dew: "#E8A93A", wifi: "#25E8A0" }[id] || "#25E8A0";
       var inner = {
         power:     '<rect x="78" y="70" width="44" height="60" rx="8"/><line x1="88" y1="58" x2="88" y2="74" stroke="' + c + '" stroke-width="6" stroke-linecap="round"/><line x1="112" y1="58" x2="112" y2="74" stroke="' + c + '" stroke-width="6" stroke-linecap="round"/><line x1="100" y1="130" x2="100" y2="146" stroke="' + c + '" stroke-width="6" stroke-linecap="round"/>',
         switchbot: '<rect x="68" y="72" width="64" height="56" rx="10"/><circle cx="100" cy="100" r="13" fill="#0b0b0c"/>',
@@ -425,13 +443,30 @@
     function compArt(id) { return id === "pi5" ? pi("pi5") : id === "pi4" ? pi("pi4") : id === "mac" ? macmini() : laptop(); }
     function scopeArt(id) { return telescope(id === "s30" ? "s30" : "s50"); }
 
+    // ---- real product photography (with the studio SVG as graceful fallback)
+    // real photography for the telescopes (the hero hardware); the computers
+    // keep their crisp studio-SVG renders — consistent and instant.
+    var PHOTO = {
+      s50: "https://us.seestar.com/cdn/shop/files/seestar_s50.jpg?v=1767929676&width=480"
+    };
+    function productMedia(group, id) {
+      var svg = group === "telescope" ? scopeArt(id) : compArt(id);
+      var url = PHOTO[id];
+      if (!url) return '<span class="pmedia"><span class="pmedia-svg">' + svg + "</span></span>";
+      // photo first; if it 404s / is blocked, reveal the SVG render instead
+      return '<span class="pmedia"><img class="pphoto" src="' + url + '" alt="" loading="lazy" ' +
+        "onerror=\"this.style.display='none';this.nextElementSibling.style.display='flex'\" />" +
+        '<span class="pmedia-svg" style="display:none">' + svg + "</span></span>";
+    }
+
     var owned = {};            // ids the inventory quiz marks as already-owned (price → 0)
     var STEPS = 5, step = 0;
 
     // ---- render option lists ---------------------------------------
     function cardArt(group, it) {
-      var svg = group === "telescope" ? scopeArt(it.id) : compArt(it.id);
-      return '<span class="opt-thumb">' + svg + "</span>";
+      // real product photo where we have one (studio SVG render otherwise)
+      var cls = PHOTO[it.id] ? "opt-thumb photo" : "opt-thumb";
+      return '<span class="' + cls + '">' + productMedia(group, it.id) + "</span>";
     }
     function radioCard(group, it) {
       var tag = it.tag ? '<span class="opt-tag">' + it.tag + "</span>" : "";
@@ -445,22 +480,19 @@
     function checkCard(it) {
       return '<label class="opt"><input type="checkbox" name="addon" value="' + it.id + '"' +
         (it.target ? ' data-target="' + it.target + '"' : "") + ' data-rel="' + it.rel + '" />' +
-        '<div class="opt-card"><span class="opt-thumb glyph">' + glyph(it.id) + '</span><span class="opt-check"></span>' +
-        '<div class="opt-info"><div class="t">' + it.name + '</div><div class="d">' + it.desc + "</div></div>" +
-        '<div class="opt-right"><span class="opt-delta">+' + Math.round(it.rel * 135) + ' nights/yr</span><span class="opt-delta tier">$' + it.price + "</span></div></div></label>";
+        '<div class="opt-card"><span class="opt-thumb glyph">' + glyph(it.id) + '</span>' +
+        '<div class="opt-info"><div class="t">' + it.name + '</div>' +
+        '<div class="opt-gain"><strong>+' + Math.round(it.rel * 135) + ' nights/yr</strong> · $' + it.price + "</div></div>" +
+        '<span class="opt-check"></span></div></label>';
     }
     document.querySelector('[data-group="telescope"]').innerHTML = CATALOG.telescope.map(function (it) { return radioCard("telescope", it); }).join("");
     document.querySelector('[data-group="computer"]').innerHTML = CATALOG.computer.map(function (it) { return radioCard("computer", it); }).join("");
-    $("accord").innerHTML = CATALOG.addons.map(function (g, i) {
-      return '<div class="acc-sec' + (i === 0 ? " open" : "") + '">' +
-        '<button class="acc-head" type="button"><span>' + g.cat + '</span><i class="ti ti-chevron-down"></i></button>' +
-        '<div class="acc-body">' + g.items.map(checkCard).join("") + "</div></div>";
+    // add-ons: a single flat grid grouped by category label — no accordion,
+    // so the whole step fits the modal without scrolling
+    $("accord").className = "addon-grid";
+    $("accord").innerHTML = CATALOG.addons.map(function (g) {
+      return '<div class="addon-cat">' + g.cat + "</div>" + g.items.map(checkCard).join("");
     }).join("");
-
-    // accordion toggles
-    Array.prototype.forEach.call(document.querySelectorAll(".acc-head"), function (h) {
-      h.addEventListener("click", function () { h.parentNode.classList.toggle("open"); });
-    });
 
     // ---- summary recompute -----------------------------------------
     var relVal = $("rel-val"), relFill = $("rel-fill"), relStage = $("rel-stage"),
@@ -489,7 +521,7 @@
     };
 
     function priceOf(id, base) { return owned[id] ? 0 : base; }
-    function colorFor(rel) { return rel >= 0.85 ? "#54D98C" : rel >= 0.65 ? "#4F8BFF" : "#E8A93A"; }
+    function colorFor(rel) { return rel >= 0.85 ? "#54D98C" : rel >= 0.65 ? "#25E8A0" : "#E8A93A"; }
 
     // ---- hero stage: crossfade the render when the scope/computer changes
     var artKey = "";
@@ -597,7 +629,7 @@
       if (!toastArmed) { prevAdds = ids; prevMilestone = milestoneOf(rel); toastArmed = true; return; }
       var added = s.adds.filter(function (a) { return !prevAdds[a.id] && CAP_MSG[a.id]; });
       if (added.length > 2) {
-        pushToast(STAR, added.length + " upgrades equipped", "Your node just leveled up.", "#b9aefb");
+        pushToast(STAR, added.length + " upgrades equipped", "Your node just leveled up.", "#8FEFC9");
       } else {
         added.forEach(function (a) { var m = CAP_MSG[a.id]; pushToast(glyph(a.id), m[0], m[1]); });
       }
@@ -749,7 +781,7 @@
         var ang = Math.random() * 6.2832, dist = 40 + Math.random() * 90;
         bits.push('<i style="--tx:' + (Math.cos(ang) * dist).toFixed(0) + 'px;--ty:' +
           (Math.sin(ang) * dist).toFixed(0) + 'px;--d:' + (Math.random() * 160).toFixed(0) +
-          'ms;background:' + (["#E8A93A", "#4F8BFF", "#54D98C", "#b9aefb"][i % 4]) + '"></i>');
+          'ms;background:' + (["#E8A93A", "#25E8A0", "#54D98C", "#8FEFC9"][i % 4]) + '"></i>');
       }
       burst.innerHTML = bits.join("");
       burst.classList.remove("go"); void burst.offsetWidth; burst.classList.add("go");
@@ -759,17 +791,45 @@
     }
     back.addEventListener("click", function () { show(step - 1); });
     next.addEventListener("click", function () {
-      if (step === STEPS - 1) { document.querySelector("#builder").scrollIntoView({ behavior: "smooth" }); return; }
+      if (step === STEPS - 1) { celebrate(); return; }   // already on review — re-fire the moment
       show(step + 1);
     });
     Array.prototype.forEach.call(pills, function (li) {
       li.addEventListener("click", function () { show(+li.dataset.go); });
     });
 
-    // ---- preset loader ---------------------------------------------
+    // ---- modal open / close ----------------------------------------
+    var modal = $("builder-modal"), lastFocus = null;
+    function openModal() {
+      if (!modal) return;
+      lastFocus = document.activeElement;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+      recompute();
+      var c = modal.querySelector(".bmodal-close"); if (c) c.focus();
+    }
+    function closeModal() {
+      if (!modal) return;
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      document.body.style.overflow = "";
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    }
+    if (modal) {
+      Array.prototype.forEach.call(modal.querySelectorAll("[data-close]"), function (el) {
+        el.addEventListener("click", closeModal);
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+      });
+    }
+    var openBtn = $("open-builder");
+    if (openBtn) openBtn.addEventListener("click", function () { show(0); openModal(); });
+
+    // ---- preset loader: open straight to a fully-assembled review ----
     var preset = $("load-preset");
     if (preset) preset.addEventListener("click", function () {
-      // reset inventory (assume from-scratch build)
       Array.prototype.forEach.call(document.querySelectorAll('input[name="have"]'), function (c) { c.checked = false; });
       owned = {};
       setRadio("telescope", "s50");
@@ -778,7 +838,7 @@
       Array.prototype.forEach.call(document.querySelectorAll('input[name="addon"]'), function (cb) { cb.checked = !!on[cb.value]; });
       recompute();
       show(STEPS - 1);                      // jump to review
-      $("builder").scrollIntoView({ behavior: "smooth" });
+      openModal();
     });
 
     // ---- wiring -----------------------------------------------------
@@ -830,13 +890,13 @@
     function stepArt0() {
       var b = did(), g = did();
       return '<svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>' +
-        '<linearGradient id="' + b + '" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#4F8BFF" stop-opacity="0.65"/><stop offset="1" stop-color="#4F8BFF" stop-opacity="0"/></linearGradient>' +
-        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#4F8BFF" stop-opacity="0.18"/><stop offset="1" stop-color="#4F8BFF" stop-opacity="0"/></radialGradient></defs>' +
+        '<linearGradient id="' + b + '" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#25E8A0" stop-opacity="0.65"/><stop offset="1" stop-color="#25E8A0" stop-opacity="0"/></linearGradient>' +
+        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#25E8A0" stop-opacity="0.18"/><stop offset="1" stop-color="#25E8A0" stop-opacity="0"/></radialGradient></defs>' +
         '<circle cx="40" cy="40" r="36" fill="url(#' + g + ')"/>' +
         '<circle cx="12" cy="10" r="1" fill="#fff" opacity="0.55"/><circle cx="65" cy="8" r="1.2" fill="#fff" opacity="0.45"/><circle cx="18" cy="28" r="0.9" fill="#fff" opacity="0.4"/>' +
         '<rect x="37.5" y="12" width="5" height="24" fill="url(#' + b + ')"/>' +
-        '<circle cx="40" cy="10" r="4.5" fill="none" stroke="#4F8BFF" stroke-width="1.2" opacity="0.8"/><circle cx="40" cy="10" r="2" fill="#4F8BFF"/>' +
-        '<circle cx="40" cy="30" r="1.8" fill="#4F8BFF" opacity="0.9"/><circle cx="40" cy="22" r="1.4" fill="#4F8BFF" opacity="0.65"/>' +
+        '<circle cx="40" cy="10" r="4.5" fill="none" stroke="#25E8A0" stroke-width="1.2" opacity="0.8"/><circle cx="40" cy="10" r="2" fill="#25E8A0"/>' +
+        '<circle cx="40" cy="30" r="1.8" fill="#25E8A0" opacity="0.9"/><circle cx="40" cy="22" r="1.4" fill="#25E8A0" opacity="0.65"/>' +
         '<line x1="40" y1="62" x2="29" y2="73" stroke="#3b3f49" stroke-width="2" stroke-linecap="round"/>' +
         '<line x1="40" y1="62" x2="51" y2="73" stroke="#3b3f49" stroke-width="2" stroke-linecap="round"/>' +
         '<line x1="40" y1="62" x2="40" y2="74" stroke="#3b3f49" stroke-width="2" stroke-linecap="round"/>' +
@@ -854,17 +914,17 @@
     function stepArt1() {
       var g = did();
       return '<svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>' +
-        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#6E59F2" stop-opacity="0.22"/><stop offset="1" stop-color="#6E59F2" stop-opacity="0"/></radialGradient></defs>' +
+        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#25E8A0" stop-opacity="0.22"/><stop offset="1" stop-color="#25E8A0" stop-opacity="0"/></radialGradient></defs>' +
         '<circle cx="40" cy="40" r="36" fill="url(#' + g + ')"/>' +
-        '<g stroke="rgba(110,89,242,0.22)" stroke-width="1"><line x1="40" y1="40" x2="14" y2="18"/><line x1="40" y1="40" x2="66" y2="18"/><line x1="40" y1="40" x2="12" y2="54"/><line x1="40" y1="40" x2="68" y2="54"/><line x1="40" y1="40" x2="40" y2="70"/></g>' +
-        '<circle cx="14" cy="18" r="5" fill="#6E59F2" opacity="0.4"/><circle cx="14" cy="18" r="2.5" fill="#b9aefb"/>' +
-        '<circle cx="66" cy="18" r="5" fill="#6E59F2" opacity="0.4"/><circle cx="66" cy="18" r="2.5" fill="#b9aefb"/>' +
-        '<circle cx="12" cy="54" r="5" fill="#4F8BFF" opacity="0.4"/><circle cx="12" cy="54" r="2.5" fill="#7db4ff"/>' +
-        '<circle cx="68" cy="54" r="5" fill="#4F8BFF" opacity="0.4"/><circle cx="68" cy="54" r="2.5" fill="#7db4ff"/>' +
+        '<g stroke="rgba(37,232,160,0.22)" stroke-width="1"><line x1="40" y1="40" x2="14" y2="18"/><line x1="40" y1="40" x2="66" y2="18"/><line x1="40" y1="40" x2="12" y2="54"/><line x1="40" y1="40" x2="68" y2="54"/><line x1="40" y1="40" x2="40" y2="70"/></g>' +
+        '<circle cx="14" cy="18" r="5" fill="#25E8A0" opacity="0.4"/><circle cx="14" cy="18" r="2.5" fill="#8FEFC9"/>' +
+        '<circle cx="66" cy="18" r="5" fill="#25E8A0" opacity="0.4"/><circle cx="66" cy="18" r="2.5" fill="#8FEFC9"/>' +
+        '<circle cx="12" cy="54" r="5" fill="#25E8A0" opacity="0.4"/><circle cx="12" cy="54" r="2.5" fill="#7FEAC4"/>' +
+        '<circle cx="68" cy="54" r="5" fill="#25E8A0" opacity="0.4"/><circle cx="68" cy="54" r="2.5" fill="#7FEAC4"/>' +
         '<circle cx="40" cy="70" r="5" fill="#54D98C" opacity="0.4"/><circle cx="40" cy="70" r="2.5" fill="#54D98C"/>' +
-        '<circle cx="40" cy="40" r="13" fill="#0C0D11" stroke="#6E59F2" stroke-width="1.5"/>' +
-        '<circle cx="40" cy="40" r="10" fill="rgba(110,89,242,0.12)"/>' +
-        '<g stroke="#b9aefb" stroke-width="1.3" stroke-linecap="round" fill="none"><circle cx="40" cy="40" r="5.5"/><line x1="34.5" y1="40" x2="30" y2="40"/><line x1="45.5" y1="40" x2="50" y2="40"/><line x1="40" y1="34.5" x2="40" y2="30"/><line x1="40" y1="45.5" x2="40" y2="50"/></g></svg>';
+        '<circle cx="40" cy="40" r="13" fill="#0C0D11" stroke="#25E8A0" stroke-width="1.5"/>' +
+        '<circle cx="40" cy="40" r="10" fill="rgba(37,232,160,0.12)"/>' +
+        '<g stroke="#8FEFC9" stroke-width="1.3" stroke-linecap="round" fill="none"><circle cx="40" cy="40" r="5.5"/><line x1="34.5" y1="40" x2="30" y2="40"/><line x1="45.5" y1="40" x2="50" y2="40"/><line x1="40" y1="34.5" x2="40" y2="30"/><line x1="40" y1="45.5" x2="40" y2="50"/></g></svg>';
     }
 
     // Step 3: AAVSO science certificate + star
@@ -886,8 +946,8 @@
     function involveArt0() {
       var g = did();
       return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>' +
-        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#6E59F2" stop-opacity="0.18"/><stop offset="1" stop-color="#6E59F2" stop-opacity="0"/></radialGradient></defs>' +
-        '<circle cx="32" cy="32" r="29" fill="url(#' + g + ')" stroke="rgba(110,89,242,0.2)" stroke-width="1"/>' +
+        '<radialGradient id="' + g + '" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#25E8A0" stop-opacity="0.18"/><stop offset="1" stop-color="#25E8A0" stop-opacity="0"/></radialGradient></defs>' +
+        '<circle cx="32" cy="32" r="29" fill="url(#' + g + ')" stroke="rgba(37,232,160,0.2)" stroke-width="1"/>' +
         '<line x1="32" y1="48" x2="22" y2="57" stroke="#3b3f49" stroke-width="2" stroke-linecap="round"/>' +
         '<line x1="32" y1="48" x2="42" y2="57" stroke="#3b3f49" stroke-width="2" stroke-linecap="round"/>' +
         '<rect x="26" y="46" width="12" height="5" rx="2" fill="#23262e"/>' +
@@ -896,9 +956,9 @@
         '<circle cx="32" cy="38" r="7" fill="#05070c"/><circle cx="32" cy="38" r="5.5" fill="#0a1426"/>' +
         '<ellipse cx="29.5" cy="35.5" rx="2" ry="1.3" fill="#bcd2f5" opacity="0.5" transform="rotate(-25 29.5 35.5)"/>' +
         '<circle cx="32" cy="47" r="1.4" fill="#54D98C"/>' +
-        '<circle cx="16" cy="18" r="2.2" fill="#6E59F2" opacity="0.85"/>' +
-        '<circle cx="32" cy="10" r="1.8" fill="#4F8BFF" opacity="0.85"/>' +
-        '<circle cx="48" cy="16" r="2" fill="#6E59F2" opacity="0.75"/></svg>';
+        '<circle cx="16" cy="18" r="2.2" fill="#25E8A0" opacity="0.85"/>' +
+        '<circle cx="32" cy="10" r="1.8" fill="#25E8A0" opacity="0.85"/>' +
+        '<circle cx="48" cy="16" r="2" fill="#25E8A0" opacity="0.75"/></svg>';
     }
 
     // Involve Card 2: heart containing telescope
@@ -917,11 +977,11 @@
     // Involve Card 3: envelope with live light curve
     function involveArt2() {
       return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-        '<circle cx="32" cy="32" r="29" fill="rgba(79,139,255,0.1)" stroke="rgba(79,139,255,0.2)" stroke-width="1"/>' +
-        '<rect x="10" y="22" width="44" height="28" rx="5" fill="#0C0D11" stroke="rgba(79,139,255,0.4)" stroke-width="1.2"/>' +
-        '<polyline points="10,22 32,38 54,22" stroke="rgba(79,139,255,0.5)" stroke-width="1.2" fill="none" stroke-linejoin="round"/>' +
-        '<polyline points="14,46 19,44 24,47 29,39 34,41 39,35 44,40 50,36" stroke="#4F8BFF" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>' +
-        '<circle cx="50" cy="36" r="2.5" fill="#4F8BFF"/>' +
+        '<circle cx="32" cy="32" r="29" fill="rgba(37,232,160,0.1)" stroke="rgba(37,232,160,0.2)" stroke-width="1"/>' +
+        '<rect x="10" y="22" width="44" height="28" rx="5" fill="#0C0D11" stroke="rgba(37,232,160,0.4)" stroke-width="1.2"/>' +
+        '<polyline points="10,22 32,38 54,22" stroke="rgba(37,232,160,0.5)" stroke-width="1.2" fill="none" stroke-linejoin="round"/>' +
+        '<polyline points="14,46 19,44 24,47 29,39 34,41 39,35 44,40 50,36" stroke="#25E8A0" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>' +
+        '<circle cx="50" cy="36" r="2.5" fill="#25E8A0"/>' +
         '<circle cx="39" cy="35" r="1.8" fill="#E8A93A"/></svg>';
     }
 
@@ -1018,8 +1078,10 @@
     { name: "R Leo", mag: 6.8 }, { name: "Z UMa", mag: 7.9 }, { name: "SS Aur", mag: 12.0 }
   ];
 
-  function fillConsole(points) {
+  function fillConsole(points, target) {
     var grid = $("obs-grid"); if (!grid || !points.length) return;
+    // clear any previously-rendered rows (keeps the 5 header cells)
+    Array.prototype.slice.call(grid.querySelectorAll(".obs-row")).forEach(function (r) { grid.removeChild(r); });
     var recent = points.slice(-4).reverse();
     recent.forEach(function (p, i) {
       var row = document.createElement("div"); row.className = "obs-row";
@@ -1027,11 +1089,77 @@
         : (i === 0 ? '<span class="c-busy">observing…</span>' : '<span class="c-busy">queued</span>');
       row.innerHTML =
         '<span class="c-node">' + p.node_id + '</span>' +
-        '<span class="c-tgt">SS Cyg</span>' +
+        '<span class="c-tgt">' + (target || "SS Cyg") + '</span>' +
         '<span class="c-time">' + hhmmss(p.received_at) + '</span>' +
         '<span class="c-mag">' + p.magnitude.toFixed(2) + '</span>' + status;
       grid.appendChild(row);
     });
+  }
+
+  // ---- live target ticker: a marquee of real objects on watch ----------
+  var TICKER_BAKED = [
+    { name: "SS Cyg", type: "dwarf nova", mag: 8.4 }, { name: "T CrB", type: "recurrent nova", mag: 9.9 },
+    { name: "R Leo", type: "Mira variable", mag: 6.8 }, { name: "Z Cam", type: "Z Cam-type CV", mag: 10.0 },
+    { name: "RS Oph", type: "symbiotic nova", mag: 11.2 }, { name: "χ Cyg", type: "long-period", mag: 7.1 },
+    { name: "U Gem", type: "dwarf nova", mag: 9.3 }, { name: "SS Aur", type: "dwarf nova", mag: 12.0 },
+    { name: "AM Her", type: "polar CV", mag: 13.0 }, { name: "RR Lyr", type: "pulsating", mag: 7.6 }
+  ];
+  function fillTicker(items) {
+    var track = $("ticker-track"); if (!track || !items.length) return;
+    function row(t) {
+      return '<span class="ticker-item"><b>' + t.name + "</b> " + (t.type || "variable") +
+        (typeof t.mag === "number" ? ' <span class="tk-mag">mag ' + t.mag.toFixed(1) + "</span>" : "") + "</span>";
+    }
+    var html = items.map(row).join("");
+    track.innerHTML = html + html;       // duplicate so the -50% loop is seamless
+  }
+
+  // ---- An illustrative SS Cyg dwarf-nova run so the photometry section is
+  //      NEVER blank/slow: quiescence ~12.0 punctuated by fast-rise, slow-decline
+  //      outbursts to ~8.4. Live data replaces it the moment the network has any.
+  function bakedLightcurve() {
+    var pts = [], n = 70, base = 12.0, now = Date.now();
+    for (var i = 0; i < n; i++) {
+      var cyc = i % 23;                       // ~3 outbursts across 30 days
+      var burst = cyc < 2 ? cyc / 2 : (cyc < 11 ? 1 - (cyc - 2) / 9 : 0);
+      var m = base - burst * 3.6 + Math.sin(i * 0.9) * 0.05 + (Math.random() * 0.14 - 0.07);
+      var ok = Math.random() < 0.86;
+      pts.push({
+        m: +m.toFixed(2), ok: ok,
+        magnitude: +m.toFixed(2), aavso_submitted: ok,
+        node_id: "node-" + (1000 + ((i * 7) % 60)),
+        received_at: new Date(now - (n - i) * 3.6e6 * 8).toISOString()
+      });
+    }
+    return pts;
+  }
+
+  function paintCurves(points, meta) {
+    var pts = points.map(function (p) { return { m: p.magnitude, ok: !!p.aavso_submitted }; });
+    var ok = points.reduce(function (a, p) { return a + (p.aavso_submitted ? 1 : 0); }, 0);
+    var pct = Math.round(ok / points.length * 100);
+    if ($("curve-target")) $("curve-target").textContent = (meta.target || "SS Cyg") + " — light curve";
+    if ($("curve-meta")) $("curve-meta").textContent = meta.line;
+    if ($("curve-badge")) $("curve-badge").textContent = pct + "% AAVSO accepted";
+    // Paint immediately (never blank, never "loading"); real browsers get a
+    // draw-on animation, throttled contexts still get a full instant curve.
+    paintCurve($("lightcurve"), pts, { grid: true }, 1900);
+    paintCurve($("minicurve"), pts, { thin: true }, 1500);
+    fillConsole(points, meta.target);
+  }
+
+  // draw the final curve at once (guaranteed), then layer the rAF draw-on
+  // animation when the canvas scrolls into view in a real browser
+  function paintCurve(canvas, pts, opts, dur) {
+    if (!canvas || !pts || !pts.length) return;
+    drawCurve(canvas, pts, 1, opts);                 // instant baseline
+    canvas.classList.add("curve-in");
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce || !("IntersectionObserver" in window)) return;
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) { if (e.isIntersecting) { animateCurve(canvas, pts, opts, dur); io.disconnect(); } });
+    }, { threshold: 0.25 });
+    io.observe(canvas);
   }
 
   // ---- "A night on the network": enhance the baked-in story with live data
@@ -1077,7 +1205,7 @@
             var ln = document.createElementNS(NS, "line");
             ln.setAttribute("x1", ax.toFixed(1)); ln.setAttribute("y1", ay.toFixed(1));
             ln.setAttribute("x2", bx.toFixed(1)); ln.setAttribute("y2", by.toFixed(1));
-            ln.setAttribute("stroke", "rgba(79,139,255,0.14)");
+            ln.setAttribute("stroke", "rgba(37,232,160,0.14)");
             ln.setAttribute("stroke-width", "0.3");
             svg.appendChild(ln);
           }
@@ -1099,11 +1227,71 @@
     });
   }
 
+  /* =========================================================
+     6b. CINEMATIC INTERACTIONS — cursor spotlight, nav scroll
+         state, scroll-progress hairline, magnetic CTAs.
+         All no-ops under reduced-motion / touch.
+     ========================================================= */
+  function cinematics() {
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var coarse = window.matchMedia && window.matchMedia("(hover: none)").matches;
+
+    // ---- nav scroll state + scroll-progress hairline ----
+    var nav = document.querySelector(".nav");
+    var prog = $("scroll-progress");
+    var ticking = false;
+    function onScroll() {
+      if (ticking) return; ticking = true;
+      requestAnimationFrame(function () {
+        var y = window.scrollY || 0;
+        if (nav) nav.classList.toggle("scrolled", y > 24);
+        if (prog) {
+          var h = document.documentElement.scrollHeight - window.innerHeight;
+          prog.style.setProperty("--sp", h > 0 ? Math.min(1, y / h).toFixed(4) : 0);
+        }
+        ticking = false;
+      });
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+
+    if (reduce || coarse) return;
+
+    // ---- cursor spotlight: lerp toward the pointer ----
+    var glow = $("cursor-glow");
+    if (glow) {
+      var tx = -9999, ty = -9999, gx = tx, gy = ty, active = false;
+      window.addEventListener("mousemove", function (e) {
+        tx = e.clientX; ty = e.clientY;
+        if (!active) { active = true; gx = tx; gy = ty; glow.classList.add("on"); }
+      }, { passive: true });
+      window.addEventListener("mouseleave", function () { glow.classList.remove("on"); active = false; });
+      (function trail() {
+        gx += (tx - gx) * 0.12; gy += (ty - gy) * 0.12;
+        glow.style.setProperty("--mx", gx.toFixed(1) + "px");
+        glow.style.setProperty("--my", gy.toFixed(1) + "px");
+        requestAnimationFrame(trail);
+      })();
+    }
+
+    // ---- magnetic CTAs: the primary buttons lean toward the cursor ----
+    Array.prototype.forEach.call(document.querySelectorAll(".hero-cta .btn, .builder-cta .btn-cream"), function (btn) {
+      btn.addEventListener("mousemove", function (e) {
+        var r = btn.getBoundingClientRect();
+        var mx = (e.clientX - r.left - r.width / 2) / r.width;
+        var my = (e.clientY - r.top - r.height / 2) / r.height;
+        btn.style.transform = "translate(" + (mx * 6).toFixed(1) + "px," + (my * 6 - 2).toFixed(1) + "px)";
+      });
+      btn.addEventListener("mouseleave", function () { btn.style.transform = ""; });
+    });
+  }
+
   function boot() {
-    builder(); reveals(); mobileNav(); heroParallax(); decorateSections();
+    builder(); reveals(); mobileNav(); heroParallax(); decorateSections(); cinematics();
 
     // start the hero animation immediately; re-seed with real targets once loaded
     var sky = skyfield(DEFAULT_TARGETS);
+    fillTicker(TICKER_BAKED);     // marquee shows real objects at once, never empty
 
     // ---- network status ----
     getJSON("/api/v1/network/status").then(function (s) {
@@ -1117,13 +1305,14 @@
       }
       var countries = {}; (s.nodes || []).forEach(function (n) { if (n.country) countries[n.country] = 1; });
       var nCountries = Object.keys(countries).length;
+      function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 
-      $("badge-text").textContent = s.nodes_online + " telescopes hunting right now";
+      $("badge-text").textContent = plural(s.nodes_online, "telescope") + " hunting right now";
       countUp($("stat-targets"), s.active_targets, 1400);
       countUp($("stat-subs"), s.aavso_submitted, 1600);
       countUp($("stat-nodes"), s.nodes_online, 1200);
       countUp($("stat-countries"), nCountries, 1200);
-      $("network-heading").textContent = s.nodes_total + " nodes. " + nCountries + " countries. One sky.";
+      $("network-heading").textContent = plural(s.nodes_total, "node") + ". " + plural(nCountries, "country").replace("countrys", "countries") + ". One sky.";
 
       // best node drives the hero gauge
       var best = (s.nodes || []).slice().sort(function (a, b) {
@@ -1134,37 +1323,56 @@
         drawGauge(rel);
         $("gauge-node").textContent = best.node_id + " · reliability";
         $("gauge-num").textContent = rel.toFixed(2);
-        $("gauge-num").style.color = rel >= 0.85 ? "#54D98C" : rel >= 0.65 ? "#4F8BFF" : "#E8A93A";
+        $("gauge-num").style.color = rel >= 0.85 ? "#54D98C" : rel >= 0.65 ? "#25E8A0" : "#E8A93A";
         $("gauge-lbl").textContent = (rel >= 0.85 ? "proven node" : "active node") + " · ×" + mult.toFixed(2);
       }
       placeMap(s.nodes || []);
     });
 
-    // ---- SS Cyg light curve (hero mini + full section) ----
-    getJSON("/api/v1/lightcurves/SS%20Cyg?days=30").then(function (lc) {
-      if (!lc || !lc.points || !lc.points.length) return;
-      var pts = lc.points.map(function (p) { return { m: p.magnitude, ok: !!p.aavso_submitted }; });
-      var nodes = {}, ok = 0;
-      lc.points.forEach(function (p) { nodes[p.node_id] = 1; if (p.aavso_submitted) ok++; });
-      var pct = Math.round(ok / lc.points.length * 100);
-
-      $("curve-target").textContent = "SS Cyg — light curve";
-      $("curve-meta").textContent = "RA 21ʰ42ᵐ42.8ˢ · Dec +43°35′10″ · CV filter · " +
-        Object.keys(nodes).length + " nodes · " + lc.points.length + " points";
-      $("curve-badge").textContent = pct + "% AAVSO accepted";
-
-      animateCurve($("lightcurve"), pts, { grid: true }, 2600);
-      animateCurve($("minicurve"), pts, { thin: true }, 2000);
-      fillConsole(lc.points);
-      nightStory(lc);
+    // ---- light curve: paint instantly with an illustrative run, then
+    //      upgrade to live photometry the moment the network has enough.
+    var baked = bakedLightcurve();
+    paintCurves(baked, {
+      target: "SS Cyg",
+      line: "RA 21ʰ42ᵐ42.8ˢ · Dec +43°35′10″ · CV filter · illustrative run"
     });
 
-    // ---- targets → label the hero reticles with real catalogue objects ----
+    function tryLiveCurve(name) {
+      return getJSON("/api/v1/lightcurves/" + encodeURIComponent(name) + "?days=30").then(function (lc) {
+        if (!lc || !lc.points || lc.points.length < 8) return false;   // keep the baked run if data is sparse
+        var nodes = {};
+        lc.points.forEach(function (p) { nodes[p.node_id] = 1; });
+        paintCurves(lc.points, {
+          target: name,
+          line: Object.keys(nodes).length + " nodes · " + lc.points.length + " live points · last 30 days"
+        });
+        nightStory(lc);
+        return true;
+      });
+    }
+    // prefer the flagship; otherwise pick whichever target actually has the most measurements
+    tryLiveCurve("SS Cyg").then(function (hit) {
+      if (hit) return;
+      getJSON("/api/v1/targets").then(function (t) {
+        if (!t || !t.targets) return;
+        var best = t.targets.slice().sort(function (a, b) {
+          return (b.n_measurements || 0) - (a.n_measurements || 0);
+        })[0];
+        if (best && (best.n_measurements || 0) >= 8) tryLiveCurve(best.name);
+      });
+    });
+
+    // ---- targets → label the hero reticles + feed the ticker with real objects ----
     getJSON("/api/v1/targets").then(function (t) {
       if (!t || !t.targets || !t.targets.length) return;
-      var real = t.targets.filter(function (x) { return typeof x.mag === "number"; })
-        .slice(0, 6).map(function (x) { return { name: x.name, mag: x.mag }; });
+      var withMag = t.targets.filter(function (x) { return typeof x.mag === "number"; });
+      var real = withMag.slice(0, 6).map(function (x) { return { name: x.name, mag: x.mag }; });
       if (real.length && sky) { sky.setTargets(real); }   // re-seed with real targets
+      if (withMag.length >= 6) {
+        fillTicker(withMag.slice(0, 14).map(function (x) {
+          return { name: x.name, type: (x.target_type || "variable"), mag: x.mag };
+        }));
+      }
     });
   }
 

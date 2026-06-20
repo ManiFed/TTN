@@ -292,8 +292,13 @@ def _parse_webobs_response(text: str, http_status: int) -> tuple:
 
     AAVSO success text: "Thanks! N observation(s) were uploaded successfully."
     Rejection indicators: words like 'error', 'reject', 'invalid', 'fail'.
-    Falls back to accepted=1 on HTTP 200 with no recognisable error, so that
-    changes to AAVSO's response wording don't silently misclassify successes.
+
+    A success is only recognised from the explicit "N observation(s)" token.
+    An HTTP 200 with no such token is NOT assumed to be a success: the new
+    apps.aavso.org stack (Auth0 + AWS WAF) returns 200 challenge/login pages
+    that contain none of the error keywords, and counting those as accepted
+    would silently mask blocked submissions.  Unrecognised bodies return
+    (0, 0) so the caller classifies them as an error.
     """
     accepted = 0
     rejected = 0
@@ -307,9 +312,6 @@ def _parse_webobs_response(text: str, http_status: int) -> tuple:
 
     if has_error and accepted == 0:
         rejected = 1
-    elif http_status == 200 and accepted == 0 and not has_error:
-        # HTTP 200, no count parsed, no error keywords — treat as accepted
-        accepted = 1
 
     return accepted, rejected
 

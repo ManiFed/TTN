@@ -10,6 +10,9 @@ Node endpoints (X-Node-Id + X-Api-Key headers, except register):
     GET  /api/v1/plan                    → current ObservationPlan JSON
     POST /api/v1/measurements            body: {"measurement": {...}, "conditions": {...}}
     POST /api/v1/images                  multipart: file=<fits>
+    POST /api/v1/aavso-files             multipart: file=<txt>  (upload AAVSO .txt)
+    GET  /api/v1/aavso-files             → list of uploaded .txt files
+    GET  /api/v1/aavso-files/download/<path>  → download one file
     GET  /api/v1/interrupts              → unexpired interrupts for this node
 
 Public/query endpoints (for dashboard & app):
@@ -228,6 +231,80 @@ def api_images(node):
     return jsonify({"ok": True, "stored": path})
 
 
+# ── AAVSO Extended File Format uploads ────────────────────────────────────────
+# Nodes POST their per-observation .txt files here; anyone can list/download
+# them so the operator can email them to observations@aavso.org.
+
+def _aavso_file_dir() -> "Path":
+    from pathlib import Path
+    d = Path(_config.get("storage", {}).get("aavso_file_dir", "cloud_data/aavso_files"))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@app.route("/api/v1/aavso-files", methods=["POST"])
+@require_node
+def api_aavso_files_upload(node):
+    f = request.files.get("file")
+    if f is None:
+        return jsonify({"error": "no file"}), 400
+    raw = f.read()
+    if len(raw) > 512 * 1024:
+        return jsonify({"error": "file too large"}), 400
+    # Sanitise filename and place under cloud_data/aavso_files/<date>/
+    from pathlib import Path
+    import re as _re
+    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", f.filename or "obs.txt")
+    if not safe_name.endswith(".txt"):
+        safe_name += ".txt"
+    date_dir = _aavso_file_dir() / datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    dest = date_dir / safe_name
+    # Append a counter suffix if a file with that name already exists
+    counter = 1
+    while dest.exists():
+        stem = Path(safe_name).stem
+        dest = date_dir / f"{stem}_{counter}.txt"
+        counter += 1
+    dest.write_bytes(raw)
+    rel = str(dest.relative_to(_aavso_file_dir()))
+    logger.info("AAVSO file stored: %s (node=%s)", rel, node["node_id"])
+    return jsonify({"ok": True, "path": rel})
+
+
+@app.route("/api/v1/aavso-files", methods=["GET"])
+def api_aavso_files_list():
+    from pathlib import Path
+    root = _aavso_file_dir()
+    files = []
+    for txt in sorted(root.rglob("*.txt"), reverse=True):
+        rel = str(txt.relative_to(root))
+        files.append({
+            "path":     rel,
+            "size":     txt.stat().st_size,
+            "modified": datetime.fromtimestamp(txt.stat().st_mtime, tz=timezone.utc).isoformat(),
+            "download": f"/api/v1/aavso-files/download/{rel}",
+        })
+    return jsonify({"files": files, "count": len(files)})
+
+
+@app.route("/api/v1/aavso-files/download/<path:rel>", methods=["GET"])
+def api_aavso_files_download(rel):
+    from pathlib import Path
+    import re as _re
+    # Guard against path traversal
+    if ".." in rel or rel.startswith("/"):
+        return jsonify({"error": "invalid path"}), 400
+    root = _aavso_file_dir()
+    abs_path = (root / rel).resolve()
+    if not str(abs_path).startswith(str(root.resolve())):
+        return jsonify({"error": "invalid path"}), 400
+    if not abs_path.exists():
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(str(root.resolve()), rel, as_attachment=True,
+                               download_name=Path(rel).name)
+
+
 # ── Interrupts ─────────────────────────────────────────────────────────────────
 
 @app.route("/api/v1/interrupts", methods=["GET"])
@@ -287,6 +364,7 @@ def api_interrupts_post():
          json.dumps(body["node_ids"]) if body.get("node_ids") else None,
          _now(),
          (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()),
+        returning_id=True,
     )
     logger.info("Interrupt #%d created: %s (%.4f, %.4f)", iid, name, ra_deg, dec_deg)
     return jsonify({"ok": True, "id": iid})
@@ -493,7 +571,7 @@ def api_me_observations(user):
         return jsonify({"observations": [], "total": 0})
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    placeholders = ",".join("?" * len(node_ids))
+    placeholders = ",".join(["%s"] * len(node_ids))
     rows = db.query(
         f"""SELECT node_id, target_name, bjd, magnitude, uncertainty, filter,
                    quality_flag, aavso_submitted, received_at
@@ -517,7 +595,7 @@ def api_me_stats(user):
             "targets_observed": 0, "clear_nights": 0, "node_count": 0,
         })
 
-    placeholders = ",".join("?" * len(node_ids))
+    placeholders = ",".join(["%s"] * len(node_ids))
     totals = db.query_one(
         f"""SELECT COUNT(*) AS total,
                    SUM(aavso_submitted) AS submitted,
@@ -526,7 +604,7 @@ def api_me_stats(user):
         tuple(node_ids),
     ) or {}
     clear = db.query_one(
-        f"""SELECT SUM(n_observations > 0) AS clear_nights
+        f"""SELECT SUM(CASE WHEN n_observations > 0 THEN 1 ELSE 0 END) AS clear_nights
             FROM night_summaries WHERE node_id IN ({placeholders})""",
         tuple(node_ids),
     ) or {}
@@ -549,7 +627,7 @@ def api_me_nights(user):
     if not node_ids:
         return jsonify({"nights": []})
 
-    placeholders = ",".join("?" * len(node_ids))
+    placeholders = ",".join(["%s"] * len(node_ids))
     rows = db.query(
         f"""SELECT node_id, night, n_targets, n_observations, n_submitted,
                    summary_json, generated_at

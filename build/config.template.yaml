@@ -50,13 +50,23 @@ photometry:
     name: ''
     ra_deg: null
     dec_deg: null
-  astap_path: astap       # must be installed separately; see boundlessskies.org/setup
+  solver: astap           # astap | astrometry (Astrometry.net solve-field)
+  astap_path: astap       # bundled with the Node Agent; no separate install needed
+  solve_field_path: solve-field
+  force_plate_solve: false  # re-solve each stack, discarding the Seestar's onboard WCS
+  # pixel_scale is required for the pointing-WCS fallback when the plate solver
+  # has no catalog yet. Alt-az mounts (e.g. Seestar S50) must set this or the
+  # pipeline will abort with "cannot construct fallback WCS".
+  pixel_scale: 2.4          # arcsec/px — Seestar S50 IMX462 at 250mm focal length
   astap_search_radius: 10
-  aperture_factor: 2.5
+  aperture_factor: 1.5
   annulus_inner: 4.0
   annulus_outer: 6.0
   field_radius: 0.5
+  mag_min: 10.0             # skip stars brighter than this — likely saturated on Seestar frames
   mag_limit: 15.0
+  comparison_catalogs: [aavso, apass, gaia]  # queried in order until enough found
+  comparison_target_count: 8
   min_comparison_stars: 3
   snr_threshold: 20
   max_uncertainty: 0.3

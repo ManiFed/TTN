@@ -108,12 +108,47 @@ _state: dict[str, Any] = {
         "last_result": None,   # most recent measurement dict
         "last_export": None,   # path to most recent exported FITS file
         "running":     False,
+        "queued":      0,      # FITS paths waiting in the photometry queue
     },
     "aavso": {
         "last_submission": None,   # most recent submit() result dict
     },
 }
 _state_lock = threading.Lock()
+
+# Bounded FIFO for photometry jobs.  A single worker thread drains this queue
+# so rapid captures don't race each other and multi-frame sequences don't lose
+# measurements while the previous plate-solve is still running.
+_PHOT_QUEUE_MAX = 50
+_phot_queue: queue.Queue = queue.Queue(maxsize=_PHOT_QUEUE_MAX)
+
+
+def _enqueue_photometry(fits_path: str) -> None:
+    """Submit a FITS file for photometry, dropping it if the queue is full."""
+    try:
+        _phot_queue.put_nowait(fits_path)
+        with _state_lock:
+            _state["photometry"]["queued"] = _phot_queue.qsize()
+    except queue.Full:
+        logger.warning(
+            "Photometry queue full (%d items) — dropping %s",
+            _PHOT_QUEUE_MAX, os.path.basename(fits_path),
+        )
+
+
+def _phot_worker() -> None:
+    """Single daemon thread: process FITS files for photometry one at a time."""
+    while True:
+        try:
+            fits_path = _phot_queue.get(block=True, timeout=1.0)
+        except queue.Empty:
+            continue
+        with _state_lock:
+            _state["photometry"]["queued"] = _phot_queue.qsize()
+        try:
+            _run_photometry_bg(fits_path)
+        finally:
+            _phot_queue.task_done()
 
 # ── Schedule execution state ───────────────────────────────────────────────────
 
@@ -289,8 +324,15 @@ _pier_cam_pause = threading.Event()
 _pier_cam_stop  = threading.Event()
 
 
-def _capture_image() -> Optional[str]:
-    """Download the last camera image, store it globally, and return its b64. Returns None on failure."""
+def _capture_image(fits_path: Optional[str] = None,
+                   exp_dur: Optional[float] = None) -> Optional[str]:
+    """Download the last camera image, store it globally, and return its b64.
+
+    If fits_path is provided, also write a FITS file with the raw (un-stretched)
+    pixel data and whatever header fields the camera exposes.  This is used by
+    the schedule runner so the photometry pipeline has a science-grade file to
+    work with rather than a display-stretched PNG.
+    """
     global _last_image_b64
     if _cam is None:
         return None
@@ -300,20 +342,63 @@ def _capture_image() -> Optional[str]:
 
         logger.info("Downloading image array from camera…")
         raw = _cam.image_array()
-        arr = np.array(raw, dtype=np.float32)
+        arr_raw = np.array(raw, dtype=np.float32)
 
-        if arr.ndim == 3 and arr.shape[0] in (1, 3):
-            arr = np.transpose(arr, (1, 2, 0))
-            if arr.shape[2] == 1:
-                arr = arr[:, :, 0]
+        # ASCOM Alpaca returns (W, H) or (3, W, H); reshape to (H, W) or (H, W, 3)
+        arr_display = arr_raw.copy()
+        if arr_display.ndim == 3 and arr_display.shape[0] in (1, 3):
+            arr_display = np.transpose(arr_display, (1, 2, 0))
+            if arr_display.shape[2] == 1:
+                arr_display = arr_display[:, :, 0]
 
-        mn, mx = float(arr.min()), float(arr.max())
+        # ── Save FITS (raw, un-stretched) ──────────────────────────────────
+        if fits_path:
+            try:
+                from astropy.io import fits as _fits
+                import time as _time
+
+                # Seestar Alpaca returns (H, W) directly — no transposition needed
+                sci = arr_raw if arr_raw.ndim == 2 else arr_raw[0]
+
+                hdr = _fits.Header()
+                hdr["SIMPLE"]   = True
+                hdr["BITPIX"]   = -32
+                hdr["NAXIS"]    = 2
+                hdr["NAXIS1"]   = sci.shape[1]
+                hdr["NAXIS2"]   = sci.shape[0]
+                hdr["DATE-OBS"] = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime())
+                # Pull what we can from the camera device
+                if exp_dur is None:
+                    with _state_lock:
+                        exp_dur = _state["camera"].get("exposure_duration")
+                if exp_dur is not None:
+                    hdr["EXPTIME"] = float(exp_dur)
+                try:
+                    hdr["CCD-TEMP"] = _cam.ccd_temperature()
+                except Exception:
+                    pass
+                # Telescope pointing
+                with _state_lock:
+                    ra  = _state["telescope"].get("ra")
+                    dec = _state["telescope"].get("dec")
+                if ra is not None:
+                    hdr["RA"]  = round(float(ra) * 15.0, 6)   # hours→degrees
+                    hdr["DEC"] = round(float(dec), 6)
+                hdu = _fits.PrimaryHDU(data=sci.astype(np.float32), header=hdr)
+                pathlib.Path(fits_path).parent.mkdir(parents=True, exist_ok=True)
+                hdu.writeto(fits_path, overwrite=True)
+                logger.info("FITS saved: %s  shape=%s", fits_path, sci.shape)
+            except Exception as exc:
+                logger.error("FITS save failed: %s", exc)
+
+        # ── Display PNG (stretched for viewing) ───────────────────────────
+        mn, mx = float(arr_display.min()), float(arr_display.max())
         if mx > mn:
-            arr = (arr - mn) / (mx - mn) * 255.0
-        arr = arr.clip(0, 255).astype(np.uint8)
+            arr_display = (arr_display - mn) / (mx - mn) * 255.0
+        arr_display = arr_display.clip(0, 255).astype(np.uint8)
 
-        mode = "RGB" if arr.ndim == 3 else "L"
-        img = Image.fromarray(arr, mode=mode)
+        mode = "RGB" if arr_display.ndim == 3 else "L"
+        img = Image.fromarray(arr_display, mode=mode)
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -454,13 +539,8 @@ def _on_new_fits(info: dict) -> None:
         phot_enabled = _state["photometry"]["enabled"]
         phot_running = _state["photometry"]["running"]
 
-    if phot_enabled and not phot_running:
-        threading.Thread(
-            target=_run_photometry_bg,
-            args=(path,),
-            daemon=True,
-            name="photometry",
-        ).start()
+    if phot_enabled:
+        _enqueue_photometry(path)
 
 
 def _run_photometry_bg(fits_path: str) -> None:
@@ -491,6 +571,10 @@ def _run_photometry_bg(fits_path: str) -> None:
                     "AAVSO submission: status=%s accepted=%d rejected=%d — %s",
                     sub["status"], sub["accepted"], sub["rejected"], sub["message"],
                 )
+                # Upload the .txt file to the cloud regardless of submission status
+                # so the operator can download and email it to observations@aavso.org
+                if _cloud is not None and sub.get("file_path"):
+                    _cloud.upload_aavso_txt(sub["file_path"])
             if _cloud is not None:
                 _cloud.submit_measurement(
                     result, conditions=_cloud_conditions(), fits_path=fits_path)
@@ -2598,6 +2682,18 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             logger.warning("Schedule: camera not connected — skipping exposure for %s", target)
             return
 
+        # Build FITS path when photometry is enabled so the pipeline has a
+        # science-grade file to work with instead of a display PNG.
+        fits_save_path: Optional[str] = None
+        with _state_lock:
+            phot_enabled = _state["photometry"]["enabled"]
+        if phot_enabled:
+            safe_tgt = "".join(c if c.isalnum() or c in "-_ " else "_" for c in target).strip()
+            fits_save_path = str(
+                pathlib.Path("data") / "fits" /
+                f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"
+            )
+
         try:
             _pier_cam_pause.set()
             _expose_cancel.clear()
@@ -2608,9 +2704,12 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                     duration=exp_dur, light=True,
                     cancel_check=lambda: _sched_cancelled() or _expose_cancel.is_set(),
                 )
-                b64 = _capture_image()
+                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur)
             if b64:
                 _store_history_image(target, exp_dur, binning, frame, exp_count, b64)
+            # Trigger photometry on the freshly saved FITS
+            if fits_save_path and pathlib.Path(fits_save_path).exists():
+                _enqueue_photometry(fits_save_path)
         except ExposureCancelled:
             logger.warning("Schedule: frame %d of %s aborted", frame, target)
             if _sched_cancelled():
@@ -8117,6 +8216,7 @@ def launch(port: int = 5173) -> None:
     if phot_cfg.get("enabled", False):
         with _state_lock:
             _state["photometry"]["enabled"] = True
+        threading.Thread(target=_phot_worker, daemon=True, name="phot-worker").start()
         logger.info("Photometry pipeline enabled (node_id=%s)", phot_cfg.get("node_id", "?"))
 
     cloud_cfg = cfg.get("cloud", {})

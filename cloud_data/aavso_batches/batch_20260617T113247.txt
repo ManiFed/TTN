@@ -1,0 +1,9 @@
+#TYPE=Extended
+#OBSCODE=EGBA
+#SOFTWARE=Boundless Skies Cloud v1
+#DELIM=,
+#DATE=BJD
+#OBSTYPE=CCD
+#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES
+V0455 And,2480622.724985,12.340,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,1.30,na,na,node=e2e-673810|snr=45.0|comp=5|zp_scatter=na|xval=single|quality=good
+V0455 And,2480624.224987,12.550,0.030,CV,NO,DIFF,ENSEMBLE,na,na,na,1.20,na,na,node=cc-673810|snr=60.0|comp=5|zp_scatter=na|xval=single|quality=good

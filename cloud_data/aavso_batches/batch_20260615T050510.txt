@@ -1,0 +1,59 @@
+#TYPE=Extended
+#OBSCODE=EGBA
+#SOFTWARE=Boundless Skies Cloud v1
+#DELIM=,
+#DATE=BJD
+#OBSTYPE=CCD
+#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES
+SS Aur,2461182.028569,12.222,0.070,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_9f1b6e24|snr=70.5|comp=11|zp_scatter=na|xval=consistent|quality=good
+SS Aur,2461185.377115,12.222,0.070,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_9f1b6e24|snr=70.5|comp=11|zp_scatter=na|xval=consistent|quality=good
+SS Aur,2461185.379061,12.222,0.070,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_9f1b6e24|snr=70.5|comp=11|zp_scatter=na|xval=consistent|quality=good
+SS Cyg,2461175.660795,11.784,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.58,na,na,node=node_f4a8c3e2|snr=86.1|comp=6|zp_scatter=0.05|xval=consistent|quality=good
+SS Cyg,2461177.673839,11.965,0.055,CV,NO,DIFF,ENSEMBLE,na,na,na,1.88,na,na,node=node_1c9a4f63|snr=83.5|comp=6|zp_scatter=0.03|xval=consistent|quality=good
+SS Cyg,2461178.444864,9.804,0.051,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_7c4a9e13|snr=59.3|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461179.009341,11.784,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.58,na,na,node=node_f4a8c3e2|snr=86.1|comp=6|zp_scatter=0.05|xval=consistent|quality=good
+SS Cyg,2461179.011287,11.784,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.58,na,na,node=node_f4a8c3e2|snr=86.1|comp=6|zp_scatter=0.05|xval=consistent|quality=good
+SS Cyg,2461179.568843,8.810,0.033,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_3a8f5c20|snr=72.0|comp=7|zp_scatter=0.021|xval=consistent|quality=good
+SS Cyg,2461181.022384,11.965,0.055,CV,NO,DIFF,ENSEMBLE,na,na,na,1.88,na,na,node=node_1c9a4f63|snr=83.5|comp=6|zp_scatter=0.03|xval=consistent|quality=good
+SS Cyg,2461181.024331,11.965,0.055,CV,NO,DIFF,ENSEMBLE,na,na,na,1.88,na,na,node=node_1c9a4f63|snr=83.5|comp=6|zp_scatter=0.03|xval=consistent|quality=good
+SS Cyg,2461181.793410,9.804,0.051,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_7c4a9e13|snr=59.3|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461181.795356,9.804,0.051,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_7c4a9e13|snr=59.3|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461182.917389,8.810,0.033,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_3a8f5c20|snr=72.0|comp=7|zp_scatter=0.021|xval=consistent|quality=good
+SS Cyg,2461182.919335,8.810,0.033,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_3a8f5c20|snr=72.0|comp=7|zp_scatter=0.021|xval=consistent|quality=good
+SS Cyg,2461186.496049,11.754,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.06,na,na,node=node_b1d5a4f0|snr=66.7|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461188.597991,11.756,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.84,na,na,node=node_b1d5a4f0|snr=80.1|comp=8|zp_scatter=0.038|xval=consistent|quality=acceptable
+SS Cyg,2461189.614608,11.812,0.036,CV,NO,DIFF,ENSEMBLE,na,na,na,1.61,na,na,node=node_3a8f5c20|snr=44.6|comp=10|zp_scatter=0.027|xval=consistent|quality=good
+SS Cyg,2461189.844595,11.754,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.06,na,na,node=node_b1d5a4f0|snr=66.7|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461189.846541,11.754,0.025,CV,NO,DIFF,ENSEMBLE,na,na,na,1.06,na,na,node=node_b1d5a4f0|snr=66.7|comp=11|zp_scatter=0.044|xval=consistent|quality=good
+SS Cyg,2461191.946536,11.756,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.84,na,na,node=node_b1d5a4f0|snr=80.1|comp=8|zp_scatter=0.038|xval=consistent|quality=acceptable
+SS Cyg,2461191.948482,11.756,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.84,na,na,node=node_b1d5a4f0|snr=80.1|comp=8|zp_scatter=0.038|xval=consistent|quality=acceptable
+SS Cyg,2461192.528084,9.723,0.030,CV,NO,DIFF,ENSEMBLE,na,na,na,1.34,na,na,node=node_d8e3a7c9|snr=55.4|comp=11|zp_scatter=0.039|xval=consistent|quality=good
+SS Cyg,2461192.963153,11.812,0.036,CV,NO,DIFF,ENSEMBLE,na,na,na,1.61,na,na,node=node_3a8f5c20|snr=44.6|comp=10|zp_scatter=0.027|xval=consistent|quality=good
+SS Cyg,2461192.965099,11.812,0.036,CV,NO,DIFF,ENSEMBLE,na,na,na,1.61,na,na,node=node_3a8f5c20|snr=44.6|comp=10|zp_scatter=0.027|xval=consistent|quality=good
+SS Cyg,2461195.876630,9.723,0.030,CV,NO,DIFF,ENSEMBLE,na,na,na,1.34,na,na,node=node_d8e3a7c9|snr=55.4|comp=11|zp_scatter=0.039|xval=consistent|quality=good
+SS Cyg,2461195.878576,9.723,0.030,CV,NO,DIFF,ENSEMBLE,na,na,na,1.34,na,na,node=node_d8e3a7c9|snr=55.4|comp=11|zp_scatter=0.039|xval=consistent|quality=good
+SS Cyg,2461196.492583,8.833,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_f4a8c3e2|snr=75.1|comp=8|zp_scatter=0.028|xval=consistent|quality=good
+SS Cyg,2461197.553751,9.803,0.042,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_8f3b5d27|snr=73.1|comp=6|zp_scatter=0.043|xval=consistent|quality=good
+SS Cyg,2461198.492778,11.843,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,1.75,na,na,node=node_b1d5a4f0|snr=39.0|comp=12|zp_scatter=0.021|xval=consistent|quality=acceptable
+SS Cyg,2461199.841129,8.833,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_f4a8c3e2|snr=75.1|comp=8|zp_scatter=0.028|xval=consistent|quality=good
+SS Cyg,2461199.843075,8.833,0.037,CV,NO,DIFF,ENSEMBLE,na,na,na,1.74,na,na,node=node_f4a8c3e2|snr=75.1|comp=8|zp_scatter=0.028|xval=consistent|quality=good
+SS Cyg,2461200.902297,9.803,0.042,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_8f3b5d27|snr=73.1|comp=6|zp_scatter=0.043|xval=consistent|quality=good
+SS Cyg,2461200.904243,9.803,0.042,CV,NO,DIFF,ENSEMBLE,na,na,na,1.55,na,na,node=node_8f3b5d27|snr=73.1|comp=6|zp_scatter=0.043|xval=consistent|quality=good
+SS Cyg,2461201.841324,11.843,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,1.75,na,na,node=node_b1d5a4f0|snr=39.0|comp=12|zp_scatter=0.021|xval=consistent|quality=acceptable
+SS Cyg,2461201.843270,11.843,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,1.75,na,na,node=node_b1d5a4f0|snr=39.0|comp=12|zp_scatter=0.021|xval=consistent|quality=acceptable
+SS Cyg,2461206.700762,11.850,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,1.30,na,na,node=node_001|snr=55.0|comp=8|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461189.495428,9.858,0.064,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b4f7c1a8|snr=32.2|comp=8|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461192.843973,9.858,0.064,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b4f7c1a8|snr=32.2|comp=8|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461192.845919,9.858,0.064,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b4f7c1a8|snr=32.2|comp=8|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461192.935037,9.619,0.068,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b1d5a4f0|snr=57.2|comp=11|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461196.283582,9.619,0.068,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b1d5a4f0|snr=57.2|comp=11|zp_scatter=na|xval=consistent|quality=good
+T CrB,2461196.285528,9.619,0.068,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_b1d5a4f0|snr=57.2|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461186.346502,8.790,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=59.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461189.695047,8.790,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=59.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461189.696993,8.790,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=59.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461190.998678,8.056,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=48.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461194.347224,8.056,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=48.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+U Vel,2461194.349170,8.056,0.048,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=48.4|comp=11|zp_scatter=na|xval=consistent|quality=good
+Z UMa,2461199.906849,7.623,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=62.5|comp=6|zp_scatter=na|xval=consistent|quality=good
+Z UMa,2461203.255394,7.623,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=62.5|comp=6|zp_scatter=na|xval=consistent|quality=good
+Z UMa,2461203.257341,7.623,0.040,CV,NO,DIFF,ENSEMBLE,na,na,na,na,na,na,node=node_1c9a4f63|snr=62.5|comp=6|zp_scatter=na|xval=consistent|quality=good

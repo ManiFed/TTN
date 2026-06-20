@@ -10,6 +10,7 @@ Usage:
     python build/build.py --platform windows # cross-build hints only
     python build/build.py --version 1.2.0
     python build/build.py --clean            # remove dist/ and build cache first
+    python build/build.py --download-astap   # only download ASTAP binary, then exit
 
 Output:
     Windows  → dist/BoundlessSkiesNode-Setup.exe  (via NSIS)
@@ -21,6 +22,13 @@ Requirements:
     Windows: NSIS, NSSM binary at build/windows/nssm/nssm.exe
     macOS:   Xcode CLI tools, optionally create-dmg
     Linux:   nothing extra (AppImage optional)
+
+ASTAP bundling:
+    The build automatically downloads the ASTAP plate-solver binary from
+    hnsky.org into build/binaries/ before running PyInstaller.  The binary
+    is then bundled inside the installer so end users don't need to install
+    anything separately.  The star catalog (~6 GB) is NOT bundled — the
+    Node Agent downloads it on first run via the dashboard setup wizard.
 """
 
 import argparse
@@ -29,11 +37,137 @@ import platform
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 BUILD_CACHE = ROOT / "build" / "__pycache__"
+BINARIES_DIR = ROOT / "build" / "binaries"
+
+# ASTAP release URLs — update version tag when a new release ships.
+# macOS DMGs contain ASTAP.app; we extract just the CLI binary.
+# Linux tar.gz contains the astap binary directly.
+# Windows zip contains astap.exe.
+_ASTAP_RELEASES = {
+    "darwin_arm64":  "https://www.hnsky.org/astap/astap_arm.dmg",
+    "darwin_x86_64": "https://www.hnsky.org/astap/astap_mac.dmg",
+    "linux_x86_64":  "https://www.hnsky.org/astap/astap_linux_x86_64.tar.gz",
+    "linux_aarch64": "https://www.hnsky.org/astap/astap_linux_arm64.tar.gz",
+    "windows_amd64": "https://www.hnsky.org/astap/astap_win64.zip",
+}
+
+
+def _platform_key() -> str:
+    """Return a key like 'darwin_arm64' matching _ASTAP_RELEASES."""
+    sys_name = platform.system().lower()          # darwin / linux / windows
+    machine  = platform.machine().lower()         # x86_64 / arm64 / aarch64 / amd64
+    if machine in ("amd64", "x86_64"):
+        machine = "x86_64"
+    elif machine in ("arm64", "aarch64"):
+        machine = "arm64" if sys_name == "darwin" else "aarch64"
+    return f"{sys_name}_{machine}"
+
+
+def download_astap_binaries() -> bool:
+    """Download the ASTAP binary for the current platform into build/binaries/.
+
+    Returns True if the binary is ready (either freshly downloaded or already
+    present from a previous run).  Returns False on failure so the build can
+    continue without ASTAP (falling back to pointing-WCS in the bundle).
+    """
+    BINARIES_DIR.mkdir(parents=True, exist_ok=True)
+    dest = BINARIES_DIR / ("astap.exe" if platform.system() == "Windows" else "astap")
+
+    if dest.exists():
+        print(f"  ASTAP binary already at {dest.relative_to(ROOT)}")
+        return True
+
+    key = _platform_key()
+    url = _ASTAP_RELEASES.get(key)
+    if not url:
+        print(f"  WARNING: No ASTAP release URL for platform '{key}' — skipping")
+        return False
+
+    print(f"\n=== Downloading ASTAP binary ({key}) ===")
+    print(f"  URL: {url}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / Path(url).name
+        print("  Downloading...", end=" ", flush=True)
+        try:
+            urllib.request.urlretrieve(url, archive)
+        except Exception as exc:
+            print(f"FAILED\n  {exc}")
+            return False
+        print("done")
+
+        print("  Extracting binary...", end=" ", flush=True)
+        try:
+            extracted = _extract_astap(archive, Path(tmp))
+        except Exception as exc:
+            print(f"FAILED\n  {exc}")
+            return False
+
+        if extracted is None or not extracted.exists():
+            print("FAILED\n  Could not locate astap binary in archive")
+            return False
+
+        shutil.copy2(extracted, dest)
+        if platform.system() != "Windows":
+            dest.chmod(0o755)
+        print(f"done → {dest.relative_to(ROOT)}")
+
+    return True
+
+
+def _extract_astap(archive: Path, workdir: Path):
+    """Extract the astap binary from a downloaded archive. Returns Path to binary."""
+    name = archive.name.lower()
+
+    if name.endswith(".dmg"):
+        # macOS: mount the DMG, copy out the CLI binary, unmount
+        mountpoint = workdir / "astap_mnt"
+        mountpoint.mkdir()
+        subprocess.run(
+            ["hdiutil", "attach", "-nobrowse", "-quiet",
+             "-mountpoint", str(mountpoint), str(archive)],
+            check=True
+        )
+        try:
+            candidates = list(mountpoint.rglob("astap"))
+            # Prefer the binary inside .app/Contents/MacOS/
+            macos_bins = [c for c in candidates if "Contents/MacOS" in str(c)]
+            binary = (macos_bins or candidates)[0] if candidates else None
+            if binary:
+                dest = workdir / "astap"
+                shutil.copy2(binary, dest)
+                return dest
+        finally:
+            subprocess.run(["hdiutil", "detach", str(mountpoint), "-quiet"],
+                           check=False)
+        return None
+
+    if name.endswith(".tar.gz") or name.endswith(".tgz"):
+        with tarfile.open(archive) as tf:
+            for member in tf.getmembers():
+                if member.name.endswith("/astap") or member.name == "astap":
+                    tf.extract(member, workdir)
+                    return (workdir / member.name).resolve()
+        return None
+
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            for name in zf.namelist():
+                if name.endswith("astap.exe") or name == "astap.exe":
+                    zf.extract(name, workdir)
+                    return (workdir / name).resolve()
+        return None
+
+    return None
 
 
 def run(cmd: list, **kwargs):
@@ -161,14 +295,28 @@ def main():
                         help="Version string to embed (e.g. 1.2.0)")
     parser.add_argument("--bundle-only", action="store_true",
                         help="Only run PyInstaller, skip installer packaging")
+    parser.add_argument("--download-astap", action="store_true",
+                        help="Download the ASTAP binary into build/binaries/ and exit")
+    parser.add_argument("--skip-astap", action="store_true",
+                        help="Skip ASTAP download (use pointing-WCS fallback in bundle)")
     args = parser.parse_args()
 
     os.chdir(ROOT)
+
+    if args.download_astap:
+        ok = download_astap_binaries()
+        sys.exit(0 if ok else 1)
 
     if args.clean:
         clean()
 
     verify_deps()
+
+    # Download ASTAP binary before PyInstaller runs so the spec can bundle it
+    if not args.skip_astap:
+        print("\n=== ASTAP binary ===")
+        if not download_astap_binaries():
+            print("  Continuing without ASTAP — bundle will use pointing-WCS fallback")
 
     plat = args.platform
     if plat == "auto":

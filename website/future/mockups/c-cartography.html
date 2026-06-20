@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>C — Stellar Cartography</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0C0D0F; --ink:#ECEBE3; --ink-2:rgba(236,235,227,.54); --ink-3:rgba(236,235,227,.30);
+    --rule:rgba(236,235,227,.15); --red:#E8402B;
+    --disp:"Big Shoulders Display",sans-serif; --mono:"Space Mono",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:var(--bg);color:var(--ink);font-family:var(--mono);-webkit-font-smoothing:antialiased}
+  body{padding:22px 26px;min-height:100vh;display:flex;flex-direction:column}
+  .lbl{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-2)}
+  .top{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ink);padding-bottom:9px}
+  .top .wm{font-family:var(--disp);font-weight:800;font-size:18px;letter-spacing:.04em;text-transform:uppercase}
+  .top .wm span{color:var(--red)}
+  .top .ix{display:flex;gap:26px}
+  .index{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--rule);padding:7px 0;gap:0}
+  .index div{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+  .index div b{color:var(--ink);font-weight:400}
+  .main{flex:1;display:grid;grid-template-columns:1.02fr 0.98fr;gap:0;align-items:stretch}
+  .lft{padding:30px 30px 20px 0;display:flex;flex-direction:column;border-right:1px solid var(--rule)}
+  .status{display:flex;align-items:center;gap:9px;margin-bottom:20px}
+  .status .sq{width:9px;height:9px;background:var(--red)}
+  h1{font-family:var(--disp);font-weight:800;font-size:clamp(62px,9.4vw,140px);line-height:.84;letter-spacing:0;text-transform:uppercase}
+  h1 .red{color:var(--red)}
+  h1 .thin{font-weight:500}
+  .lede{font-size:13px;line-height:1.7;color:var(--ink-2);max-width:42ch;margin-top:24px}
+  .lede b{color:var(--ink);font-weight:400}
+  .cta{margin-top:auto;display:flex;align-items:stretch;gap:0;padding-top:28px;border-top:1px solid var(--rule)}
+  .cta a{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.04em;text-transform:uppercase;padding:14px 24px;cursor:pointer;text-decoration:none}
+  .cta .go{background:var(--red);color:#fff}
+  .cta .alt{color:var(--ink);border:1px solid var(--rule);border-left:0}
+  .rgt{position:relative;padding:18px 0 0 30px;display:flex;flex-direction:column}
+  .chartcap{display:flex;justify-content:space-between;margin-bottom:8px}
+  .chart{flex:1;border:1px solid var(--rule);position:relative;overflow:hidden;min-height:240px}
+  .chart svg{position:absolute;inset:0;width:100%;height:100%}
+  .legend{display:flex;gap:22px;margin-top:10px}
+  .legend span{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);display:flex;align-items:center;gap:7px}
+  .legend i{width:8px;height:8px;display:inline-block}
+  .foot{display:flex;justify-content:space-between;border-top:1px solid var(--ink);padding-top:9px;margin-top:14px;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="wm">Boundless<span>·</span>Skies</div>
+    <div class="ix">
+      <span class="lbl">N 41°·W 74°</span><span class="lbl">Sheet 07 / Live</span><span class="lbl">Reg. Charity</span>
+    </div>
+  </div>
+  <div class="index">
+    <div>01 — <b>the network</b></div><div>02 — <b>tonight's field</b></div><div>03 — <b>build a node</b></div><div>04 — <b>the science</b></div>
+  </div>
+
+  <div class="main">
+    <div class="lft">
+      <div class="status"><span class="sq"></span><span class="lbl">Live · 7 telescopes hunting · 10 stars on watch</span></div>
+      <h1>Catch<br>what the<br><span class="red">giants</span> <span class="thin">miss.</span></h1>
+      <p class="lede">Put your telescope on the network. While you sleep, it hunts the stars the great observatories never point at — and <b>every catch is logged under your name.</b> Built for people with disabilities; the network doesn't care if you can walk.</p>
+      <div class="cta">
+        <a class="go" href="#">Get on the network →</a>
+        <a class="alt" href="#">Watch a live catch</a>
+      </div>
+    </div>
+
+    <div class="rgt">
+      <div class="chartcap"><span class="lbl">Chart — node coverage, this hour</span><span class="lbl" style="color:var(--ink-3)">RA / DEC</span></div>
+      <div class="chart">
+        <svg viewBox="0 0 420 300" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <g stroke="rgba(236,235,227,.10)" stroke-width="0.5">
+            <line x1="0" y1="60" x2="420" y2="60"/><line x1="0" y1="120" x2="420" y2="120"/><line x1="0" y1="180" x2="420" y2="180"/><line x1="0" y1="240" x2="420" y2="240"/>
+            <line x1="70" y1="0" x2="70" y2="300"/><line x1="140" y1="0" x2="140" y2="300"/><line x1="210" y1="0" x2="210" y2="300"/><line x1="280" y1="0" x2="280" y2="300"/><line x1="350" y1="0" x2="350" y2="300"/>
+          </g>
+          <g stroke="rgba(236,235,227,.30)" stroke-width="0.5" fill="none">
+            <path d="M55 200 L120 150 L180 175 L210 95"/><path d="M210 95 L300 130 L355 90"/><path d="M180 175 L255 220"/>
+          </g>
+          <g fill="#ECEBE3">
+            <rect x="52" y="197" width="5" height="5"/><rect x="117" y="147" width="5" height="5"/><rect x="177" y="172" width="5" height="5"/>
+            <rect x="297" y="127" width="5" height="5"/><rect x="352" y="87" width="5" height="5"/><rect x="252" y="217" width="5" height="5"/>
+          </g>
+          <g fill="#E8402B">
+            <rect x="206" y="91" width="9" height="9"/>
+          </g>
+          <circle cx="210.5" cy="95.5" r="13" fill="none" stroke="#E8402B" stroke-width="0.8"/>
+          <text x="226" y="86" font-family="Space Mono" font-size="8.5" fill="#E8402B" letter-spacing="1">SS CYG · OUTBURST</text>
+          <text x="60" y="214" font-family="Space Mono" font-size="8" fill="rgba(236,235,227,.5)" letter-spacing="1">NODE·1043</text>
+          <text x="360" y="80" font-family="Space Mono" font-size="8" fill="rgba(236,235,227,.5)" letter-spacing="1">NODE·0871</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><i style="background:#ECEBE3"></i>node online</span>
+        <span><i style="background:#E8402B"></i>outburst caught</span>
+        <span><i style="border:1px solid var(--ink-3)"></i>field link</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>Boundless Skies — a planet-wide instrument</span>
+    <span>info@boundlessskies.org · est 2025</span>
+  </div>
+</body>
+</html>

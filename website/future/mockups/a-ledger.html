@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A — Celestial Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#E8E2D2; --ink:#1A1610; --ink-2:rgba(26,22,16,.62); --ink-3:rgba(26,22,16,.40);
+    --rule:rgba(26,22,16,.26); --oxide:#A93C22;
+    --serif:"Instrument Serif",Georgia,serif; --mono:"Space Mono",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:var(--paper);color:var(--ink);font-family:var(--mono);-webkit-font-smoothing:antialiased}
+  body{padding:26px 34px 30px;min-height:100vh;display:flex;flex-direction:column}
+  .mono{font-family:var(--mono)}
+  .lbl{font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-2)}
+  /* masthead */
+  .mast{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1.5px solid var(--ink);padding-bottom:10px}
+  .mast .name{font-size:11px;letter-spacing:.34em;text-transform:uppercase;font-weight:700}
+  .mast .meta{font-size:10px;letter-spacing:.18em;color:var(--ink-2);text-transform:uppercase}
+  .subrule{border-bottom:1px solid var(--rule);height:4px;margin-bottom:30px}
+  /* body grid */
+  .grid{display:grid;grid-template-columns:1.15fr 0.85fr;gap:0;flex:1;border-bottom:1.5px solid var(--ink)}
+  .col-l{padding:14px 40px 30px 0;border-right:1px solid var(--rule);display:flex;flex-direction:column}
+  .col-r{padding:14px 0 30px 40px;display:flex;flex-direction:column}
+  .kicker{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .kicker .dot{width:7px;height:7px;background:var(--oxide);border-radius:50%}
+  h1{font-family:var(--serif);font-weight:400;font-size:clamp(48px,7vw,104px);line-height:.92;letter-spacing:-.01em;margin:6px 0 0}
+  h1 em{font-style:italic;color:var(--oxide)}
+  .lede{font-family:var(--serif);font-size:25px;line-height:1.32;color:var(--ink);max-width:30ch;margin-top:26px}
+  .fine{font-size:12px;line-height:1.7;color:var(--ink-2);max-width:46ch;margin-top:20px}
+  .cta{margin-top:auto;display:flex;align-items:center;gap:22px;padding-top:30px}
+  .btn{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+    border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);padding:14px 22px;cursor:pointer}
+  .btn-2{background:transparent;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--ink);padding-bottom:3px;font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+  /* register table */
+  .plate-cap{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+  .reg{width:100%;border-collapse:collapse;font-size:11.5px}
+  .reg th{text-align:left;font-weight:400;color:var(--ink-3);letter-spacing:.12em;text-transform:uppercase;font-size:9.5px;padding:0 8px 8px 0;border-bottom:1px solid var(--rule)}
+  .reg td{padding:9px 8px 9px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+  .reg .desig{font-weight:700}
+  .reg .caught{color:var(--oxide)}
+  /* engraved plate */
+  .plate{margin-top:26px;border:1px solid var(--ink);position:relative;flex:1;min-height:170px;overflow:hidden}
+  .plate svg{display:block;width:100%;height:100%}
+  .plate .stamp{position:absolute;left:12px;bottom:10px;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-2)}
+  .plate .stamp-r{position:absolute;right:12px;top:10px;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-2)}
+  .colophon{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);padding-top:12px}
+</style>
+</head>
+<body>
+  <div class="mast">
+    <span class="name">Boundless Skies — A Register of the Changing Sky</span>
+    <span class="meta">Vol. I · No. 7 · Est. MMXXV · Registered Charity</span>
+  </div>
+  <div class="subrule"></div>
+
+  <div class="grid">
+    <div class="col-l">
+      <div class="kicker"><span class="dot"></span><span class="lbl">The network is observing — 7 telescopes, this hour</span></div>
+      <h1>Catch what the <em>giants</em> miss.</h1>
+      <p class="lede">Put your telescope on the network. While you sleep, it hunts the stars the great observatories never point at.</p>
+      <p class="fine">No expertise. No staying awake. The work runs itself — and every measurement enters the permanent record under your name, beside a century of observations the professionals actually cite.</p>
+      <div class="cta">
+        <button class="btn">Join the register →</button>
+        <a class="btn-2" href="#">Read a single night</a>
+      </div>
+    </div>
+
+    <div class="col-r">
+      <div class="plate-cap"><span class="lbl">Register of observations — tonight</span><span class="lbl" style="color:var(--ink-3)">UTC</span></div>
+      <table class="reg">
+        <thead><tr><th>Designation</th><th>R.A. / Dec.</th><th>Mag</th><th>Node</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td class="desig">SS Cygni</td><td>21ʰ42ᵐ · +43°35′</td><td>8.41</td><td>1043</td><td class="caught">caught</td></tr>
+          <tr><td class="desig">T Coronæ Bor.</td><td>15ʰ59ᵐ · +25°55′</td><td>9.92</td><td>0871</td><td class="caught">caught</td></tr>
+          <tr><td class="desig">R Leonis</td><td>09ʰ47ᵐ · +11°25′</td><td>6.78</td><td>1290</td><td>rising</td></tr>
+          <tr><td class="desig">RS Ophiuchi</td><td>17ʰ50ᵐ · −06°42′</td><td>11.2</td><td>0612</td><td>watch</td></tr>
+          <tr><td class="desig">χ Cygni</td><td>19ʰ50ᵐ · +32°55′</td><td>7.10</td><td>1043</td><td class="caught">caught</td></tr>
+        </tbody>
+      </table>
+
+      <div class="plate">
+        <span class="stamp-r">Plate I — tonight's field</span>
+        <svg viewBox="0 0 360 200" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+          <g stroke="rgba(26,22,16,.16)" stroke-width="0.5">
+            <line x1="0" y1="50" x2="360" y2="50"/><line x1="0" y1="100" x2="360" y2="100"/><line x1="0" y1="150" x2="360" y2="150"/>
+            <line x1="72" y1="0" x2="72" y2="200"/><line x1="144" y1="0" x2="144" y2="200"/><line x1="216" y1="0" x2="216" y2="200"/><line x1="288" y1="0" x2="288" y2="200"/>
+          </g>
+          <g stroke="rgba(26,22,16,.55)" stroke-width="0.8" fill="none">
+            <path d="M60 140 L120 88 L190 110 L250 60 L300 96"/>
+          </g>
+          <g fill="#1A1610">
+            <circle cx="60" cy="140" r="2.6"/><circle cx="120" cy="88" r="3.4"/><circle cx="190" cy="110" r="2"/>
+            <circle cx="250" cy="60" r="4"/><circle cx="300" cy="96" r="2.4"/>
+            <circle cx="40" cy="40" r="1.4"/><circle cx="160" cy="40" r="1.2"/><circle cx="220" cy="160" r="1.6"/><circle cx="330" cy="150" r="1.3"/><circle cx="95" cy="170" r="1.2"/>
+          </g>
+          <g fill="#A93C22"><circle cx="250" cy="60" r="6.5" fill="none" stroke="#A93C22" stroke-width="0.9"/></g>
+          <text x="258" y="50" font-family="Space Mono" font-size="8" fill="#A93C22" letter-spacing="1">OUTBURST</text>
+        </svg>
+        <span class="stamp">RA 16ʰ → 22ʰ · north field · engraved from live photometry</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="colophon">
+    <span>Folio 07 — the night sky belongs to everyone</span>
+    <span>Boundless Skies · info@boundlessskies.org</span>
+  </div>
+</body>
+</html>

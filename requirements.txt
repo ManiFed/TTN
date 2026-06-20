@@ -1,3 +1,17 @@
+# ── Dev machine: plate solver ─────────────────────────────────────────────────
+# The packaged installer bundles the ASTAP binary automatically (build.py
+# downloads it into build/binaries/ before PyInstaller runs).  End users need
+# nothing extra — star catalog downloads happen inside the app on first run.
+#
+# For local development / running from source, install one of:
+#   Astrometry.net:  brew install astrometry-net   (macOS)
+#                    apt install astrometry.net     (Linux)
+#                    + index files for your pixel scale (series 4100 for 2.4"/px)
+#   ASTAP:           brew install --cask astap      (macOS, if available)
+#                    https://www.hnsky.org/astap.htm + G17 catalog (otherwise)
+# Set solver/solve_field_path/astap_path in config.yaml to match.
+# Without a solver the pipeline uses an approximate pointing-WCS fallback.
+
 requests>=2.31.0
 pyyaml>=6.0
 flask>=3.0

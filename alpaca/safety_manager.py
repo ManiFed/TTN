@@ -330,10 +330,13 @@ class SafetyManager:
                 next_check = now + self._heartbeat_interval
 
             with self._lock:
-                safe = self._safe
+                safe   = self._safe
+                reason = self._reason
 
             if safe and self._park_at_dawn:
                 self._run_dawn_check()
+            elif not safe and self._park_at_dawn and reason.startswith("dawn"):
+                self._run_dawn_clear()
 
             self._stop_event.wait(timeout=5.0)
 
@@ -413,6 +416,43 @@ class SafetyManager:
                 )
         except Exception as exc:
             logger.debug("SafetyManager: dawn check error: %s", exc)
+
+    def _run_dawn_clear(self) -> None:
+        """Auto-clear a dawn latch once the sun drops back below the threshold.
+
+        Only fires when unsafe due to a dawn trigger. If the sun is genuinely
+        still up, _run_dawn_check will re-latch within seconds of clearing.
+
+        After clearing the latch we also run an immediate connection check so
+        the scope is reconnected (if it was disconnected by the emergency park)
+        without waiting up to heartbeat_interval seconds — this matters for
+        automated overnight multi-dusk sessions.
+        """
+        if self._lat == 0.0 and self._lon == 0.0:
+            return
+        try:
+            elev = _solar_elevation(self._lat, self._lon, time.time())
+            if elev <= self._dawn_elevation:
+                cleared = False
+                with self._lock:
+                    if not self._safe and self._reason.startswith("dawn"):
+                        self._safe             = True
+                        self._parked           = False
+                        self._reason           = ""
+                        # Reset so the connection check starts a fresh timeout
+                        # rather than continuing a stale counter from daytime.
+                        self._disconnect_since = None
+                        cleared = True
+                if cleared:
+                    logger.info(
+                        "SafetyManager: dawn latch auto-cleared — sun %.1f° ≤ threshold %.1f°",
+                        elev, self._dawn_elevation,
+                    )
+                    # Reconnect immediately rather than waiting for the next
+                    # scheduled heartbeat poll.
+                    self._run_connection_check()
+        except Exception as exc:
+            logger.debug("SafetyManager: dawn clear check error: %s", exc)
 
     # ── Heartbeat & reconnect ──────────────────────────────────────────────────
 
