@@ -34,6 +34,7 @@ import logging
 import math
 import os
 import subprocess
+import tempfile
 import time
 from typing import Optional
 
@@ -125,9 +126,26 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
                 target_name, ra_deg, dec_deg, os.path.basename(fits_path))
 
     # ── Step 1: Ensure WCS ────────────────────────────────────────────────────
-    astap_path    = phot_cfg.get("astap_path", "astap")
-    search_radius = float(phot_cfg.get("astap_search_radius", 10))
-    if not _ensure_wcs(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+    # An accurate WCS on *this* stack is what makes the comparison-star
+    # cross-match (Step 4) land on the right pixels. The Seestar writes an
+    # onboard WCS, but its alt-az astrometry can be off by tens of arcsec; with
+    # force_plate_solve enabled we re-solve every stack from scratch (preferably
+    # with Astrometry.net's blind solver) to eliminate that error entirely.
+    solver           = str(phot_cfg.get("solver", "astap")).strip().lower()
+    astap_path       = phot_cfg.get("astap_path", "astap")
+    solve_field_path = phot_cfg.get("solve_field_path", "solve-field")
+    search_radius    = float(phot_cfg.get("astap_search_radius", 10))
+    pixel_scale      = phot_cfg.get("pixel_scale")  # arcsec/px, optional scale hint
+    force_solve      = bool(phot_cfg.get("force_plate_solve", False))
+    if not _ensure_wcs(
+        fits_path, ra_deg, dec_deg,
+        solver=solver,
+        astap_path=astap_path,
+        solve_field_path=solve_field_path,
+        search_radius=search_radius,
+        pixel_scale=pixel_scale,
+        force=force_solve,
+    ):
         logger.error("Plate solve failed — cannot proceed without WCS")
         return None
 
@@ -175,25 +193,19 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     # ── Step 4: Get comparison stars ──────────────────────────────────────────
     field_radius_deg = float(phot_cfg.get("field_radius", 0.5))
     mag_limit        = float(phot_cfg.get("mag_limit", 15.0))
+    mag_min          = float(phot_cfg.get("mag_min", 10.0))  # skip bright/saturated stars
 
-    comp_stars = _get_comparison_stars_aavso(
-        target_name, ra_deg, dec_deg, field_radius_deg, mag_limit
+    # Catalog chain, queried in order and accumulated until we have enough.
+    # AAVSO sequence stars are best (curated V mags) but sparse; APASS and ATLAS
+    # reach several magnitudes fainter and stay dense even at high declination
+    # (e.g. Dec ≈ +73°, where Tycho-2/AAVSO coverage thins out), so they fill in
+    # the 10–20 matches that broadband differential photometry wants.
+    catalogs     = phot_cfg.get("comparison_catalogs", ["aavso", "apass", "gaia"])
+    target_count = int(phot_cfg.get("comparison_target_count", 8))
+    comp_stars = _gather_comparison_stars(
+        target_name, ra_deg, dec_deg, field_radius_deg, mag_limit,
+        catalogs, target_count,
     )
-    if len(comp_stars) < 3:
-        logger.info("AAVSO returned %d comp stars — querying Gaia DR3", len(comp_stars))
-        gaia_stars = _get_comparison_stars_gaia(ra_deg, dec_deg, field_radius_deg, mag_limit)
-        # Merge: AAVSO preferred, Gaia fills in
-        existing_coords = [(c["ra_deg"], c["dec_deg"]) for c in comp_stars]
-        for gs in gaia_stars:
-            # Avoid duplicates within 5 arcsec; scale RA threshold by cos(dec)
-            cos_dec = math.cos(math.radians(gs["dec_deg"]))
-            duplicate = any(
-                abs((gs["ra_deg"] - er) * cos_dec) < 0.0014 and abs(gs["dec_deg"] - ed) < 0.0014
-                for er, ed in existing_coords
-            )
-            if not duplicate:
-                comp_stars.append(gs)
-                existing_coords.append((gs["ra_deg"], gs["dec_deg"]))
 
     if not comp_stars:
         logger.error("No comparison stars found in field")
@@ -212,15 +224,53 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
             cs = dict(cs)
             cs["x_px"] = cx
             cs["y_px"] = cy
-            comp_in_field.append(cs)
+            if cs.get("mag_v", 99) >= mag_min:
+                comp_in_field.append(cs)
+            else:
+                logger.debug("Skipping comp star V=%.2f (brighter than mag_min=%.1f — likely saturated)",
+                             cs.get("mag_v", 0), mag_min)
 
     logger.info("Comparison stars in field: %d / %d", len(comp_in_field), len(comp_stars))
     if len(comp_in_field) < 2:
         logger.error("Too few comparison stars in image field (%d)", len(comp_in_field))
         return None
 
+    # ── Step 5a: Centroid-refine positions onto actual source peaks ───────────
+    # The pointing-WCS can be off by tens of pixels; snap each position to the
+    # nearest source centroid before measuring flux, so the aperture is centred.
+    from photutils.centroids import centroid_sources
+    from astropy.stats import sigma_clipped_stats as _scs
+
+    _, bkg_med, _ = _scs(data, sigma=3.0)
+    bkg_sub = data - bkg_med
+    search_r = int(max(15, fwhm_px * 3))
+
+    raw_positions = [(tx, ty)] + [(cs["x_px"], cs["y_px"]) for cs in comp_in_field]
+    refined = []
+    for rx, ry in raw_positions:
+        try:
+            cx_arr, cy_arr = centroid_sources(
+                bkg_sub, rx, ry,
+                box_size=2 * search_r + 1,
+            )
+            cx, cy = float(np.atleast_1d(cx_arr)[0]), float(np.atleast_1d(cy_arr)[0])
+            dx, dy = cx - rx, cy - ry
+            if abs(dx) > search_r or abs(dy) > search_r:
+                raise ValueError("centroid drifted out of search box")
+            refined.append((float(cx), float(cy)))
+        except Exception as exc:
+            logger.debug("Centroid refinement failed for (%.1f, %.1f): %s", rx, ry, exc)
+            refined.append((rx, ry))  # fall back to WCS position
+
+    tx_r, ty_r = refined[0]
+    logger.info(
+        "Target centroid: WCS (%.1f, %.1f) → refined (%.1f, %.1f) Δ=(%.1f, %.1f)",
+        tx, ty, tx_r, ty_r, tx_r - tx, ty_r - ty,
+    )
+    tx, ty = tx_r, ty_r
+
     # ── Step 5: Aperture photometry ───────────────────────────────────────────
-    positions = [(tx, ty)] + [(cs["x_px"], cs["y_px"]) for cs in comp_in_field]
+    positions = refined
     read_noise = float(phot_cfg.get("read_noise", header.get("RDNOISE", 5.0)))
     fluxes, flux_errors = _aperture_photometry(data, positions, ap_r, ann_in, ann_out, read_noise, gain)
     if fluxes is None:
@@ -265,6 +315,18 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
 
     zp_arr  = np.array(zero_points)
     w_arr   = np.array(zp_weights)
+
+    # Sigma-clip the ZP ensemble to remove outliers (saturated / variable comp stars).
+    if len(zp_arr) >= 4:
+        from astropy.stats import sigma_clip as _sigma_clip
+        masked = _sigma_clip(zp_arr, sigma=2.5, maxiters=5)
+        good   = ~masked.mask
+        n_clipped = int(np.sum(masked.mask))
+        if n_clipped:
+            logger.info("ZP sigma-clip: removed %d outlier(s) from %d comp stars", n_clipped, len(zp_arr))
+        zp_arr = zp_arr[good]
+        w_arr  = w_arr[good]
+
     zero_point = float(np.average(zp_arr, weights=w_arr))
     zp_scatter = float(np.std(zp_arr)) if len(zp_arr) > 1 else 0.05
 
@@ -324,24 +386,245 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────
 
 def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
-                astap_path: str, search_radius: float) -> bool:
-    """Return True if the FITS file has a valid WCS, running ASTAP if needed."""
-    # Check for existing WCS (Seestar plate-solves onboard)
-    try:
-        with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
-            hdr = hdul[0].header
-            if "CRVAL1" in hdr and "CRVAL2" in hdr and "CD1_1" in hdr:
-                logger.info("WCS already in FITS header — skipping plate solve")
-                return True
-            # Also accept CDELT-style WCS
-            if "CRVAL1" in hdr and "CRVAL2" in hdr and "CDELT1" in hdr:
-                logger.info("WCS (CDELT) already in FITS header — skipping plate solve")
-                return True
-    except Exception as exc:
-        logger.warning("Could not inspect FITS header: %s", exc)
+                *,
+                solver: str = "astap",
+                astap_path: str = "astap",
+                solve_field_path: str = "solve-field",
+                search_radius: float = 10.0,
+                pixel_scale: Optional[float] = None,
+                force: bool = False) -> bool:
+    """
+    Return True if the FITS file has a valid WCS, plate-solving if needed.
 
-    logger.info("No WCS found — running ASTAP plate solver")
-    return _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
+    solver  – "astrometry" (Astrometry.net's solve-field) or "astap".
+    force   – when True, re-solve even if a WCS is already present. The Seestar
+              writes an onboard WCS whose alt-az astrometry can be off by tens of
+              arcsec; forcing a fresh solve on each stack removes that error
+              before comparison stars are cross-matched to pixels.
+    """
+    # Reuse an existing WCS unless the caller insists on a fresh solve.
+    if not force:
+        try:
+            with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
+                hdr = hdul[0].header
+                if "CRVAL1" in hdr and "CRVAL2" in hdr and "CD1_1" in hdr:
+                    logger.info("WCS already in FITS header — skipping plate solve")
+                    return True
+                # Accept CDELT-style WCS only when it came from a real plate solver,
+                # not from our pointing fallback (which may have used target coords
+                # instead of the mount's actual RA/DEC).  Re-inject when it's ours.
+                if "CRVAL1" in hdr and "CRVAL2" in hdr and "CDELT1" in hdr:
+                    if hdr.get("BS_WCS") == "pointing":
+                        logger.info(
+                            "Existing WCS is pointing-based — re-injecting with "
+                            "telescope RA/DEC from header"
+                        )
+                        # fall through so _inject_pointing_wcs corrects CRVAL
+                    else:
+                        logger.info("WCS (CDELT) already in FITS header — skipping plate solve")
+                        return True
+        except Exception as exc:
+            logger.warning("Could not inspect FITS header: %s", exc)
+    else:
+        logger.info("force_plate_solve enabled — re-solving stack with %s", solver)
+
+    if solver == "astrometry":
+        if _run_astrometry_net(fits_path, ra_deg, dec_deg,
+                               solve_field_path, search_radius, pixel_scale):
+            return True
+        logger.warning("Astrometry.net solve failed — falling back to ASTAP")
+        return _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
+
+    logger.info("Running ASTAP plate solver")
+    if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+        return True
+
+    # No plate solver available — fall back to constructing a simple TAN WCS
+    # from the telescope's reported pointing and the known pixel scale.  This
+    # is less accurate than a proper solve (pointing errors survive), but it
+    # allows the pipeline to proceed when ASTAP is not installed, and the
+    # quality_flag will reflect the resulting zero-point scatter.
+    if pixel_scale:
+        logger.warning(
+            "Plate solve unavailable — constructing approximate WCS from "
+            "telescope pointing (RA=%.4f° Dec=%.4f°, scale=%.3f\"/px).  "
+            "Install ASTAP for accurate astrometry.",
+            ra_deg, dec_deg, pixel_scale,
+        )
+        return _inject_pointing_wcs(fits_path, ra_deg, dec_deg, pixel_scale)
+
+    logger.error(
+        "Plate solve failed and photometry.pixel_scale is not set — "
+        "cannot construct fallback WCS.  Install ASTAP or set pixel_scale."
+    )
+    return False
+
+
+def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
+                         pixel_scale_arcsec: float) -> bool:
+    """Write a simple TAN WCS into the FITS header from telescope pointing.
+
+    Prefers RA/DEC keywords already in the FITS header (telescope mount's
+    reported pointing) over the caller-supplied target coords, because the
+    mount pointing is what physically centres the frame.  Falls back to
+    ra_deg/dec_deg if those keys are absent.
+    """
+    try:
+        with fits.open(fits_path, mode="update", memmap=False,
+                       ignore_missing_simple=True) as hdul:
+            hdr  = hdul[0].header
+            # Use the mount's reported pointing if present; else target coords
+            tel_ra  = float(hdr.get("RA",  ra_deg))
+            tel_dec = float(hdr.get("DEC", dec_deg))
+            h, w = hdul[0].data.shape[-2], hdul[0].data.shape[-1]
+            ps   = pixel_scale_arcsec / 3600.0  # arcsec → degrees
+            hdr["CTYPE1"] = ("RA---TAN", "TAN projection")
+            hdr["CTYPE2"] = ("DEC--TAN", "TAN projection")
+            hdr["CRPIX1"] = (w / 2.0 + 0.5, "Reference pixel X")
+            hdr["CRPIX2"] = (h / 2.0 + 0.5, "Reference pixel Y")
+            hdr["CRVAL1"] = (tel_ra,  "Reference RA (deg)")
+            hdr["CRVAL2"] = (tel_dec, "Reference Dec (deg)")
+            hdr["CDELT1"] = (-ps,  "deg/pixel (RA, East-left)")
+            hdr["CDELT2"] = ( ps,  "deg/pixel (Dec)")
+            hdr["BS_WCS"]  = ("pointing", "WCS source: telescope pointing")
+            hdul.flush()
+        return True
+    except Exception as exc:
+        logger.error("Could not inject pointing WCS: %s", exc)
+        return False
+
+
+def _run_astrometry_net(fits_path: str, ra_deg: float, dec_deg: float,
+                        solve_field_path: str = "solve-field",
+                        search_radius: float = 10.0,
+                        pixel_scale: Optional[float] = None) -> bool:
+    """
+    Plate-solve with Astrometry.net's ``solve-field`` and write the resulting WCS
+    (including SIP distortion terms) back into ``fits_path`` in place.
+
+    ``solve-field`` writes its products to a scratch directory; we read the
+    ``<base>.wcs`` header it produces and merge those keywords into the original
+    file, so downstream ``WCS(header)`` construction is unchanged.
+    """
+    import shutil
+
+    base    = os.path.splitext(os.path.basename(fits_path))[0]
+    workdir = tempfile.mkdtemp(prefix="bs_anet_")
+    cmd = [
+        solve_field_path, fits_path,
+        "--overwrite", "--no-plots", "--no-verify",
+        "--ra",  f"{ra_deg:.6f}",
+        "--dec", f"{dec_deg:.6f}",
+        "--radius", f"{float(search_radius):.3f}",
+        "--dir", workdir,
+        # We only want the .wcs header back; suppress the other heavy products.
+        "--new-fits", "none",
+        "--corr", "none", "--rdls", "none", "--match", "none",
+        "--solved", "none", "--index-xyls", "none",
+        "--cpulimit", "120",
+    ]
+    if pixel_scale:
+        ps = float(pixel_scale)
+        cmd += [
+            "--scale-units", "arcsecperpix",
+            "--scale-low",  f"{ps * 0.8:.4f}",
+            "--scale-high", f"{ps * 1.2:.4f}",
+        ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        wcs_path = os.path.join(workdir, base + ".wcs")
+        if result.returncode == 0 and os.path.exists(wcs_path):
+            if _inject_wcs(fits_path, wcs_path):
+                logger.info("Astrometry.net plate solve succeeded")
+                return True
+            logger.error("Astrometry.net solved but WCS could not be written back")
+            return False
+        logger.error("Astrometry.net failed (rc=%d): %s",
+                     result.returncode, (result.stderr or result.stdout)[:300])
+        return False
+    except FileNotFoundError:
+        logger.error(
+            "solve-field not found at '%s'. Install Astrometry.net "
+            "(https://astrometry.net) with index files for your field scale and "
+            "set photometry.solve_field_path in config.yaml",
+            solve_field_path,
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("Astrometry.net timed out after 180 s")
+        return False
+    except Exception as exc:
+        logger.error("Astrometry.net error: %s", exc)
+        return False
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+# WCS keyword roots written by plate solvers (and any stale Seestar WCS we want
+# to clear before injecting a fresh solution). SIP distortion uses A_/B_/AP_/BP_.
+_WCS_SCALAR_KEYS = (
+    "WCSAXES", "EQUINOX", "EPOCH", "LONPOLE", "LATPOLE",
+    "RADESYS", "RADECSYS", "A_ORDER", "B_ORDER", "AP_ORDER", "BP_ORDER",
+)
+_WCS_PREFIXES = (
+    "CRVAL", "CRPIX", "CDELT", "CTYPE", "CUNIT", "CROTA",
+    "CD1_", "CD2_", "PC1_", "PC2_", "A_", "B_", "AP_", "BP_",
+)
+# Structural / bookkeeping cards in a .wcs file that must NOT be copied across.
+_WCS_SKIP_KEYS = {
+    "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND", "END",
+    "COMMENT", "HISTORY", "DATE", "IMAGEW", "IMAGEH", "BSCALE", "BZERO",
+}
+
+
+def _is_wcs_key(key: str) -> bool:
+    return key in _WCS_SCALAR_KEYS or any(key.startswith(p) for p in _WCS_PREFIXES)
+
+
+def _strip_wcs(header) -> None:
+    """Remove existing WCS keywords from a FITS header (in place)."""
+    for key in [k for k in list(header.keys()) if k and _is_wcs_key(k)]:
+        try:
+            del header[key]
+        except (KeyError, ValueError):
+            pass
+
+
+def _inject_wcs(fits_path: str, wcs_path: str) -> bool:
+    """
+    Copy WCS keywords from a solve-field ``.wcs`` header into ``fits_path``,
+    replacing any pre-existing WCS so old and new solutions can't mix.
+    """
+    try:
+        wcs_hdr = fits.Header.fromfile(
+            wcs_path, sep="", endcard=True, padding=True,
+        )
+    except Exception:
+        # .wcs is a normal (header-only) FITS file; fall back to a full open.
+        try:
+            with fits.open(wcs_path) as whdul:
+                wcs_hdr = whdul[0].header
+        except Exception as exc:
+            logger.error("Cannot read solved WCS header %s: %s", wcs_path, exc)
+            return False
+
+    try:
+        with fits.open(fits_path, mode="update", memmap=False,
+                       ignore_missing_simple=True) as hdul:
+            hdr = hdul[0].header
+            _strip_wcs(hdr)
+            for card in wcs_hdr.cards:
+                key = card.keyword
+                if not key or key in _WCS_SKIP_KEYS:
+                    continue
+                if _is_wcs_key(key):
+                    hdr[key] = (card.value, card.comment)
+            hdul.flush()
+        return True
+    except Exception as exc:
+        logger.error("Cannot write WCS into %s: %s", fits_path, exc)
+        return False
 
 
 def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
@@ -461,6 +744,77 @@ def _estimate_fwhm(data: np.ndarray) -> float:
 
 # ── Step 4 helpers: comparison star queries ───────────────────────────────────
 
+def _gather_comparison_stars(
+    target_name: str,
+    ra_deg: float,
+    dec_deg: float,
+    field_radius_deg: float,
+    mag_limit: float,
+    catalogs,
+    target_count: int,
+) -> list:
+    """
+    Query the configured catalogs in order, accumulating de-duplicated
+    comparison stars until ``target_count`` is reached or the list is exhausted.
+
+    Recognised catalog names: "aavso", "apass", "atlas", "gaia". Unknown names
+    are skipped with a warning. Order matters — earlier catalogs win on
+    duplicates, so list curated/most-reliable photometry first.
+    """
+    comp_stars: list = []
+    for raw in catalogs:
+        cat = str(raw).strip().lower()
+        if len(comp_stars) >= target_count:
+            break
+        try:
+            if cat == "aavso":
+                new = _get_comparison_stars_aavso(
+                    target_name, ra_deg, dec_deg, field_radius_deg, mag_limit)
+            elif cat == "apass":
+                new = _get_comparison_stars_apass(
+                    ra_deg, dec_deg, field_radius_deg, mag_limit)
+            elif cat == "atlas":
+                new = _get_comparison_stars_atlas(
+                    ra_deg, dec_deg, field_radius_deg, mag_limit)
+            elif cat == "gaia":
+                new = _get_comparison_stars_gaia(
+                    ra_deg, dec_deg, field_radius_deg, mag_limit)
+            else:
+                logger.warning("Unknown comparison catalog '%s' — skipping", cat)
+                continue
+        except Exception as exc:
+            logger.warning("Comparison catalog '%s' query failed: %s", cat, exc)
+            continue
+
+        before = len(comp_stars)
+        comp_stars = _merge_comp_stars(comp_stars, new)
+        logger.info("Catalog %s: +%d unique (%d total)",
+                    cat, len(comp_stars) - before, len(comp_stars))
+
+    return comp_stars
+
+
+def _merge_comp_stars(existing: list, new: list, sep_arcsec: float = 5.0) -> list:
+    """
+    Append ``new`` comparison stars to ``existing``, dropping any within
+    ``sep_arcsec`` of one already kept. The RA threshold is scaled by cos(dec)
+    so the match radius stays circular on the sky at high declination.
+    """
+    out = list(existing)
+    coords = [(c["ra_deg"], c["dec_deg"]) for c in out]
+    thr_deg = sep_arcsec / 3600.0
+    for s in new:
+        cos_dec = math.cos(math.radians(s["dec_deg"]))
+        duplicate = any(
+            abs((s["ra_deg"] - er) * cos_dec) < thr_deg and abs(s["dec_deg"] - ed) < thr_deg
+            for er, ed in coords
+        )
+        if not duplicate:
+            out.append(s)
+            coords.append((s["ra_deg"], s["dec_deg"]))
+    return out
+
+
 def _get_comparison_stars_aavso(
     target_name: str,
     ra_deg: float,
@@ -479,14 +833,11 @@ def _get_comparison_stars_aavso(
         return []
 
     fov_arcmin = int(field_radius_deg * 2 * 60)
-    params = {
-        "star":     target_name,
-        "ra":       ra_deg,
-        "dec":      dec_deg,
-        "fov":      fov_arcmin,
-        "maglimit": mag_limit,
-        "format":   "json",
-    }
+    # VSP requires star name OR ra/dec, not both.
+    if target_name:
+        params = {"star": target_name, "fov": fov_arcmin, "maglimit": mag_limit, "format": "json"}
+    else:
+        params = {"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin, "maglimit": mag_limit, "format": "json"}
     url = "https://www.aavso.org/apps/vsp/api/chart/"
     try:
         resp = requests.get(url, params=params, timeout=15)
@@ -498,23 +849,42 @@ def _get_comparison_stars_aavso(
         logger.warning("AAVSO VSP request failed: %s", exc)
         return []
 
+    def _sexa_to_deg(s: str, is_ra: bool) -> float:
+        """Convert sexagesimal 'HH:MM:SS.ss' or 'DD:MM:SS.s' to decimal degrees."""
+        parts = str(s).split(":")
+        d = abs(float(parts[0]))
+        m = float(parts[1]) if len(parts) > 1 else 0.0
+        sec = float(parts[2]) if len(parts) > 2 else 0.0
+        val = d + m / 60.0 + sec / 3600.0
+        if is_ra:
+            val *= 15.0  # hours → degrees
+        elif str(s).strip().startswith("-"):
+            val = -val
+        return val
+
     comp_stars = []
     for star in payload.get("photometry", []):
+        try:
+            ra_s  = _sexa_to_deg(star["ra"],  is_ra=True)
+            dec_s = _sexa_to_deg(star["dec"], is_ra=False)
+        except (KeyError, ValueError, TypeError):
+            continue
         bands = {b["band"]: b for b in star.get("bands", [])}
         # Prefer V, fall back to B, then R
         for band_key in ("V", "B", "R"):
             if band_key in bands:
                 try:
-                    mag = float(bands[band_key]["magnitude"])
-                    mag_err = float(bands[band_key].get("uncertainty") or 0.05)
+                    # VSP API uses 'mag' and 'error' (not 'magnitude'/'uncertainty')
+                    mag = float(bands[band_key].get("mag") or bands[band_key].get("magnitude"))
+                    mag_err = float(bands[band_key].get("error") or bands[band_key].get("uncertainty") or 0.05)
                 except (TypeError, ValueError):
                     continue
                 if mag > mag_limit:
                     break
                 comp_stars.append({
                     "auid":    star.get("auid", ""),
-                    "ra_deg":  float(star["ra"]),
-                    "dec_deg": float(star["dec"]),
+                    "ra_deg":  ra_s,
+                    "dec_deg": dec_s,
                     "mag_v":   mag,
                     "mag_err": mag_err,
                     "source":  f"aavso_{band_key}",
@@ -608,6 +978,150 @@ def _get_comparison_stars_gaia(
     return comp_stars
 
 
+def _get_comparison_stars_apass(
+    ra_deg: float,
+    dec_deg: float,
+    field_radius_deg: float,
+    mag_limit: float,
+    n_max: int = 25,
+) -> list:
+    """
+    Query APASS DR9 (Vizier II/336/apass9) for comparison stars.
+
+    APASS reports Johnson V directly (to V≈17) over the whole sky, so it needs no
+    colour transformation and stays dense at high declination where Tycho-2 and
+    AAVSO sequences run out — exactly the regime where Gaia's G→V conversion adds
+    avoidable scatter.
+    """
+    try:
+        from astroquery.vizier import Vizier
+        import astropy.units as u
+    except ImportError:
+        logger.warning("astroquery not installed — cannot query APASS")
+        return []
+
+    cols = ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag", "e_Bmag"]
+    viz = Vizier(columns=cols,
+                 column_filters={"Vmag": f">8.0 && <{mag_limit}"})
+    viz.ROW_LIMIT = n_max * 3
+    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+
+    try:
+        result = viz.query_region(coord, radius=field_radius_deg * u.deg,
+                                  catalog="II/336/apass9")
+    except Exception as exc:
+        logger.warning("APASS Vizier query failed: %s", exc)
+        return []
+
+    if not result or len(result) == 0:
+        return []
+    table = result[0]
+
+    comp_stars = []
+    for row in table:
+        try:
+            if _masked(row, "Vmag"):
+                continue
+            v_mag = float(row["Vmag"])
+            if not (8.0 < v_mag < mag_limit):
+                continue
+            mag_err = 0.05 if _masked(row, "e_Vmag") else float(row["e_Vmag"])
+            comp_stars.append({
+                "auid":    "",
+                "ra_deg":  float(row["RAJ2000"]),
+                "dec_deg": float(row["DEJ2000"]),
+                "mag_v":   v_mag,
+                "mag_err": max(mag_err, 0.01),
+                "source":  "apass_dr9",
+            })
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    comp_stars.sort(key=lambda c: c["mag_v"])
+    comp_stars = comp_stars[:n_max]
+    logger.info("APASS DR9: %d comparison stars", len(comp_stars))
+    return comp_stars
+
+
+def _get_comparison_stars_atlas(
+    ra_deg: float,
+    dec_deg: float,
+    field_radius_deg: float,
+    mag_limit: float,
+    n_max: int = 25,
+) -> list:
+    """
+    Query ATLAS-REFCAT2 (Vizier J/ApJ/867/105/refcat2) for comparison stars.
+
+    REFCAT2 is an all-sky catalog complete to m≈19 in Sloan g,r,i — far deeper
+    than APASS. It reports Sloan magnitudes, so V is synthesised from g,r with
+    the Lupton (2005) transformation V = g − 0.5784·(g−r) − 0.0038 (σ≈0.02 mag),
+    making it the best fallback for sparse, high-declination fields.
+    """
+    try:
+        from astroquery.vizier import Vizier
+        import astropy.units as u
+    except ImportError:
+        logger.warning("astroquery not installed — cannot query ATLAS-REFCAT2")
+        return []
+
+    cols = ["RA_ICRS", "DE_ICRS", "gmag", "rmag"]
+    viz = Vizier(columns=cols, column_filters={"gmag": f">8.0 && <{mag_limit + 1.0}"})
+    viz.ROW_LIMIT = n_max * 4
+    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+
+    try:
+        result = viz.query_region(coord, radius=field_radius_deg * u.deg,
+                                  catalog="J/ApJ/867/105/refcat2")
+    except Exception as exc:
+        logger.warning("ATLAS-REFCAT2 Vizier query failed: %s", exc)
+        return []
+
+    if not result or len(result) == 0:
+        return []
+    table = result[0]
+
+    comp_stars = []
+    for row in table:
+        try:
+            if _masked(row, "gmag") or _masked(row, "rmag"):
+                continue
+            g = float(row["gmag"])
+            r = float(row["rmag"])
+            v_mag = g - 0.5784 * (g - r) - 0.0038   # Lupton 2005 g,r → Johnson V
+            if not (8.0 < v_mag < mag_limit):
+                continue
+            comp_stars.append({
+                "auid":    "",
+                "ra_deg":  float(row["RA_ICRS"]),
+                "dec_deg": float(row["DE_ICRS"]),
+                "mag_v":   v_mag,
+                "mag_err": 0.05,   # transformation residual + catalog photometry
+                "source":  "atlas_refcat2",
+            })
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    comp_stars.sort(key=lambda c: c["mag_v"])
+    comp_stars = comp_stars[:n_max]
+    logger.info("ATLAS-REFCAT2: %d comparison stars", len(comp_stars))
+    return comp_stars
+
+
+def _masked(row, col: str) -> bool:
+    """True if a Vizier table cell is missing/masked (so it should be skipped)."""
+    try:
+        value = row[col]
+    except (KeyError, IndexError):
+        return True
+    if value is None or value is np.ma.masked:
+        return True
+    try:
+        return bool(np.ma.is_masked(value)) or bool(np.isnan(float(value)))
+    except (TypeError, ValueError):
+        return False
+
+
 # ── Step 5 helpers: aperture photometry ───────────────────────────────────────
 
 def _aperture_photometry(
@@ -679,12 +1193,20 @@ def _compute_bjd(header: dict) -> float:
     if not date_obs:
         logger.debug("DATE-OBS missing — using current time for BJD")
         return float(Time.now().tcb.jd)
-    try:
-        t = Time(date_obs, format="isot", scale="utc")
-        return float(t.tcb.jd)
-    except Exception as exc:
-        logger.warning("Could not parse DATE-OBS '%s': %s", date_obs, exc)
-        return float(Time.now().tcb.jd)
+    # Try multiple formats: "fits" handles timezone offsets, "isot" handles
+    # the common ISO-8601 without timezone, "iso" catches the rest.
+    for fmt in ("fits", "isot", "iso"):
+        try:
+            # Strip timezone suffix for isot/iso (astropy expects bare UTC)
+            s = date_obs
+            if fmt in ("isot", "iso") and (s.endswith("Z") or "+" in s[10:] or s[19:].startswith("-")):
+                s = s[:19]
+            t = Time(s, format=fmt, scale="utc")
+            return float(t.tcb.jd)
+        except Exception:
+            continue
+    logger.warning("Could not parse DATE-OBS '%s' — using current time", date_obs)
+    return float(Time.now().tcb.jd)
 
 
 # ── Helper: airmass ────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ server:
   admin_key: '${CLOUD_ADMIN_KEY}'  # local test admin key
 
 database:
-  url: ''  # falls back to DATABASE_URL env var; e.g. postgresql://user:pass@localhost/boundless
+  url: 'postgresql://boundless@/boundless?host=/tmp'  # local Homebrew PostgreSQL
 
 light_pollution:
   api_key: ''              # lightpollutionmap.info key; blank = default 20.0 mpsas

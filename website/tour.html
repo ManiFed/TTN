@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Boundless Skies — The Founding Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#F2F5FF; --ink-2:rgba(242,245,255,.66); --ink-3:rgba(242,245,255,.40);
+    --accent:#8FD9FF; --warm:#FFC07A;
+    --font:"Geist", system-ui, -apple-system, sans-serif;
+    --glass-bd:rgba(215,228,255,.24);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:#02030A; color:var(--ink); font-family:var(--font); -webkit-font-smoothing:antialiased; overflow-x:hidden; letter-spacing:-0.01em}
+
+  #sky{position:fixed; inset:0; z-index:0; pointer-events:none;}
+  #sky .aladin-container, #sky canvas{pointer-events:none !important;}
+  #sky .aladin-logo-container, #sky .aladin-logo, #sky .aladin-reticle,
+  #sky .aladin-box, #sky .aladin-widgets-toolbar, #sky .aladin-vertical-list,
+  #sky .aladin-horizontal-list, #sky .aladin-location, #sky .aladin-fov,
+  #sky .aladin-popup-container, #sky .aladin-color-picker, #sky .aladin-view-label,
+  #sky .aladin-btn, #sky .aladin-tooltip-container, #sky .aladin-cooFrame{ display:none !important; }
+
+  /* the ground we lift off from */
+  #earth{position:fixed; inset:0; width:100%; height:100%; z-index:2; pointer-events:none; will-change:transform,opacity;}
+  #earthcap{position:fixed; left:34px; bottom:30px; z-index:2; pointer-events:none;
+    font-size:12px; letter-spacing:.04em; color:var(--ink-2); display:flex; align-items:center; gap:9px}
+  #earthcap .l{width:7px;height:7px;border-radius:50%;background:#5FE39B;box-shadow:0 0 10px #5FE39B}
+
+  .scrim{position:fixed; inset:0; z-index:1; pointer-events:none;
+    background:
+      radial-gradient(130% 100% at 50% 0%, rgba(2,3,10,.22), transparent 45%),
+      radial-gradient(150% 130% at 50% 50%, transparent 42%, rgba(2,3,10,.62) 100%);}
+
+  main{position:relative; z-index:3;}
+  .wrap{max-width:1180px; margin:0 auto; padding:0 32px; width:100%}
+
+  .brandmark{position:fixed; top:26px; left:34px; z-index:30; display:flex; align-items:center; gap:10px;
+    font-weight:500; font-size:15px; letter-spacing:-.02em; color:var(--ink); text-shadow:0 1px 20px rgba(0,0,8,.85)}
+  .brandmark .gm{width:9px; height:9px; border-radius:50%; background:var(--accent); box-shadow:0 0 12px var(--accent)}
+  .seatflag{position:fixed; top:26px; right:34px; z-index:30; font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); text-shadow:0 1px 20px rgba(0,0,8,.85)}
+  .seatflag b{color:var(--ink); font-weight:500}
+  .clock{position:fixed; right:34px; bottom:30px; z-index:30; font-size:12px; letter-spacing:.06em; color:var(--ink-3); font-variant-numeric:tabular-nums}
+  .progress{position:fixed; left:34px; bottom:30px; z-index:30; display:none; flex-direction:column; gap:9px}
+  .progress.show{display:flex}
+  .progress .pdot{width:7px; height:7px; border-radius:50%; background:rgba(242,245,255,.22); transition:all .4s}
+  .progress .pdot.on{background:var(--accent); box-shadow:0 0 10px var(--accent)}
+
+  /* ---------- liquid glass — clearer + glossier ---------- */
+  .glass{position:relative; background:rgba(160,185,255,.045);
+    backdrop-filter:blur(14px) saturate(190%) brightness(1.08); -webkit-backdrop-filter:blur(14px) saturate(190%) brightness(1.08);
+    border:1px solid var(--glass-bd); border-radius:26px;
+    box-shadow:0 28px 80px rgba(0,0,10,.40), inset 0 1.5px 0 rgba(255,255,255,.52),
+      inset 0 -10px 26px rgba(120,160,255,.08), inset 0 0 0 1px rgba(255,255,255,.04);}
+  .glass::before{content:""; position:absolute; left:0; right:0; top:0; height:50%; border-radius:26px 26px 0 0;
+    background:linear-gradient(180deg, rgba(255,255,255,.14), transparent); pointer-events:none}
+  .glass::after{content:""; position:absolute; top:-28%; right:-8%; width:62%; height:78%; pointer-events:none;
+    background:radial-gradient(closest-side, rgba(255,255,255,.12), transparent 72%);}
+
+  .kicker{font-size:12px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent)}
+  .btn{display:inline-flex; align-items:center; gap:9px; font-family:var(--font); font-weight:500; font-size:15px;
+    padding:15px 26px; border-radius:100px; cursor:pointer; border:1px solid transparent; text-decoration:none;
+    transition:transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s, background .22s}
+  .btn-p{color:#04121c; background:#CFefff; box-shadow:0 8px 30px rgba(143,217,255,.30), inset 0 1px 0 rgba(255,255,255,.7)}
+  .btn-p:hover{transform:translateY(-2px); background:#e6f7ff; box-shadow:0 14px 44px rgba(143,217,255,.45)}
+  .btn-g{color:var(--ink); background:rgba(170,195,245,.10); border-color:var(--glass-bd); backdrop-filter:blur(14px)}
+  .btn-g:hover{transform:translateY(-2px); background:rgba(170,195,245,.18)}
+
+  h1,h2{font-weight:600; letter-spacing:-.035em; line-height:1.0}
+
+  .stop{position:relative; min-height:185vh}
+  .steps{list-style:none; margin-top:22px; display:flex; flex-direction:column; gap:16px}
+  .steps li{display:flex; gap:14px; align-items:flex-start}
+  .steps .nm{flex:0 0 30px; height:30px; border-radius:50%; border:1px solid var(--glass-bd);
+    display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; color:var(--accent); background:rgba(143,217,255,.09)}
+  .steps .tx{font-size:15.5px; line-height:1.5; color:var(--ink-2); padding-top:4px}
+  .steps .tx b{color:var(--ink); font-weight:500}
+  .cost{margin-top:22px; font-size:13.5px; color:var(--ink-3)}
+  .cost b{color:var(--accent); font-weight:500}
+  .stop .sticky{position:sticky; top:0; height:100vh; display:flex; align-items:center}
+  .stop .wrap.split{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,470px); gap:48px; align-items:center}
+  .stop.center .sticky{justify-content:center}
+  .stop.center .wrap{max-width:780px; text-align:center; display:flex; flex-direction:column; align-items:center}
+
+  .hero h1{font-size:clamp(46px,6.6vw,86px); line-height:.96; letter-spacing:-.045em; font-weight:600}
+  .hero h1 .a{color:var(--accent)}
+  .hero .sub{margin-top:26px; font-size:19px; line-height:1.55; color:var(--ink-2); max-width:44ch; font-weight:400}
+  .hero .sub em{color:var(--ink); font-style:normal; font-weight:500}
+  .cta-row{display:flex; gap:14px; margin-top:36px; flex-wrap:wrap}
+
+  .seat{padding:24px 26px}
+  .seat .top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px}
+  .seat .lab{font-size:11.5px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3)}
+  .seat .big{display:flex; align-items:baseline; justify-content:space-between; margin-top:8px}
+  .seat .n{font-size:40px; font-weight:600; letter-spacing:-.03em}
+  .seat .n small{font-size:15px; color:var(--ink-3); font-weight:450; margin-left:6px}
+  .seat .bar{height:5px; border-radius:100px; background:rgba(190,210,255,.14); margin:18px 0 12px; overflow:hidden}
+  .seat .fill{height:100%; width:7%; border-radius:100px; background:var(--accent); box-shadow:0 0 14px rgba(143,217,255,.7)}
+  .seat .you{font-size:13.5px; color:var(--ink-2); line-height:1.5}
+  .seat .you b{color:var(--accent); font-weight:500}
+
+  .panel{padding:40px 40px; max-width:520px}
+  .panel .top-row{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px}
+  .panel .time{font-size:13px; font-weight:500; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:.02em}
+  .panel h2{font-size:clamp(28px,3.4vw,42px); letter-spacing:-.035em}
+  .panel p{margin-top:18px; font-size:16.5px; line-height:1.6; color:var(--ink-2); font-weight:400}
+  .panel p.lead{color:var(--ink)}
+  .readout{margin-top:24px; display:flex; align-items:center; gap:11px; font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); font-weight:450}
+  .readout .live{width:7px;height:7px;border-radius:50%;background:var(--warm);box-shadow:0 0 10px var(--warm)}
+  .readout .live.cy{background:var(--accent);box-shadow:0 0 10px var(--accent)}
+
+  .cue{position:absolute; bottom:32px; left:50%; transform:translateX(-50%);
+    font-size:11px; font-weight:500; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-3);
+    display:flex; flex-direction:column; align-items:center; gap:10px}
+  .cue .ln{width:1px; height:36px; background:linear-gradient(var(--accent), transparent)}
+
+  @media (max-width:860px){
+    .seatflag, .clock, .progress, .cue{ display:none !important; }
+    .brandmark{ top:18px; left:20px; font-size:14px; }
+    .wrap{ padding:0 20px; }
+    /* sky panels: full-width glass, sitting low so the real sky shows above them */
+    .stop{ min-height:128svh; }
+    .stop .sticky{ height:100svh; align-items:flex-end; padding-bottom:34px; }
+    .stop.center .sticky{ align-items:center; padding-bottom:0; }
+    .stop .wrap.split{ display:block; }
+    .stop .wrap.split > div:empty{ display:none; }
+    .glass{ backdrop-filter:blur(13px) saturate(170%) brightness(1.06); -webkit-backdrop-filter:blur(13px) saturate(170%) brightness(1.06); }
+    .panel{ max-width:none; width:100%; padding:24px 22px; border-radius:22px; }
+    .panel h2{ font-size:clamp(24px,6.6vw,32px); }
+    .panel p{ font-size:15.5px; margin-top:14px; }
+    .panel .top-row{ margin-bottom:12px; }
+    .readout{ margin-top:18px; font-size:12px; }
+    .steps{ margin-top:18px; gap:13px; }
+    .steps .tx{ font-size:14.5px; }
+    /* hero: flows naturally, centred, sized to fit a phone */
+    .hero .sticky{ position:relative; height:auto; min-height:100svh; align-items:center; padding:96px 0 40px; }
+    .hero h1{ font-size:clamp(33px,8.4vw,48px); line-height:1.02; }
+    .hero .sub{ font-size:16px; margin-top:18px; max-width:none; }
+    .seat{ margin-top:26px; max-width:none; padding:20px 22px; }
+    .seat .n{ font-size:34px; }
+    .cta-row{ margin-top:24px; gap:10px; }
+    .cta-row .btn{ flex:1 1 auto; justify-content:center; padding:15px 18px; font-size:14.5px; }
+    .stop.center h1{ font-size:clamp(34px,8.6vw,50px); }
+    .stop.center .sub{ font-size:16px; }
+  }
+</style>
+</head>
+<body>
+  <div id="sky"></div>
+  <div class="scrim"></div>
+  <canvas id="earth"></canvas>
+  <div id="earthcap"><span class="l"></span> Autonomous node array · on watch · 7 online</div>
+
+  <div class="brandmark"><span class="gm"></span> Boundless Skies</div>
+  <div class="seatflag">founding seats · <b>07 / 100</b></div>
+  <div class="progress" id="progress"></div>
+  <div class="clock" id="clock"></div>
+
+  <main>
+    <!-- 0 — what it is (over the desert) -->
+    <section class="stop hero" id="top" data-ra="305.5" data-dec="40.5" data-fov="7" data-side="0" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div>
+          <span class="kicker">A telescope network you can join from home</span>
+          <h1 style="margin-top:20px">Turn a backyard telescope into <span class="a">real space science.</span></h1>
+          <p class="sub">Boundless Skies is a worldwide network of small, self-driving telescopes — run by ordinary people. Yours sits outside, watches the sky on its own every night, and helps spot stars as they flare and fade. <em>You don't need to know any astronomy. You just need a window.</em></p>
+          <div class="cta-row">
+            <a class="btn btn-p" href="#join">Join the founding network</a>
+            <a class="btn btn-g" href="#why">See how it works ↓</a>
+          </div>
+        </div>
+        <div class="seat glass">
+          <div class="top"><span class="lab">Founding members</span><span class="lab">First cohort</span></div>
+          <div class="big"><span class="n">07<small>joined</small></span><span class="n">100<small>spots</small></span></div>
+          <div class="bar"><div class="fill"></div></div>
+          <div class="you">You'd be member <b>#008</b> — we hold your spot for 48 hours, no payment.</div>
+        </div>
+      </div></div>
+      <div class="cue"><span>scroll to lift off</span><span class="ln"></span></div>
+    </section>
+
+    <!-- 1 — why it matters -->
+    <section class="stop" id="why" data-ra="305.5" data-dec="40.7" data-fov="5.5" data-side="1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div></div>
+        <div class="panel glass">
+          <span class="kicker">Why it matters</span>
+          <h2>The sky changes — and almost no one is watching.</h2>
+          <p class="lead">Stars aren't fixed points. Some pulse, some suddenly brighten, some explode entirely. Astronomers can't predict exactly when, so to catch these moments you need telescopes pointed at the sky all night, everywhere at once.</p>
+          <p>The world's giant observatories are few, costly, and booked years ahead. So most of what happens up there is simply missed.</p>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 2 — the idea -->
+    <section class="stop" id="idea" data-ra="307" data-dec="39" data-fov="9" data-side="-1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div class="panel glass">
+          <span class="kicker">The idea</span>
+          <h2>Lots of small eyes beat a few giant ones.</h2>
+          <p class="lead">One little telescope isn't much. But thousands of them, spread across the planet and running every clear night, become an instrument no single observatory can match.</p>
+          <p>That's the network. Everyone watches their own patch of sky — and together, we cover the whole thing. Those green markers are members already on watch tonight.</p>
+          <div class="readout"><span class="live cy"></span> 7 members online · building the first coverage map</div>
+        </div>
+        <div></div>
+      </div></div>
+    </section>
+
+    <!-- 3 — how to join (concrete steps) -->
+    <section class="stop" id="how" data-ra="56.75" data-dec="24.11" data-fov="4" data-side="1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div></div>
+        <div class="panel glass">
+          <span class="kicker">How you join</span>
+          <h2>Three steps, then you're done.</h2>
+          <ol class="steps">
+            <li><span class="nm">1</span><span class="tx"><b>Get a smart telescope.</b> A Seestar — about the size of a water bottle, around $500. No telescope budget? We help members get one funded.</span></li>
+            <li><span class="nm">2</span><span class="tx"><b>Set it outside and plug it in.</b> A balcony, a yard, a windowsill. Connect power and wi-fi, install our free app once, and you're on the grid.</span></li>
+            <li><span class="nm">3</span><span class="tx"><b>Go to sleep.</b> Every clear night it picks targets, photographs them, and uploads the results on its own. You wake up to what it caught.</span></li>
+          </ol>
+          <div class="cost">Roughly <b>$500 one-time</b>, or funded for you · no subscription, no fees to us.</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 4 — what it catches (concrete, explained) -->
+    <section class="stop" id="catch" data-ra="325.68" data-dec="43.59" data-fov="1.1" data-side="-1" data-time="23:42">
+      <div class="sticky"><div class="wrap split">
+        <div class="panel glass">
+          <div class="top-row"><span class="kicker">What it catches</span><span class="time">23:42 tonight</span></div>
+          <h2>A real example, happening right now.</h2>
+          <p class="lead">That marked star is SS Cygni — a burned-out star 370 light-years away, quietly stealing gas from a neighbor. Every few weeks it erupts, brightening many times over in just a few hours.</p>
+          <p>Astronomers want every eruption on record, but only a handful of telescopes catch each one. Tonight, yours could be one of them — recording the whole thing automatically while you sleep.</p>
+          <div class="readout"><span class="live"></span> ← Your telescope, catching it brighten</div>
+        </div>
+        <div></div>
+      </div></div>
+    </section>
+
+    <!-- 5 — your name on real science -->
+    <section class="stop" id="science" data-ra="210.80" data-dec="54.35" data-fov="0.7" data-side="1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div></div>
+        <div class="panel glass">
+          <span class="kicker">What you get</span>
+          <h2>Your name, on real science.</h2>
+          <p class="lead">Every measurement your telescope makes is checked and filed into a 100-year-old scientific database that professional astronomers — and even NASA missions — actually use. Your name is attached to each one.</p>
+          <p>This isn't a game or clicking on photos. It's real data that real research is built on. This galaxy, for instance, is a place supernovae keep appearing — exactly what a network like ours catches first.</p>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 6 — who it's for -->
+    <section class="stop" id="forwho" data-ra="10.68" data-dec="41.27" data-fov="3.2" data-side="-1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div class="panel glass">
+          <span class="kicker">Who it's for</span>
+          <h2>Built for the people astronomy left out.</h2>
+          <p class="lead">No driving to a dark field at 2am. No heavy gear, no cold nights outside, no expertise. The telescope does the part that used to demand a healthy body and a free schedule.</p>
+          <p>If you live with a disability, a chronic illness, or just a full life, this was made for you. You bring the curiosity; the network does the rest. (That's our neighbor galaxy, Andromeda — your telescope can reach it too.)</p>
+        </div>
+        <div></div>
+      </div></div>
+    </section>
+
+    <!-- 7 — founding -->
+    <section class="stop" id="founding" data-ra="56.75" data-dec="24.11" data-fov="1.9" data-side="1" data-time="">
+      <div class="sticky"><div class="wrap split">
+        <div></div>
+        <div class="panel glass">
+          <span class="kicker">Why join now</span>
+          <h2>Be one of the first hundred.</h2>
+          <p class="lead">We're just getting started. The first hundred members are the founding network — your name goes on the founding charter, and your telescope helps shape how the whole thing works.</p>
+          <p>We've marked the founders on this star cluster: seven so far, and one open spot glowing amber. That eighth one could be you.</p>
+          <div class="readout"><span class="live"></span> Member #008 — open →</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 8 — join -->
+    <section class="stop center" id="join" data-ra="266.4" data-dec="-29.0" data-fov="11" data-side="0" data-time="">
+      <div class="sticky"><div class="wrap">
+        <span class="kicker">Ready to start?</span>
+        <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Take your founding spot.</h1>
+        <p class="sub" style="margin:24px auto 0; max-width:42ch; font-size:19px; color:var(--ink-2)">Tell us you're in and we'll walk you through it — whether you already have a telescope, want to buy one, or need help getting one funded. No payment to hold your spot.</p>
+        <div class="cta-row" style="justify-content:center; margin-top:34px">
+          <a class="btn btn-p" href="mailto:info@boundlessskies.org?subject=I%20want%20to%20join%20the%20founding%20network">I'm in — claim spot #008</a>
+          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=Help%20me%20get%20a%20telescope%20funded">Help me get a telescope</a>
+        </div>
+        <p style="margin-top:46px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:500">Boundless Skies · registered charity · the night sky belongs to everyone</p>
+      </div></div>
+    </section>
+  </main>
+
+<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
+<script>
+(function(){
+  /* ---------- the ground: a desert node array, drawn once ---------- */
+  var ec=document.getElementById('earth'), ex=ec.getContext('2d'), EW,EH,EDPR=Math.min(devicePixelRatio||1,2);
+  function node(x,y,s,beam){
+    ex.save(); ex.translate(x,y); ex.scale(s,s);
+    // thin alignment beam into the sky — reads instantly as "telescope scanning"
+    if(beam){
+      var bg=ex.createLinearGradient(0,-24,0,-180); bg.addColorStop(0,'rgba(140,217,255,.34)'); bg.addColorStop(1,'rgba(140,217,255,0)');
+      ex.fillStyle=bg; ex.beginPath(); ex.moveTo(-2,-22); ex.lineTo(2,-22); ex.lineTo(7,-180); ex.lineTo(-7,-180); ex.closePath(); ex.fill();
+    }
+    // glow pool under the node
+    ex.fillStyle='rgba(95,227,155,.10)'; ex.beginPath(); ex.ellipse(0,16,22,5,0,0,6.28); ex.fill();
+    ex.fillStyle='rgba(0,0,0,.55)'; ex.beginPath(); ex.ellipse(0,17,13,3.2,0,0,6.28); ex.fill();
+    // tripod — dark silhouette
+    ex.strokeStyle='#090d15'; ex.lineWidth=2.8; ex.lineCap='round';
+    ex.beginPath(); ex.moveTo(-6,0); ex.lineTo(-12,16); ex.moveTo(6,0); ex.lineTo(12,16); ex.moveTo(0,2); ex.lineTo(0,17); ex.stroke();
+    // body — dark silhouette against the lit ground, with a cool rim from the horizon glow
+    ex.fillStyle='#090d15'; ex.beginPath(); ex.moveTo(-7,2); ex.lineTo(-7,-18); ex.quadraticCurveTo(-7,-25,0,-25); ex.quadraticCurveTo(7,-25,7,-18); ex.lineTo(7,2); ex.closePath(); ex.fill();
+    ex.strokeStyle='rgba(170,205,245,.7)'; ex.lineWidth=1.3; ex.beginPath(); ex.moveTo(-7,2); ex.lineTo(-7,-18); ex.quadraticCurveTo(-7,-25,0,-25); ex.stroke();
+    // objective lens
+    ex.fillStyle='#0a1422'; ex.beginPath(); ex.arc(0,-15,4.8,0,6.28); ex.fill();
+    ex.fillStyle='rgba(170,220,255,.75)'; ex.beginPath(); ex.arc(-1.4,-16.4,1.9,0,6.28); ex.fill();
+    // green status LED + glow
+    ex.fillStyle='rgba(95,227,155,.45)'; ex.beginPath(); ex.arc(4.6,-4,4,0,6.28); ex.fill();
+    ex.fillStyle='#8CFFC8'; ex.beginPath(); ex.arc(4.6,-4,1.7,0,6.28); ex.fill();
+    ex.restore();
+  }
+  function drawEarth(){
+    EW=ec.width=innerWidth*EDPR; EH=ec.height=innerHeight*EDPR; ex.setTransform(EDPR,0,0,EDPR,0,0);
+    var W=innerWidth,H=innerHeight, hz=Math.round(H*(W<=860?0.60:0.66));
+    // sky — deep at top, lifting to a faint glow at the horizon
+    var g=ex.createLinearGradient(0,0,0,hz);
+    g.addColorStop(0,'#05080f'); g.addColorStop(.6,'#0a1326'); g.addColorStop(.88,'#16294a'); g.addColorStop(1,'#284d72');
+    ex.fillStyle=g; ex.fillRect(0,0,W,hz);
+    // stars (denser up high)
+    for(var i=0;i<320;i++){ var sy=Math.pow(Math.random(),1.4)*hz, a=(1-sy/hz)*0.85+0.12;
+      ex.fillStyle='rgba(255,255,255,'+a.toFixed(2)+')'; ex.beginPath(); ex.arc(Math.random()*W, sy, Math.random()*1.3+0.25, 0,6.28); ex.fill(); }
+    // milky-way band
+    ex.save(); var mw=ex.createLinearGradient(W*0.15,0,W*0.7,hz);
+    mw.addColorStop(0,'rgba(150,175,235,0)'); mw.addColorStop(.5,'rgba(165,190,240,.14)'); mw.addColorStop(1,'rgba(150,175,235,0)');
+    ex.fillStyle=mw; ex.fillRect(0,0,W,hz); ex.restore();
+    // airglow right at the horizon — brighter band so the silhouettes pop
+    var ag=ex.createLinearGradient(0,hz-150,0,hz); ag.addColorStop(0,'rgba(70,130,185,0)'); ag.addColorStop(.7,'rgba(110,175,215,.18)'); ag.addColorStop(1,'rgba(150,205,235,.46)');
+    ex.fillStyle=ag; ex.fillRect(0,hz-150,W,150);
+    ex.fillStyle='rgba(190,225,250,.5)'; ex.fillRect(0,hz-1,W,1.4);                 // crisp horizon line
+    // ground plane — dim starlit sand, clearly lighter than the sky
+    var gr=ex.createLinearGradient(0,hz,0,H); gr.addColorStop(0,'#2a313e'); gr.addColorStop(.5,'#1a2030'); gr.addColorStop(1,'#0c0f18');
+    ex.fillStyle=gr; ex.fillRect(0,hz,W,H-hz);
+    // dune ridges — darker silhouettes layered over the lit ground
+    function ridge(base,amp,ph,fill,lit){
+      ex.beginPath(); ex.moveTo(0,base);
+      for(var x=0;x<=W;x+=12){ ex.lineTo(x, base + Math.sin(x*0.0055+ph)*amp + Math.sin(x*0.017+ph)*amp*0.35); }
+      ex.lineTo(W,H); ex.lineTo(0,H); ex.closePath(); ex.fillStyle=fill; ex.fill();
+      ex.beginPath(); ex.moveTo(0,base);
+      for(var x2=0;x2<=W;x2+=12){ ex.lineTo(x2, base + Math.sin(x2*0.0055+ph)*amp + Math.sin(x2*0.017+ph)*amp*0.35); }
+      ex.strokeStyle=lit; ex.lineWidth=1.2; ex.stroke();
+    }
+    ridge(hz+34, 13, 1.0, '#141a28', 'rgba(160,200,235,.45)');
+    ridge(hz+96, 20, 3.4, '#0a0e18', 'rgba(120,160,200,.28)');
+    // the node array — bigger up front, smaller toward the horizon
+    var gh=H-hz;     // ground height
+    var nodes=[[0.14,.20,.9,0],[0.29,.28,1.1,1],[0.45,.18,.85,0],[0.6,.30,1.25,0],[0.74,.22,1.0,1],[0.87,.27,1.05,0],
+               [0.34,.55,1.8,1],[0.63,.66,2.2,0],[0.19,.5,1.5,0],[0.83,.58,1.7,1]];
+    nodes.forEach(function(n){ node(n[0]*W, hz + n[1]*gh, n[2], n[3]); });
+  }
+  drawEarth(); addEventListener('resize', drawEarth);
+
+  /* ---------- the sky tour ---------- */
+  var els=[].slice.call(document.querySelectorAll('.stop'));
+  var MOBILE = innerWidth <= 860;   // match the CSS breakpoint (width-only; short desktop windows are NOT mobile)
+  // Compute how far to shift the Aladin camera so the sky object appears centered in
+  // the empty column next to the panel. The grid is minmax(0,1fr) / minmax(0,470px)
+  // with a 48px gap inside a 1180px-max content area with 32px side padding.
+  // Aladin's fov is the *vertical* angular extent, so horizontal angular width = fov * aspect.
+  // d = fraction-of-viewport-width × horizontal-fov / cos(dec), converted to RA degrees.
+  // Grid is: minmax(0,1fr) | gap 48px | minmax(0,470px)
+  // side=1  → <empty col1> <panel col2>  — empty is wider (1fr), panel is 470px on right
+  // side=-1 → <panel col1> <empty col2>  — panel fills 1fr on left, empty is 470px on right
+  var contentW = Math.min(innerWidth, 1180) - 64;
+  var col2W = Math.min(470, contentW);                 // fixed/smaller column
+  var col1W = Math.max(0, contentW - col2W - 48);      // flexible/larger column
+  var contentLeft = (innerWidth - Math.min(innerWidth, 1180)) / 2 + 32;
+  // Center of the empty column in each case
+  var emptyCenterSide1  = contentLeft + col1W / 2;                     // empty=col1, panel=col2
+  var emptyCenterSide_1 = contentLeft + col1W + 48 + col2W / 2;        // panel=col1, empty=col2
+  var viewCx = innerWidth / 2;
+  var aspect = innerWidth / innerHeight;
+  var stops=els.map(function(s){
+    var ra=parseFloat(s.dataset.ra), dec=parseFloat(s.dataset.dec), fov=parseFloat(s.dataset.fov), side=parseFloat(s.dataset.side)||0;
+    var cosDec = Math.cos(dec*Math.PI/180);
+    // d = angular shift to center the empty column. Formula: move camera so the empty-col
+    // center maps to the viewport center. pxShift is how far empty-col center is from viewCx.
+    var emptyCx = side===1 ? emptyCenterSide1 : side===-1 ? emptyCenterSide_1 : viewCx;
+    var pxShift = Math.abs(viewCx - emptyCx); // magnitude; sign handled by side in cra formula
+    var d = (pxShift / innerWidth) * fov * aspect / cosDec;
+    // desktop: shift the object into the empty half (left/right of the panel).
+    // mobile: panels sit low, so lift the object UP into the open sky above them.
+    return {
+      ra:ra, dec:dec, fov:fov, side:side, time:s.dataset.time||'',
+      cra: MOBILE ? ra : (ra - side*d),
+      cdec: (MOBILE && side) ? dec - 0.30*fov : dec
+    };
+  });
+  var prog=document.getElementById('progress'); var clock=document.getElementById('clock');
+  els.forEach(function(_,i){ var d=document.createElement('span'); d.className='pdot'+(i===0?' on':''); prog.appendChild(d); });
+  var pdots=[].slice.call(prog.children);
+  var earth=document.getElementById('earth'), ecap=document.getElementById('earthcap');
+  function lerp(a,b,t){return a+(b-a)*t;}
+
+  function annotate(aladin){
+    try{
+      var cy='#9FE0FF', warm='#FFC07A';
+      var ov=A.graphicOverlay({color:cy, lineWidth:1.3}); aladin.addOverlay(ov);
+      ov.add(A.circle(325.68,43.59,0.11,{color:warm,lineWidth:1.7}));      // SS Cyg — the example catch
+      ov.add(A.circle(210.80,54.35,0.05,{color:warm,lineWidth:1.6}));       // M101 galaxy
+      var lab=A.catalog({name:'labels', shape:'cross', sourceSize:9, color:cy, displayLabel:true, labelColumn:'name', labelColor:'#EAF2FF', labelFont:'13px Geist'});
+      aladin.addCatalog(lab);
+      lab.addSources([
+        A.source(325.68,43.59,{name:'SS Cygni — erupting now'}),
+        A.source(210.80,54.35,{name:'a galaxy where stars explode'})
+      ]);
+      // the founding grid — node markers scattered across the Cygnus home field
+      var grid=A.catalog({name:'grid', shape:'square', sourceSize:11, color:cy, displayLabel:false});
+      aladin.addCatalog(grid);
+      var pts=[[303.2,41.6],[307.8,39.4],[305.1,42.7],[308.9,41.9],[302.4,38.7],[306.6,40.2],[304.0,39.0]];
+      grid.addSources(pts.map(function(p){return A.source(p[0],p[1],{});}));
+    }catch(e){}
+  }
+
+  function start(aladin){
+    var cur={ra:stops[0].cra,dec:stops[0].cdec,fov:stops[0].fov};
+    var tgt={ra:cur.ra,dec:cur.dec,fov:cur.fov};
+    var HOLD=0.62;
+    function compute(){
+      var sc=scrollY||document.documentElement.scrollTop, i=0;
+      for(var j=0;j<els.length;j++){ if(sc>=els[j].offsetTop-2) i=j; }
+      var top=els[i].offsetTop, h=els[i].offsetHeight, lp=Math.max(0,Math.min(1,(sc-top)/h));
+      pdots.forEach(function(d,k){ d.classList.toggle('on', k===i); });
+      prog.classList.toggle('show', i>0); clock.textContent = stops[i].time;
+      // lift-off: fade the ground out across the first section
+      var ep=Math.max(0,Math.min(1, sc/(els[0].offsetHeight*0.82)));
+      var es=1-ep; earth.style.opacity=es.toFixed(3); ecap.style.opacity=es.toFixed(3);
+      earth.style.transform='translateY('+(ep*42).toFixed(1)+'vh) scale('+(1+ep*0.18).toFixed(3)+')';
+      var a=stops[i], b=stops[Math.min(stops.length-1,i+1)];
+      if(lp<=HOLD){ tgt.ra=a.cra; tgt.dec=a.cdec; tgt.fov=a.fov; }
+      else{ var tt=(lp-HOLD)/(1-HOLD), e=tt<.5?2*tt*tt:1-Math.pow(-2*tt+2,2)/2;
+        tgt.ra=lerp(a.cra,b.cra,e); tgt.dec=lerp(a.cdec,b.cdec,e);
+        tgt.fov=Math.exp(lerp(Math.log(a.fov),Math.log(b.fov),e)); }
+    }
+    addEventListener('scroll', compute, {passive:true}); compute();
+    aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov);
+    (function tick(){
+      cur.ra=lerp(cur.ra,tgt.ra,0.05); cur.dec=lerp(cur.dec,tgt.dec,0.05); cur.fov=lerp(cur.fov,tgt.fov,0.05);
+      aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov); requestAnimationFrame(tick);
+    })();
+    addEventListener('scroll', function(){
+      cur.ra=lerp(cur.ra,tgt.ra,0.12); cur.dec=lerp(cur.dec,tgt.dec,0.12); cur.fov=lerp(cur.fov,tgt.fov,0.12);
+      aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov);
+    }, {passive:true});
+  }
+
+  function boot(){
+    A.init.then(function(){
+      var aladin=A.aladin('#sky', {
+        survey:'P/DSS2/color', fov:stops[0].fov, target:stops[0].cra+' '+stops[0].dec, cooFrame:'ICRS',
+        showReticle:false, showZoomControl:false, showFullscreenControl:false, showLayersControl:false,
+        showGotoControl:false, showShareControl:false, showSimbadPointerControl:false, showCooGrid:false,
+        showFrame:false, showContextMenu:false, showStatusBar:false, showProjectionControl:false, showCooGridControl:false
+      });
+      annotate(aladin); start(aladin);
+    });
+  }
+  if(window.A&&A.init){ boot(); } else { addEventListener('load', boot); }
+})();
+</script>
+</body>
+</html>

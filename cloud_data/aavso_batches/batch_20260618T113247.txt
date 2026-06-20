@@ -1,0 +1,8 @@
+#TYPE=Extended
+#OBSCODE=EGBA
+#SOFTWARE=Boundless Skies Cloud v1
+#DELIM=,
+#DATE=BJD
+#OBSTYPE=CCD
+#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES
+Z Cam,2460999.500000,13.420,0.080,CV,NO,DIFF,ENSEMBLE,na,na,na,1.34,na,na,node=seestar-live-001|snr=45.0|comp=7|zp_scatter=0.03|xval=single|quality=good

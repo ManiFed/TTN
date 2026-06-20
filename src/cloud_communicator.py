@@ -36,6 +36,18 @@ from typing import Callable, Optional
 
 logger = logging.getLogger("cloud_communicator")
 
+def _utc_offset_hours() -> float:
+    """Local UTC offset in hours, DST-aware.
+
+    time.timezone is the *standard*-time offset; when DST is in effect the
+    actual offset is time.altzone.  Using altzone avoids assuming every DST
+    shift is exactly one hour (it isn't, e.g. Lord Howe Island = 30 min).
+    """
+    if time.daylight and time.localtime().tm_isdst > 0:
+        return -time.altzone / 3600.0
+    return -time.timezone / 3600.0
+
+
 _STATE_FILE = Path("data") / "cloud_state.json"
 _QUEUE_FILE = Path("data") / "cloud_upload_queue.json"
 _QUEUE_MAX = 500
@@ -112,8 +124,7 @@ class CloudCommunicator:
             "elevation":        obs.get("elevation", 0.0),
             "telescope_model":  obs.get("telescope", "ZWO Seestar S50"),
             "filters":          phot.get("filter_name", "CV"),
-            "utc_offset_hours": -time.timezone / 3600.0
-                                + (1.0 if time.localtime().tm_isdst else 0.0),
+            "utc_offset_hours": _utc_offset_hours(),
         }
         # Include activation code on first boot if present in config
         activation_code = str(cloud_cfg.get("activation_code", "") or "").strip()
@@ -184,9 +195,7 @@ class CloudCommunicator:
                         conditions = self._get_conditions() or {}
                     except Exception as exc:
                         logger.debug("Conditions callback failed: %s", exc)
-                conditions["utc_offset_hours"] = (
-                    -time.timezone / 3600.0
-                    + (1.0 if time.localtime().tm_isdst else 0.0))
+                conditions["utc_offset_hours"] = _utc_offset_hours()
                 try:
                     self._post("/api/v1/nodes/heartbeat",
                                {"conditions": conditions})
@@ -275,6 +284,23 @@ class CloudCommunicator:
         if fits_path and self._upload_images:
             self._upload_fits(fits_path)
         return True
+
+    def upload_aavso_txt(self, txt_path: str) -> None:
+        """Upload an AAVSO Extended File Format .txt to the cloud for later email submission."""
+        try:
+            import requests as _req
+            from pathlib import Path
+            with open(txt_path, "rb") as fh:
+                resp = _req.post(
+                    self._url + "/api/v1/aavso-files",
+                    files={"file": (Path(txt_path).name, fh, "text/plain")},
+                    headers=self._headers(), timeout=30)
+            if resp.status_code == 200:
+                logger.info("AAVSO file uploaded to cloud: %s", Path(txt_path).name)
+            else:
+                logger.warning("AAVSO file upload returned HTTP %d", resp.status_code)
+        except Exception as exc:
+            logger.warning("AAVSO file upload failed: %s", exc)
 
     def _upload_fits(self, fits_path: str) -> None:
         try:

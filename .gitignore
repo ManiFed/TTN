@@ -6,4 +6,6 @@ venv/
 data/
 dist/
 build/node_agent/
-cloud_data/aavso_batches/
+cloud_data/*.db
+cloud_data/raw_images/
+cloud_data/aavso_files/

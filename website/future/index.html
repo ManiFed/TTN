@@ -7,11 +7,17 @@
 <meta name="description" content="The world's first automated telescope network built for people with disabilities. Donate your Seestar's nights. We do the science." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Monoton&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css" />
-<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
+
+<!-- cinematic overlays — pure atmosphere, never interactive -->
+<div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
+<div class="cursor-glow" id="cursor-glow" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
 
 <!-- ===================== NAV ===================== -->
 <nav class="nav">
@@ -34,19 +40,21 @@
 
 <!-- ===================== HERO ===================== -->
 <header class="hero">
+  <div class="hero-aurora" aria-hidden="true"></div>
   <canvas id="skyfield"></canvas>
+  <div class="hero-fade" aria-hidden="true"></div>
   <span class="edge-label">// BOUNDLESS SKIES NETWORK //</span>
 
   <div class="wrap hero-inner">
-    <span class="badge"><span class="dot"></span> <span id="badge-text">nodes observing right now</span></span>
-    <h1 class="serif">The night sky belongs to <span class="laser">everyone.</span></h1>
-    <p class="hero-sub">Somewhere out there, a star is erupting tonight — and your telescope could be one of the few on Earth that catches it. Point it at the sky, go to sleep, and wake up to real discoveries logged in your name. <span class="hero-sub-line">Built for people with disabilities — because the sky doesn't care if you can walk.</span></p>
-    <div class="hero-cta">
-      <a href="#builder" class="btn btn-cream">Join the hunt <i class="ti ti-arrow-right"></i></a>
-      <a href="#tonight" class="btn btn-ghost">See a night unfold</a>
+    <span class="badge hero-enter"><span class="dot"></span> <span id="badge-text">nodes observing right now</span></span>
+    <h1 class="serif hero-enter">Get on the network.<br>Catch what the <span class="sig">giants miss.</span></h1>
+    <p class="hero-sub hero-enter">Plug your telescope into a planet-wide hunt. While you sleep, the network points it at stars mid-explosion the big observatories aren't watching — and every catch is logged under <em>your</em> name. <span class="hero-sub-line">Built for people with disabilities — the network doesn't care if you can walk.</span></p>
+    <div class="hero-cta hero-enter">
+      <a href="#builder" class="btn btn-cream">Get on the network <i class="ti ti-arrow-right"></i></a>
+      <a href="#tonight" class="btn btn-ghost">Watch a live catch</a>
     </div>
 
-    <div class="hero-stats">
+    <div class="hero-stats hero-enter">
       <div class="hstat"><div class="n amber" id="stat-targets">—</div><div class="l">stars on watch</div></div>
       <div class="hstat"><div class="n" id="stat-subs">—</div><div class="l">discoveries logged</div></div>
       <div class="hstat"><div class="n" id="stat-nodes">—</div><div class="l">telescopes online</div></div>
@@ -82,6 +90,11 @@
     </div>
   </div>
 </header>
+
+<!-- ===================== LIVE TARGET TICKER ===================== -->
+<div class="ticker" aria-label="Targets on watch across the network">
+  <div class="ticker-track" id="ticker-track"></div>
+</div>
 
 <!-- ===================== TONIGHT (the hunt) ===================== -->
 <section class="section night" id="tonight">
@@ -164,31 +177,44 @@
 <!-- ===================== NODE BUILDER ===================== -->
 <section class="section" id="builder">
   <div class="wrap">
-    <div class="section-head reveal">
+    <div class="section-head center reveal">
       <span class="eyebrow">Node builder</span>
-      <h2 class="serif">Build a node from scratch.</h2>
-      <p>No Seestar yet? This guided builder assembles a complete autonomous node — telescope, computer, and the hardware that keeps it observing unattended. Every part links out to standard retail: no markup, no checkout, no Boundless Skies transaction.</p>
+      <h2 class="serif">Build the telescope<br>that joins the hunt.</h2>
+      <p>A telescope, a brain, and the gear that keeps it observing every clear night — unattended. Design yours in under a minute. Every part links straight to retail; we never touch the transaction.</p>
     </div>
 
-    <!-- flagship preset -->
-    <div class="preset reveal">
-      <div class="preset-info">
+    <!-- launch card: opens the full-screen builder -->
+    <div class="builder-launch reveal">
+      <div class="bl-media">
+        <img class="bl-photo" src="https://us.seestar.com/cdn/shop/files/seestar_s50.jpg?v=1767929676&width=900"
+             alt="ZWO Seestar S50 — the network's backbone telescope" loading="lazy"
+             onerror="this.style.display='none';this.parentNode.classList.add('no-photo')" />
+        <div class="bl-media-glow" aria-hidden="true"></div>
+        <span class="bl-tag"><span class="tn-dot"></span> your node, assembled</span>
+      </div>
+      <div class="bl-body">
         <span class="preset-tag"><i class="ti ti-sparkles"></i> Flagship preset</span>
         <h3 class="serif">The Complete Autonomous Node</h3>
-        <p>Our fully assembled recommendation — runs outdoors, unattended, every clear night. Load it, then trim anything you don't need.</p>
+        <p>Our fully-assembled recommendation — runs outdoors, unattended, every clear night. Start from it and trim anything you don't need.</p>
         <ul class="preset-parts">
-          <li>Seestar S50</li><li>Raspberry Pi 5</li><li>Smart power + SwitchBot</li>
-          <li>UPS backup</li><li>Minidome + weather</li><li>WiFi extender</li>
+          <li>Seestar S50</li><li>Raspberry Pi 5</li><li>Smart power</li>
+          <li>UPS backup</li><li>Minidome + weather</li><li>WiFi mesh</li>
         </ul>
-      </div>
-      <div class="preset-side">
-        <div class="preset-cost"><span id="preset-cost">$1,729</span><small>approx. at retail</small></div>
-        <button class="btn btn-cream" id="load-preset" type="button">Load this build <i class="ti ti-bolt"></i></button>
-        <span class="preset-note">Reliability ≈ 1.00 · fully unattended</span>
+        <div class="bl-cost"><span id="preset-cost">$1,729</span> <small>approx. at retail · reliability ≈ 1.00</small></div>
+        <div class="bl-cta">
+          <button class="btn btn-cream" id="open-builder" type="button">Build your node <i class="ti ti-arrow-right"></i></button>
+          <button class="btn btn-ghost" id="load-preset" type="button">Load the flagship <i class="ti ti-bolt"></i></button>
+        </div>
       </div>
     </div>
+  </div>
 
-    <div class="builder reveal">
+  <!-- ===== full-screen builder modal ===== -->
+  <div class="bmodal" id="builder-modal" aria-hidden="true">
+    <div class="bmodal-backdrop" data-close></div>
+    <div class="bmodal-card" role="dialog" aria-modal="true" aria-label="Node builder">
+      <button class="bmodal-close" type="button" data-close aria-label="Close builder"><i class="ti ti-x"></i></button>
+      <div class="builder">
       <!-- LEFT: persistent summary -->
       <aside class="builder-visual">
         <div class="scope-stage">
@@ -299,8 +325,9 @@
           <button class="btn btn-cream" id="wiz-next" type="button">Next <i class="ti ti-arrow-right"></i></button>
         </div>
       </div>
-    </div>
-  </div>
+      </div><!-- /.builder -->
+    </div><!-- /.bmodal-card -->
+  </div><!-- /.bmodal -->
 </section>
 
 <!-- ===================== LIVE SCIENCE ===================== -->
@@ -476,6 +503,6 @@
   </div>
 </footer>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>B — Observation Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0A0B0A; --panel:#0E100E; --ink:#E7E6DC; --ink-2:rgba(231,230,220,.56); --ink-3:rgba(231,230,220,.32);
+    --rule:rgba(231,230,220,.16); --amber:#F0A23B; --green:#5FCB7E;
+    --mono:"JetBrains Mono",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:var(--bg);color:var(--ink);font-family:var(--mono);-webkit-font-smoothing:antialiased}
+  body{padding:18px;min-height:100vh;display:flex;flex-direction:column;font-size:13px}
+  .frame{border:1.5px solid var(--ink);flex:1;display:flex;flex-direction:column}
+  .topbar{display:flex;justify-content:space-between;align-items:center;border-bottom:1.5px solid var(--ink);padding:9px 14px;font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+  .topbar .live{color:var(--amber)}
+  .topbar .live b{display:inline-block;width:8px;height:8px;background:var(--amber);margin-right:7px;vertical-align:1px}
+  .cols{display:grid;grid-template-columns:1.25fr 1fr;flex:1}
+  .left{padding:34px 30px 26px;border-right:1.5px solid var(--rule);display:flex;flex-direction:column}
+  .right{padding:18px 0 0;display:flex;flex-direction:column}
+  .tag{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-2);margin-bottom:26px}
+  .tag .b{color:var(--green)}
+  h1{font-weight:800;font-size:clamp(40px,6.6vw,82px);line-height:.96;letter-spacing:-.045em;text-transform:uppercase}
+  h1 .amber{color:var(--amber)}
+  .cursor{display:inline-block;width:.62em;height:.86em;background:var(--amber);margin-left:.08em;transform:translateY(.06em);animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .say{font-size:13.5px;line-height:1.75;color:var(--ink-2);max-width:52ch;margin-top:30px}
+  .say .c{color:var(--ink-3)}
+  .say .hl{color:var(--ink)}
+  .cta{margin-top:auto;display:flex;gap:16px;align-items:center;padding-top:34px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-weight:700;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;
+    background:var(--amber);color:#1a1205;border:0;padding:14px 20px;cursor:pointer}
+  .btn-2{font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:none;border:1.5px solid var(--rule);padding:13px 18px;cursor:pointer}
+  .loghd{display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1.5px solid var(--rule);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
+  .log{flex:1;overflow:hidden;font-size:11.5px;line-height:1.05}
+  .log .row{display:grid;grid-template-columns:62px 1fr 52px 64px;gap:8px;padding:9px 16px;border-bottom:1px solid rgba(231,230,220,.07);align-items:center}
+  .log .t{color:var(--ink-3)}
+  .log .ob{color:var(--ink)}
+  .log .mg{color:var(--amber);text-align:right}
+  .log .st{text-align:right;font-weight:500}
+  .log .st.c{color:var(--green)}
+  .log .st.q{color:var(--ink-3)}
+  .meterbar{border-top:1.5px solid var(--rule);padding:12px 16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .meter .k{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+  .meter .v{font-size:22px;font-weight:700;margin-top:3px}
+  .meter .v.a{color:var(--amber)}
+  .botbar{border-top:1.5px solid var(--ink);display:flex;justify-content:space-between;padding:8px 14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="topbar">
+      <span>BOUNDLESS_SKIES // global node network</span>
+      <span class="live"><b></b>ONLINE · 7 NODES · 21:14:08 UTC</span>
+    </div>
+
+    <div class="cols">
+      <div class="left">
+        <div class="tag">// status: <span class="b">accepting operators</span></div>
+        <h1>Get on<br>the <span class="amber">network.</span><span class="cursor"></span></h1>
+        <p class="say"><span class="c">// </span>plug your scope in. while you sleep it locks onto stars mid&#8209;explosion the giants aren't watching — <span class="hl">every catch logged under your name.</span><br><span class="c">// built for people with disabilities. the network doesn't care if you can walk.</span></p>
+        <div class="cta">
+          <button class="btn">[ get on the network ]</button>
+          <button class="btn-2">watch a live catch</button>
+        </div>
+      </div>
+
+      <div class="right">
+        <div class="loghd"><span>observation_log</span><span>live</span></div>
+        <div class="log">
+          <div class="row"><span class="t">02:13:04</span><span class="ob">ss cyg · dwarf nova</span><span class="mg">8.41</span><span class="st c">CAUGHT</span></div>
+          <div class="row"><span class="t">02:11:47</span><span class="ob">t crb · recurrent</span><span class="mg">9.92</span><span class="st c">CAUGHT</span></div>
+          <div class="row"><span class="t">02:09:12</span><span class="ob">rs oph · symbiotic</span><span class="mg">11.2</span><span class="st q">SOLVING</span></div>
+          <div class="row"><span class="t">02:06:55</span><span class="ob">r leo · mira</span><span class="mg">6.78</span><span class="st c">CAUGHT</span></div>
+          <div class="row"><span class="t">02:04:30</span><span class="ob">chi cyg · l.p.v.</span><span class="mg">7.10</span><span class="st c">CAUGHT</span></div>
+          <div class="row"><span class="t">02:01:18</span><span class="ob">z cam · cv</span><span class="mg">10.0</span><span class="st q">QUEUED</span></div>
+          <div class="row"><span class="t">01:58:02</span><span class="ob">u gem · dwarf nova</span><span class="mg">9.31</span><span class="st c">CAUGHT</span></div>
+          <div class="row"><span class="t">01:55:44</span><span class="ob">ss aur · dwarf nova</span><span class="mg">12.0</span><span class="st q">QUEUED</span></div>
+        </div>
+        <div class="meterbar">
+          <div class="meter"><div class="k">stars on watch</div><div class="v a">10</div></div>
+          <div class="meter"><div class="k">caught · 24h</div><div class="v">2</div></div>
+          <div class="meter"><div class="k">to AAVSO</div><div class="v">4</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="botbar">
+      <span>boundless skies · registered charity · est 2025</span>
+      <span>the night sky belongs to everyone</span>
+    </div>
+  </div>
+</body>
+</html>
