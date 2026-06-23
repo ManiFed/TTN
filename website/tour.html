@@ -11,6 +11,8 @@
 <meta name="theme-color" content="#02030A" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="preconnect" href="https://aladin.cds.unistra.fr" />
+<link rel="dns-prefetch" href="https://aladin.cds.unistra.fr" />
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&family=Inter:wght@800;900&display=swap" rel="stylesheet" />
 <style>
   :root{
@@ -429,7 +431,6 @@
     </section>
   </main>
 
-<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
 <script>
 (function(){
   /* ---------- the ground: animated telescope array ---------- */
@@ -1136,7 +1137,8 @@
   function boot(){
     A.init.then(function(){
       var aladin=A.aladin('#sky', {
-        survey:'P/DSS2/color', fov:stops[0].fov, target:stops[0].cra+' '+stops[0].dec, cooFrame:'ICRS',
+        survey: MOBILE ? 'P/DSS2/red' : 'P/DSS2/color',
+        fov:stops[0].fov, target:stops[0].cra+' '+stops[0].dec, cooFrame:'ICRS',
         showReticle:false, showZoomControl:false, showFullscreenControl:false, showLayersControl:false,
         showGotoControl:false, showShareControl:false, showSimbadPointerControl:false, showCooGrid:false,
         showFrame:false, showContextMenu:false, showStatusBar:false, showProjectionControl:false, showCooGridControl:false
@@ -1144,7 +1146,29 @@
       annotate(aladin); start(aladin);
     });
   }
-  if(window.A&&A.init){ boot(); } else { addEventListener('load', boot); }
+
+  var aladinLoaded=false;
+  function loadAladin(){
+    if(aladinLoaded) return; aladinLoaded=true;
+    var s=document.createElement('script');
+    s.charset='utf-8';
+    s.src='https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js';
+    s.onload=boot;
+    document.head.appendChild(s);
+  }
+
+  if(MOBILE){
+    // On mobile, wait until the page is fully loaded before fetching Aladin so it
+    // never competes with critical resources. Use IntersectionObserver as an
+    // additional trigger so a scrolling user gets the sky loaded ahead of time.
+    var aladinTrigger=window.IntersectionObserver && els.length ? new IntersectionObserver(function(entries){
+      if(entries[0].isIntersecting){ loadAladin(); aladinTrigger.disconnect(); }
+    },{rootMargin:'0px 0px 400px 0px'}) : null;
+    if(aladinTrigger && els[0]) aladinTrigger.observe(els[0]);
+    addEventListener('load', loadAladin);
+  } else {
+    loadAladin();
+  }
 
   /* ---------- panel glow pulse on scroll-in ---------- */
   (function(){
