@@ -28,18 +28,18 @@ Future<void> main() async {
   await appState.bootstrap();
 
   runApp(
-    ChangeNotifierProvider.value(value: appState, child: const BoundlessSkiesApp()),
+    ChangeNotifierProvider.value(value: appState, child: const TelescopeNetApp()),
   );
 }
 
-class BoundlessSkiesApp extends StatefulWidget {
-  const BoundlessSkiesApp({super.key});
+class TelescopeNetApp extends StatefulWidget {
+  const TelescopeNetApp({super.key});
 
   @override
-  State<BoundlessSkiesApp> createState() => _BoundlessSkiesAppState();
+  State<TelescopeNetApp> createState() => _TelescopeNetAppState();
 }
 
-class _BoundlessSkiesAppState extends State<BoundlessSkiesApp> {
+class _TelescopeNetAppState extends State<TelescopeNetApp> {
   @override
   void initState() {
     super.initState();
@@ -66,7 +66,7 @@ class _BoundlessSkiesAppState extends State<BoundlessSkiesApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Boundless Skies',
+      title: 'The Telescope Net',
       debugShowCheckedModeBanner: false,
       theme: BSTheme.dark(),
       home: const _AuthGate(),

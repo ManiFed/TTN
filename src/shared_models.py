@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Shared data models — used by both the Node Agent and the Boundless Skies cloud.
+Shared data models — used by both the Node Agent and the The Telescope Net cloud.
 
 Plain dataclasses with dict round-tripping so the node can keep working with
 the plain dicts it already uses (photometry.run_pipeline output, schedule

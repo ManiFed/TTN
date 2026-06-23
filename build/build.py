@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Boundless Skies Node Agent — cross-platform build script.
+The Telescope Net Node Agent — cross-platform build script.
 
 Builds the PyInstaller bundle and the platform installer.
 Run from the repo root.
@@ -255,7 +255,7 @@ def _build_appimage(binary: Path):
     # Minimal .desktop file
     (appdir / "BoundlessSkiesNode.desktop").write_text(
         "[Desktop Entry]\n"
-        "Name=Boundless Skies Node Agent\n"
+        "Name=The Telescope Net Node Agent\n"
         "Exec=BoundlessSkiesNode\n"
         "Icon=BoundlessSkiesNode\n"
         "Type=Application\n"
@@ -284,7 +284,7 @@ def verify_deps():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build the Boundless Skies Node Agent installer")
+        description="Build the The Telescope Net Node Agent installer")
     parser.add_argument("--platform",
                         choices=["windows", "macos", "linux", "auto"],
                         default="auto",

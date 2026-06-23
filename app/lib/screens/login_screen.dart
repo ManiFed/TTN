@@ -64,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 12),
                     Semantics(
                       header: true,
-                      child: Text('Boundless Skies',
+                      child: Text('The Telescope Net',
                           style: textTheme.displaySmall
                               ?.copyWith(fontWeight: FontWeight.w800),
                           textAlign: TextAlign.center),

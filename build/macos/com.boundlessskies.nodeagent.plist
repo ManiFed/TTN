@@ -2,28 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    Boundless Skies Node Agent — macOS LaunchDaemon
+    The Telescope Net Node Agent — macOS LaunchDaemon
 
     Installed to /Library/LaunchDaemons/ by the postinstall script.
     Runs as root, starts at boot, restarts automatically on exit.
 
     To control manually:
-        sudo launchctl load   /Library/LaunchDaemons/com.boundlessskies.nodeagent.plist
-        sudo launchctl unload /Library/LaunchDaemons/com.boundlessskies.nodeagent.plist
-        sudo launchctl start  com.boundlessskies.nodeagent
-        sudo launchctl stop   com.boundlessskies.nodeagent
+        sudo launchctl load   /Library/LaunchDaemons/com.telescopenet.nodeagent.plist
+        sudo launchctl unload /Library/LaunchDaemons/com.telescopenet.nodeagent.plist
+        sudo launchctl start  com.telescopenet.nodeagent
+        sudo launchctl stop   com.telescopenet.nodeagent
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.boundlessskies.nodeagent</string>
+    <string>com.telescopenet.nodeagent</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/BoundlessSkiesNode.app/Contents/MacOS/BoundlessSkiesNode</string>
+        <string>/Applications/TelescopeNetNode.app/Contents/MacOS/TelescopeNetNode</string>
         <string>--no-browser</string>
         <string>--data-dir</string>
-        <string>/Library/Application Support/BoundlessSkies/NodeAgent</string>
+        <string>/Library/Application Support/TelescopeNet/NodeAgent</string>
     </array>
 
     <!-- Start immediately at load and restart on exit -->
@@ -38,13 +38,13 @@
 
     <!-- Working directory -->
     <key>WorkingDirectory</key>
-    <string>/Library/Application Support/BoundlessSkies/NodeAgent</string>
+    <string>/Library/Application Support/TelescopeNet/NodeAgent</string>
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Library/Logs/BoundlessSkies/node_agent.log</string>
+    <string>/Library/Logs/TelescopeNet/node_agent.log</string>
     <key>StandardErrorPath</key>
-    <string>/Library/Logs/BoundlessSkies/node_agent_error.log</string>
+    <string>/Library/Logs/TelescopeNet/node_agent_error.log</string>
 
     <!-- Environment -->
     <key>EnvironmentVariables</key>

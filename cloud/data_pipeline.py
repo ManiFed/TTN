@@ -30,7 +30,7 @@ from src.shared_models import Measurement
 logger = logging.getLogger("cloud.data_pipeline")
 
 _WEBOBS_URL = "https://www.aavso.org/apps/webobs/submit/"
-_SOFTWARE_ID = "Boundless Skies Cloud v1"
+_SOFTWARE_ID = "The Telescope Net Cloud v1"
 
 # Two measurements are "co-temporal" for cross-validation within this window
 XVAL_WINDOW_DAYS = 0.03           # ≈ 43 minutes

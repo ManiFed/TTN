@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Disability-first theme for Boundless Skies.
+///  theme for The Telescope Net.
 ///
 /// Design goals (see VISION.md): large default type, high-contrast colours,
 /// generous touch targets (≥48dp), and never relying on colour alone to carry

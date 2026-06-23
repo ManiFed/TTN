@@ -1,5 +1,5 @@
 """
-Plate-solve & auto-center for the Boundless Skies node.
+Plate-solve & auto-center for the The Telescope Net node.
 
 This is the closed-loop "goto refinement" the Seestar app does invisibly: after
 slewing to a target you capture a frame, plate-solve it to learn where the mount

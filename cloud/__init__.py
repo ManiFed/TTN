@@ -1,1 +1,1 @@
-"""Boundless Skies cloud layer — coordinates the network of telescope nodes."""
+"""The Telescope Net cloud layer — coordinates the network of telescope nodes."""

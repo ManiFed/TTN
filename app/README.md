@@ -1,6 +1,6 @@
-# Boundless Skies — Member App (Flutter)
+# The Telescope Net — Member App (Flutter)
 
-The accessible, disability-first mobile app for the Boundless Skies automated
+The mobile app for the The Telescope Net automated
 telescope network. It talks to the cloud layer's member API (`cloud/server.py`,
 routes under `/api/v1/*`).
 
@@ -10,7 +10,7 @@ routes under `/api/v1/*`).
 lib/
   config.dart            API base URL (override with --dart-define=BS_API_BASE=...)
   main.dart              App entry + auth gate
-  theme.dart             Disability-first dark theme (large type, high contrast)
+  theme.dart             Dark theme (large type, high contrast)
   api/
     api_client.dart      Typed wrapper over the cloud member API
     auth_store.dart      Persists the bearer token (shared_preferences)

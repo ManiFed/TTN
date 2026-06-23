@@ -1,5 +1,5 @@
 #!/bin/bash
-# Boundless Skies Node Agent — macOS postinstall script
+# The Telescope Net Node Agent — macOS postinstall script
 #
 # Called by the macOS .pkg installer after the payload is copied.
 # Runs as root.
@@ -12,14 +12,14 @@
 
 set -e
 
-APP_DIR="/Applications/BoundlessSkiesNode.app"
-DATA_DIR="/Library/Application Support/BoundlessSkies/NodeAgent"
-LOG_DIR="/Library/Logs/BoundlessSkies"
-PLIST_SRC="${APP_DIR}/Contents/Resources/com.boundlessskies.nodeagent.plist"
-PLIST_DEST="/Library/LaunchDaemons/com.boundlessskies.nodeagent.plist"
+APP_DIR="/Applications/TelescopeNetNode.app"
+DATA_DIR="/Library/Application Support/TelescopeNet/NodeAgent"
+LOG_DIR="/Library/Logs/TelescopeNet"
+PLIST_SRC="${APP_DIR}/Contents/Resources/com.telescopenet.nodeagent.plist"
+PLIST_DEST="/Library/LaunchDaemons/com.telescopenet.nodeagent.plist"
 ACTIVATION_CODE="${BS_ACTIVATION_CODE:-}"    # Set by the GUI installer page
 
-echo "=== Boundless Skies Node Agent — postinstall ==="
+echo "=== The Telescope Net Node Agent — postinstall ==="
 
 # ── Create directories ─────────────────────────────────────────────────────────
 install -d -m 755 "${DATA_DIR}"
@@ -52,7 +52,7 @@ echo "Power management configured: AC idle sleep disabled"
 
 # ── Install and start the launchd service ─────────────────────────────────────
 # Unload any existing version first
-if launchctl list | grep -q "com.boundlessskies.nodeagent"; then
+if launchctl list | grep -q "com.telescopenet.nodeagent"; then
     launchctl unload "${PLIST_DEST}" 2>/dev/null || true
 fi
 
@@ -63,7 +63,7 @@ chmod 644 "${PLIST_DEST}"
 
 # Load and start
 launchctl load -w "${PLIST_DEST}"
-echo "Service installed and started: com.boundlessskies.nodeagent"
+echo "Service installed and started: com.telescopenet.nodeagent"
 
 echo ""
 echo "Installation complete!"

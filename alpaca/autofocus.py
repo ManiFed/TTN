@@ -1,5 +1,5 @@
 """
-Autofocus engine for the Boundless Skies node.
+Autofocus engine for the The Telescope Net node.
 
 Implements the V-curve sweep that the Seestar app performs automatically:
 step the focuser across a range, measure stellar sharpness (FWHM, in pixels)

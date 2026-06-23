@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Boundless Skies Node Agent — service entry point.
+The Telescope Net Node Agent — service entry point.
 
 This is the entry point used by the packaged installers (Windows Service,
 macOS LaunchDaemon, Linux systemd).  Unlike main.py (which has a dev-mode
@@ -26,7 +26,7 @@ logger = logging.getLogger("main_service")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Boundless Skies Node Agent")
+    parser = argparse.ArgumentParser(description="The Telescope Net Node Agent")
     parser.add_argument("--port", type=int, default=5173,
                         help="Dashboard port (default: 5173)")
     parser.add_argument("--no-browser", action="store_true",

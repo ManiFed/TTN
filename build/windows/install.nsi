@@ -1,24 +1,24 @@
-; Boundless Skies Node Agent — Windows NSIS Installer
+; The Telescope Net Node Agent — Windows NSIS Installer
 ;
 ; Build prerequisites:
 ;   NSIS 3.x  (https://nsis.sourceforge.io/)
 ;   NSSM      (https://nssm.cc/) — placed at build\windows\nssm\nssm.exe
-;   Bundled exe at dist\BoundlessSkiesNode.exe (built with PyInstaller)
+;   Bundled exe at dist\TelescopeNetNode.exe (built with PyInstaller)
 ;
 ; Build command (from repo root):
 ;   makensis build\windows\install.nsi
 
-!define PRODUCT_NAME      "Boundless Skies Node Agent"
+!define PRODUCT_NAME      "The Telescope Net Node Agent"
 !define PRODUCT_VERSION   "1.0.0"
-!define PRODUCT_PUBLISHER "Boundless Skies"
-!define PRODUCT_URL       "https://boundlessskies.org"
-!define SERVICE_NAME      "BoundlessSkiesNode"
-!define INSTALL_DIR       "$PROGRAMFILES64\BoundlessSkies\NodeAgent"
-!define DATA_DIR          "$APPDATA\BoundlessSkies\NodeAgent"
+!define PRODUCT_PUBLISHER "The Telescope Net"
+!define PRODUCT_URL       "https://telescopenet.org"
+!define SERVICE_NAME      "TelescopeNetNode"
+!define INSTALL_DIR       "$PROGRAMFILES64\TelescopeNet\NodeAgent"
+!define DATA_DIR          "$APPDATA\TelescopeNet\NodeAgent"
 !define UNINSTALL_KEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\${SERVICE_NAME}"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "..\..\dist\BoundlessSkiesNode-Setup.exe"
+OutFile "..\..\dist\TelescopeNetNode-Setup.exe"
 InstallDir "${INSTALL_DIR}"
 InstallDirRegKey HKLM "${UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel admin
@@ -59,13 +59,13 @@ Var ActivationCode
 
 Function ActivationCodePage
   !insertmacro MUI_HEADER_TEXT "Activation Code" \
-    "Enter the Node Activation Code from your Boundless Skies account."
+    "Enter the Node Activation Code from your The Telescope Net account."
 
   nsDialogs::Create 1018
   Pop $0
 
   ${NSD_CreateLabel} 0 0 100% 40u \
-    "Your activation code looks like: BS-2025-XXXXXXXX$\r$\n$\r$\nGet your code at boundlessskies.org/account after signing up."
+    "Your activation code looks like: BS-2025-XXXXXXXX$\r$\n$\r$\nGet your code at telescopenet.org/account after signing up."
   Pop $0
 
   ${NSD_CreateText} 0 50u 100% 14u $ActivationCode
@@ -103,7 +103,7 @@ Section "Node Agent (required)" SecMain
 
   ; Copy main executable
   SetOutPath "${INSTALL_DIR}"
-  File "..\..\dist\BoundlessSkiesNode.exe"
+  File "..\..\dist\TelescopeNetNode.exe"
 
   ; Copy NSSM (Windows Service wrapper)
   File "nssm\nssm.exe"
@@ -139,7 +139,7 @@ Section "Node Agent (required)" SecMain
 
   ; Install as a Windows Service via NSSM
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" install "${SERVICE_NAME}" \
-    "${INSTALL_DIR}\BoundlessSkiesNode.exe"'
+    "${INSTALL_DIR}\TelescopeNetNode.exe"'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
     AppParameters "--no-browser --data-dir \"${DATA_DIR}\""'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
@@ -147,7 +147,7 @@ Section "Node Agent (required)" SecMain
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
     DisplayName "${PRODUCT_NAME}"'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
-    Description "Boundless Skies automated telescope node agent"'
+    Description "The Telescope Net automated telescope node agent"'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
     Start SERVICE_AUTO_START'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" set "${SERVICE_NAME}" \
@@ -198,11 +198,11 @@ Section "Uninstall"
   nsExec::ExecToLog 'powercfg /change hibernate-timeout-ac 60'
 
   ; Remove files (but keep the user's data directory)
-  Delete "${INSTALL_DIR}\BoundlessSkiesNode.exe"
+  Delete "${INSTALL_DIR}\TelescopeNetNode.exe"
   Delete "${INSTALL_DIR}\nssm.exe"
   Delete "${INSTALL_DIR}\Uninstall.exe"
   RMDir  "${INSTALL_DIR}"
-  RMDir  "$PROGRAMFILES64\BoundlessSkies"
+  RMDir  "$PROGRAMFILES64\TelescopeNet"
 
   ; Remove Start Menu
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\Dashboard.lnk"

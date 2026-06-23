@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Local photometry pipeline — Layer 5 in the Boundless Skies architecture.
+Local photometry pipeline — Layer 5 in the The Telescope Net architecture.
 
 Given a FITS file from the Seestar, produces a calibrated differential
 photometry measurement suitable for AAVSO submission.

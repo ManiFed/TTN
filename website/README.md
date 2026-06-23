@@ -1,4 +1,4 @@
-# Boundless Skies — marketing site
+# The Telescope Net — marketing site
 
 Standalone static marketing page that pulls **live data from the cloud API**.
 No build step, no dependencies.

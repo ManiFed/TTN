@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cross-platform OS sleep prevention for the Boundless Skies Node Agent.
+Cross-platform OS sleep prevention for the The Telescope Net Node Agent.
 
 The node agent runs overnight.  If the host computer sleeps, the Seestar
 loses its connection and the night is wasted.  This module prevents that.
@@ -130,7 +130,7 @@ def _enable_linux() -> None:
             [
                 "systemd-inhibit",
                 "--what=idle:sleep",
-                "--who=Boundless Skies Node Agent",
+                "--who=The Telescope Net Node Agent",
                 "--why=Overnight telescope observation",
                 "--mode=block",
                 sys.executable, "-c",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PostgreSQL persistence for the Boundless Skies cloud.
+PostgreSQL persistence for the The Telescope Net cloud.
 
 Reads DATABASE_URL from the environment (set by Railway / Fly.io).
 The public API (init, connect, query, query_one, execute, executemany, loads)

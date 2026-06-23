@@ -1,6 +1,6 @@
 [Unit]
-Description=Boundless Skies Node Agent
-Documentation=https://boundlessskies.org/setup
+Description=The Telescope Net Node Agent
+Documentation=https://telescopenet.org/setup
 After=network-online.target
 Wants=network-online.target
 
@@ -8,16 +8,16 @@ Wants=network-online.target
 Type=simple
 
 # Run as a dedicated low-privilege user (created by the installer)
-User=boundlessskies
-Group=boundlessskies
+User=telescopenet
+Group=telescopenet
 
 # Working directory — config.yaml and data/ live here
-WorkingDirectory=/var/lib/boundlessskies/nodeagent
+WorkingDirectory=/var/lib/telescopenet/nodeagent
 
 # Main command
-ExecStart=/opt/boundlessskies/nodeagent/BoundlessSkiesNode \
+ExecStart=/opt/telescopenet/nodeagent/TelescopeNetNode \
     --no-browser \
-    --data-dir /var/lib/boundlessskies/nodeagent
+    --data-dir /var/lib/telescopenet/nodeagent
 
 # Restart policy: always restart, 5-second cooldown
 Restart=always
@@ -26,11 +26,11 @@ RestartSec=5
 # Logging — journald captures stdout/stderr automatically
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=boundlessskies-node
+SyslogIdentifier=telescopenet-node
 
 # Prevent idle sleep while the service is running
 # (the Python sleep_prevention module also does this; belt-and-suspenders)
-ExecStartPost=/bin/bash -c 'systemd-inhibit --what=idle:sleep --who="Boundless Skies Node Agent" --why="Overnight telescope observation" --mode=block sleep infinity &'
+ExecStartPost=/bin/bash -c 'systemd-inhibit --what=idle:sleep --who="The Telescope Net Node Agent" --why="Overnight telescope observation" --mode=block sleep infinity &'
 
 # Resource limits
 LimitNOFILE=65536

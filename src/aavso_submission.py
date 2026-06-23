@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AAVSO submission module — Boundless Skies Node v1.
+AAVSO submission module — The Telescope Net Node v1.
 
 Takes a measurement dict from photometry.run_pipeline(), formats it into
 AAVSO Extended File Format, POSTs it to the WebObs API, and writes a full
@@ -49,7 +49,7 @@ from src.shared_models import expand_env
 logger = logging.getLogger("aavso_submission")
 
 _WEBOBS_URL  = "https://www.aavso.org/apps/webobs/submit/"
-_SOFTWARE_ID = "Boundless Skies Node v1"
+_SOFTWARE_ID = "The Telescope Net Node v1"
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────

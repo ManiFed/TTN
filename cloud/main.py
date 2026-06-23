@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Boundless Skies cloud — entry point.
+The Telescope Net cloud — entry point.
 
     python -m cloud.main            # uses cloud/config.yaml
     python -m cloud.main other.yaml
@@ -117,7 +117,7 @@ def main() -> None:
     host = server_cfg.get("host", "0.0.0.0")
     port = int(os.environ.get("PORT", server_cfg.get("port", 8800)))
     app = create_app(config)
-    logger.info("Boundless Skies cloud starting on %s:%d", host, port)
+    logger.info("The Telescope Net cloud starting on %s:%d", host, port)
     app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
 
 

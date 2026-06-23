@@ -3,16 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Boundless Skies — The Founding Network</title>
+<title>The Telescope Net — The Founding Network</title>
 <meta name="description" content="Join a worldwide network of self-driving telescopes and contribute to real space science from home. No expertise needed." />
-<meta property="og:title" content="Boundless Skies — The Founding Network" />
+<meta property="og:title" content="The Telescope Net — The Founding Network" />
 <meta property="og:description" content="Your backyard telescope, running itself every night, helping catch stars as they flare and fade. Join the first hundred." />
 <meta property="og:type" content="website" />
 <meta name="theme-color" content="#02030A" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link rel="preconnect" href="https://aladin.cds.unistra.fr" />
+<link rel="preconnect" href="https://aladin.cds.unistra.fr" crossorigin />
 <link rel="dns-prefetch" href="https://aladin.cds.unistra.fr" />
+<link rel="preload" as="script" href="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&family=Inter:wght@800;900&display=swap" rel="stylesheet" />
 <style>
   :root{
@@ -236,8 +237,8 @@
   <canvas id="earth"></canvas>
   <div id="earthcap"><span class="l"></span> Autonomous node array · on watch · 7 online</div>
 
-  <div class="brandmark">Boundless Skies</div>
-  <div class="seatflag">founding network</div>
+  <div class="brandmark"><span class="gm"></span> The Telescope Net</div>
+  <div class="seatflag">founding seats · <b>07 / 100</b></div>
   <div class="progress" id="progress"></div>
   <div class="utcclock" id="utcclock"></div>
   <div class="clock" id="clock"></div>
@@ -247,9 +248,9 @@
     <section class="stop hero" id="top" data-ra="305.5" data-dec="40.5" data-fov="7" data-side="0" data-time="" aria-label="What is Boundless Skies">
       <div class="sticky"><div class="wrap split">
         <div>
-          <span class="kicker">A telescope network you can join from home</span>
-          <h1 style="margin-top:20px">Turn a backyard telescope into <span class="a">real space science.</span></h1>
-          <p class="sub">Boundless Skies is a worldwide network of small, self-driving telescopes — run by ordinary people. Yours sits outside, watches the sky on its own every night, and helps spot stars as they flare and fade. <em>You don't need to know any astronomy. You just need a window.</em></p>
+          <span class="kicker">A worldwide network of home telescopes</span>
+          <h1 style="margin-top:20px">Each member watches a patch of sky. <span class="a">Together we cover what no observatory can.</span></h1>
+          <p class="sub">The Telescope Net connects self-driving telescopes in members' homes across the planet. Each one runs automatically every clear night — picking targets, photographing them, and uploading data to a scientific database used by professional astronomers. <em>No experience. No nights outside. Just a balcony or yard.</em></p>
           <div class="cta-row">
             <a class="btn btn-p" href="#join">Join the founding network</a>
             <a class="btn btn-g" href="#why">Watch the sky lift off ↓</a>
@@ -400,33 +401,17 @@
     <section class="stop center" id="join" data-ra="266.4" data-dec="-29.0" data-fov="11" data-side="0" data-time="">
       <div class="sticky"><div class="wrap">
         <span class="kicker">Ready to start?</span>
-        <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Join the founding network.</h1>
-        <p class="sub" style="margin:24px auto 0; max-width:42ch; font-size:19px; color:var(--ink-2)">Tell us you're in and we'll walk you through it — whether you already have a telescope, want to buy one, or need help getting one funded.</p>
-        <form class="email-row" id="join-form" novalidate>
-          <input type="email" placeholder="your@email.com" required autocomplete="email" aria-label="Email address" />
-          <button class="btn btn-p" type="submit">I'm in →</button>
-        </form>
-        <form class="fund-form" id="fund-form" novalidate>
-          <p class="fund-label">Not sure how to get started? Tell us where you're at.</p>
-          <div class="fund-chips" role="group" aria-label="Your equipment">
-            <label class="fund-chip"><input type="radio" name="equipment" value="seestar" /><span>I have a Seestar</span></label>
-            <label class="fund-chip"><input type="radio" name="equipment" value="other_scope" /><span>I have another telescope</span></label>
-            <label class="fund-chip"><input type="radio" name="equipment" value="none" /><span>No telescope yet</span></label>
-            <label class="fund-chip"><input type="radio" name="equipment" value="fund" /><span>I need one funded</span></label>
-          </div>
-          <div class="email-row" style="margin-top:14px">
-            <input type="email" placeholder="your@email.com" required autocomplete="email" aria-label="Your email" />
-            <button class="btn btn-g" type="submit">Get started →</button>
-          </div>
-        </form>
-        <div style="margin-top:48px; display:flex; gap:32px; justify-content:center; flex-wrap:wrap; font-size:13px; color:var(--ink-3)">
-          <span>No credit card · no subscription</span>
-          <span>·</span>
-          <span>Data goes to real science</span>
-          <span>·</span>
-          <span>Cancel any time</span>
+        <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Take your founding spot.</h1>
+        <p class="sub" style="margin:24px auto 0; max-width:42ch; font-size:19px; color:var(--ink-2)">Tell us you're in and we'll walk you through it — whether you already have a telescope, want to buy one, or need help getting one funded. No payment to hold your spot.</p>
+        <div class="cta-row" style="justify-content:center; margin-top:34px">
+          <a class="btn btn-p" href="/download/node-agent" id="dlBtn">Download Node Agent <span id="dlPlatform">· macOS</span></a>
+          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=I%20want%20to%20join%20the%20founding%20network">I'm in — claim spot #008</a>
         </div>
-        <p style="margin-top:28px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:500; opacity:0.6">Boundless Skies · registered charity · the night sky belongs to everyone</p>
+        <div class="cta-row" style="justify-content:center; margin-top:12px">
+          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=Help%20me%20get%20a%20telescope%20funded">Help me get a telescope</a>
+        </div>
+        <p style="margin-top:18px; font-size:13px; color:var(--ink-3)">macOS installer · 51 MB · Windows and Linux coming soon · you'll need an activation code — <a href="mailto:info@boundlessskies.org?subject=Activation%20code%20request" style="color:var(--ink-2); text-decoration:underline; text-underline-offset:3px">email us</a> to get one</p>
+        <p style="margin-top:46px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:500">The Telescope Net · registered charity · the night sky belongs to everyone</p>
       </div></div>
     </section>
   </main>
@@ -1129,12 +1114,25 @@
     (function tick(){
       if(skyHover) hoverZoom=Math.min(HOVER_MAX, hoverZoom+HOVER_RATE);
       else         hoverZoom=Math.max(1.0,        hoverZoom-HOVER_RESET);
-      cur.ra=lerp(cur.ra,tgt.ra,0.05); cur.dec=lerp(cur.dec,tgt.dec,0.05); cur.fov=lerp(cur.fov,tgt.fov*hoverZoom,0.05);
-      aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov); requestAnimationFrame(tick);
+      var nfov=tgt.fov*hoverZoom;
+      // Only push updates to Aladin when the camera is actually moving — avoids
+      // forcing a WebGL redraw every frame once settled, which pins CPU on mobile.
+      if(Math.abs(tgt.ra-cur.ra)>1e-4 || Math.abs(tgt.dec-cur.dec)>1e-4 || Math.abs(nfov-cur.fov)>1e-4){
+        cur.ra=lerp(cur.ra,tgt.ra,0.05); cur.dec=lerp(cur.dec,tgt.dec,0.05); cur.fov=lerp(cur.fov,nfov,0.05);
+        aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov);
+      }
+      requestAnimationFrame(tick);
     })();
   }
 
+  // If the sky engine never loads (flaky mobile network, blocked CDN), freeze the
+  // #earth canvas in place as a permanent starfield so the page is never blank.
+  function fallbackToEarth(){
+    var earthEl=document.getElementById('earth');
+    earthEl.style.opacity='1'; earthEl.style.transform='none';
+  }
   function boot(){
+    if(typeof A==='undefined' || !A.init){ fallbackToEarth(); return; }   // script failed to load
     A.init.then(function(){
       var aladin=A.aladin('#sky', {
         survey: MOBILE ? 'P/DSS2/red' : 'P/DSS2/color',
@@ -1144,7 +1142,7 @@
         showFrame:false, showContextMenu:false, showStatusBar:false, showProjectionControl:false, showCooGridControl:false
       });
       annotate(aladin); start(aladin);
-    });
+    }).catch(fallbackToEarth);
   }
 
   var aladinLoaded=false;

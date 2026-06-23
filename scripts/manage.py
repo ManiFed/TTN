@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Boundless Skies cloud — admin management CLI.
+The Telescope Net cloud — admin management CLI.
 
 Run from the repo root:
     python scripts/manage.py [--config PATH] <command>
@@ -61,7 +61,7 @@ def _sep():
 # ── status ─────────────────────────────────────────────────────────────────────
 
 def cmd_status(config: dict) -> None:
-    print("\n=== Boundless Skies Cloud Status ===\n")
+    print("\n=== The Telescope Net Cloud Status ===\n")
 
     # Nodes
     nodes = registry.list_nodes()
@@ -313,7 +313,7 @@ def cmd_generate_code(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Boundless Skies cloud admin CLI",
+        description="The Telescope Net cloud admin CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

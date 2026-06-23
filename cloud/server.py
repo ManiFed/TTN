@@ -70,6 +70,29 @@ def serve_website(filename):
     return send_from_directory(_WEBSITE_DIR, "tour.html")
 
 
+# ── Software downloads ─────────────────────────────────────────────────────────
+# GitHub Releases are the canonical source. The endpoint redirects so the URL
+# on the website stays stable even as release tags change.
+
+from flask import redirect as _redirect
+
+_GITHUB_RELEASE_BASE = "https://github.com/skyrobot804/node_v1/releases/download"
+
+_DOWNLOAD_URLS = {
+    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.0/BoundlessSkiesNode-1.0.0-macOS.pkg",
+    "windows": None,  # not yet released
+    "linux":   None,  # not yet released
+}
+
+@app.route("/download/node-agent")
+@app.route("/download/node-agent/<platform>")
+def download_node_agent(platform: str = "macos"):
+    url = _DOWNLOAD_URLS.get(platform)
+    if url is None:
+        return jsonify({"error": f"'{platform}' installer not yet available"}), 404
+    return _redirect(url, code=302)
+
+
 @app.after_request
 def _cors(resp):
     """Allow the marketing site / dashboard (served from another origin in dev)

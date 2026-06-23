@@ -1,11 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Boundless Skies Node Agent — PyInstaller spec
+# The Telescope Net Node Agent — PyInstaller spec
 #
 # Build the one-file bundle:
 #   pyinstaller build/node_agent.spec
 #
-# Output:  dist/BoundlessSkiesNode[.exe]
+# Output:  dist/TelescopeNetNode[.exe]
 #
 # Requirements:
 #   pip install pyinstaller
@@ -291,7 +291,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="BoundlessSkiesNode",
+    name="TelescopeNetNode",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

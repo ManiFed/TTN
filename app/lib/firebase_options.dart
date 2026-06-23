@@ -1,4 +1,4 @@
-// Firebase configuration for Boundless Skies.
+// Firebase configuration for The Telescope Net.
 //
 // To fill in real values:
 //   1. Create a Firebase project at https://console.firebase.google.com
@@ -30,7 +30,7 @@ class DefaultFirebaseOptions {
         return macos;
       default:
         throw UnsupportedError(
-          'Boundless Skies has no Firebase config for '
+          'The Telescope Net has no Firebase config for '
           '${defaultTargetPlatform.name}. Run flutterfire configure.',
         );
     }
@@ -51,7 +51,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '000000000000',
     projectId: 'TODO-firebase-project-id',
     storageBucket: 'TODO-firebase-project-id.appspot.com',
-    iosBundleId: 'org.boundlessskies.app',
+    iosBundleId: 'org.telescopenet.app',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -60,7 +60,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '000000000000',
     projectId: 'TODO-firebase-project-id',
     storageBucket: 'TODO-firebase-project-id.appspot.com',
-    iosBundleId: 'org.boundlessskies.app',
+    iosBundleId: 'org.telescopenet.app',
   );
 
   static const FirebaseOptions web = FirebaseOptions(

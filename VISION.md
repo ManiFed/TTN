@@ -1,18 +1,18 @@
-# Boundless Skies — Complete Vision & Website Plan
+# The Telescope Net — Complete Vision & Website Plan
 
-> This document is the canonical record of the Boundless Skies vision, technical
+> This document is the canonical record of the The Telescope Net vision, technical
 > architecture, science program, organization, and roadmap. It also serves as the
 > full specification for the public website. Building the website and building the
 > network are the same act: every page described below corresponds to something
 > that must exist operationally. The PDFs this supersedes are
-> `Boundless Skies.pdf`, `BS_TECHSTACK_V2.pdf`, and `node_guidelines.pdf`.
+> `The Telescope Net.pdf`, `BS_TECHSTACK_V2.pdf`, and `node_guidelines.pdf`.
 
 ---
 
 ## The Mission
 
-Boundless Skies is an accessible astronomy charity that operates the world's first
-automated telescope network designed from the ground up for people with disabilities.
+The Telescope Net is an accessible astronomy charity that operates the world's first
+planet-wide hunt for the stars that professional observatories miss.
 Seestar smart telescope owners donate their telescope's nights to the network. Our
 pipeline automatically schedules observations of scientifically valuable targets,
 processes the data into calibrated photometry, and submits it to professional
@@ -20,7 +20,7 @@ astronomical databases. Members contribute to real science — supernovae, novae
 variable stars, transient phenomena — without physical effort, technical expertise,
 or significant cost.
 
-The night sky belongs to everyone. Boundless Skies makes that true.
+The night sky belongs to everyone. The Telescope Net makes that true.
 
 ---
 
@@ -45,7 +45,7 @@ Nobody has solved this. Not because they tried and failed. Because nobody tried.
 
 ## The Solution
 
-Boundless Skies is a three-part system:
+The Telescope Net is a three-part system:
 
 1. A distributed network of donated Seestar telescopes operating autonomously overnight
 2. An AI-driven pipeline that decides what to observe, processes the data, and submits
@@ -83,7 +83,7 @@ Establishes the mission in one sentence and directs each visitor type to their p
 Explains the member experience without technical jargon.
 
 **Joining (one-time, ~15 minutes):**
-1. Download the Boundless Skies Node Agent (free, one-click installer for Windows/Mac/Linux)
+1. Download the The Telescope Net Node Agent (free, one-click installer for Windows/Mac/Linux)
 2. Create an account
 3. Enable Station Mode on your Seestar (connects it to your home WiFi)
 4. Run the Node Agent — it finds your Seestar and registers automatically
@@ -94,7 +94,7 @@ Explains the member experience without technical jargon.
 - The Seestar slews to each target, takes stacked exposures, and saves images to the local
   network share
 - The Node Agent runs photometry on each image and uploads measurements (~1 KB each) to
-  the Boundless Skies cloud
+  the The Telescope Net cloud
 - At dawn the Seestar parks and a night summary is generated
 
 **Every morning:**
@@ -178,7 +178,7 @@ Observability requirements:
 ```
 #TYPE=EXTENDED
 #OBSCODE=[network observer code]
-#SOFTWARE=Boundless Skies Pipeline v[X]
+#SOFTWARE=The Telescope Net Pipeline v[X]
 #DELIM=,
 #DATE=BJD
 #OBSTYPE=CCD
@@ -191,12 +191,12 @@ Fields: STARID, DATE, MAGNITUDE, MAGERR, FILTER, TRANSFORMED, MTYPE,
 ### Page: The App
 
 The mobile app (Flutter, iOS + Android + PWA) is the primary member experience.
-It is designed disability-first — not "accessibility features added" but built from
+It is designed from the ground up to run unattended overnight — no expertise, no dark-field trips, just
 scratch around the question: how do disabled people experience astronomy and what do
 they need?
 
 **Design principles:**
-1. **Disability-first** — every decision starts with the disabled user's experience
+1. **Autonomous-first** — every decision starts with whether the network can run without user intervention
 2. **Multiple modalities** — every piece of information available as visual, audio,
    haptic, and text
 3. **No required precision** — every interaction achievable with one finger, voice
@@ -273,7 +273,7 @@ Requirements:
   ✓ Power outlet
   ✓ Ability to follow a setup guide — that's it
 
-Boundless Skies provides everything else:
+The Telescope Net provides everything else:
   → Node software (free download, one-click installer)
   → Scheduling and coordination
   → All data processing
@@ -329,7 +329,7 @@ recommendations.
 - WiFi extender / mesh node (for scopes placed away from router)
 
 **Step 5 — Review:** Shows the complete build with links to purchase each component
-at standard retail price. No checkout, no markup, no Boundless Skies transaction.
+at standard retail price. No checkout, no markup, no The Telescope Net transaction.
 
 **Complete Autonomous Node preset** (the flagship recommendation):
 - Seestar S50
@@ -348,7 +348,7 @@ hangs, reading weather sensor data for the local conditions feed). This is an op
 layer — the Node Agent works identically without it.
 
 **Branding for purchased/assembled nodes (optional):**
-- Matte black vinyl wrap with Boundless Skies logo + QR plate
+- Matte black vinyl wrap with The Telescope Net logo + QR plate
 - Custom boot splash and Node Agent branding on Pi builds
 - Premium constellation-themed packaging for gifted/loaned units
 - Activation card (large print + audio QR) included in all shipped kits
@@ -591,12 +591,12 @@ Goal: Public launch, grow to 50 nodes.
 - [ ] 25 → 50 active nodes
 - [ ] Nonprofit status obtained
 - [ ] First grant received
-- [ ] First ATel with Boundless Skies data
+- [ ] First ATel with The Telescope Net data
 - [ ] ZWO partnership established
 - [ ] AAVSO formal partnership and multi-node observer code
 - [ ] Human review queue for borderline measurements
 - [ ] TNS outbound reporting for significant novel detections
-- [ ] First disabled astronomer testimony documented
+- [ ] First network member testimony documented
 
 ### Phase 3: Growth (Months 18–36) — Budget: $50,000–$200,000/year
 
@@ -634,10 +634,10 @@ Goal: 200 nodes, recognised scientific instrument.
 | Phase 0 (month 3) | One AAVSO-accepted automated observation; photometric precision validated |
 | Phase 1 (month 9) | 5 active nodes in 3+ countries; 100+ AAVSO submissions; first app version; nonprofit filing submitted |
 | Phase 2 (month 18) | 50 nodes; 1,000+ submissions; app on App Stores; first ATel; nonprofit status; first grant |
-| Phase 3 (month 36) | 200 nodes; 25+ countries; 10,000+ submissions; network paper published; disabled astronomer's data cited |
+| Phase 3 (month 36) | 200 nodes; 25+ countries; 10,000+ submissions; network paper published; network member's data cited in published research |
 
 ---
 
-*Boundless Skies | boundlessskies.org*  
+*The Telescope Net | telescopenet.org*  
 *Founded 2025 by Eli Goldfine and Scott Mellis*  
 *"The night sky belongs to everyone."*

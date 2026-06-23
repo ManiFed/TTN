@@ -1,8 +1,8 @@
 #!/bin/bash
-# Boundless Skies Node Agent — Linux installer
+# The Telescope Net Node Agent — Linux installer
 #
 # Usage:
-#   curl -sSL https://boundlessskies.org/install.sh | sudo bash
+#   curl -sSL https://telescopenet.org/install.sh | sudo bash
 #   -- or --
 #   sudo bash build/linux/install.sh [--code BS-YYYY-XXXXXXXX]
 #
@@ -11,12 +11,12 @@
 
 set -e
 
-INSTALL_DIR="/opt/boundlessskies/nodeagent"
-DATA_DIR="/var/lib/boundlessskies/nodeagent"
-LOG_DIR="/var/log/boundlessskies"
-SERVICE_USER="boundlessskies"
-SERVICE_FILE="/etc/systemd/system/boundlessskies-node.service"
-RELEASE_URL="https://boundlessskies.org/releases/latest/BoundlessSkiesNode-linux-x86_64"
+INSTALL_DIR="/opt/telescopenet/nodeagent"
+DATA_DIR="/var/lib/telescopenet/nodeagent"
+LOG_DIR="/var/log/telescopenet"
+SERVICE_USER="telescopenet"
+SERVICE_FILE="/etc/systemd/system/telescopenet-node.service"
+RELEASE_URL="https://telescopenet.org/releases/latest/TelescopeNetNode-linux-x86_64"
 ACTIVATION_CODE=""
 
 # Parse arguments
@@ -41,14 +41,14 @@ if ! command -v systemctl &>/dev/null; then
 fi
 
 echo ""
-echo "=== Boundless Skies Node Agent — Linux Installer ==="
+echo "=== The Telescope Net Node Agent — Linux Installer ==="
 echo ""
 
 # ── Create service user ────────────────────────────────────────────────────────
 if ! id "${SERVICE_USER}" &>/dev/null; then
     echo "Creating service user: ${SERVICE_USER}"
     useradd --system --home-dir "${DATA_DIR}" --shell /bin/false \
-        --comment "Boundless Skies Node Agent" "${SERVICE_USER}"
+        --comment "The Telescope Net Node Agent" "${SERVICE_USER}"
 fi
 
 # ── Create directories ─────────────────────────────────────────────────────────
@@ -64,15 +64,15 @@ install -d -m 755 "${LOG_DIR}"
 # ── Download binary ────────────────────────────────────────────────────────────
 echo "Downloading Node Agent binary..."
 if command -v curl &>/dev/null; then
-    curl -fL "${RELEASE_URL}" -o "${INSTALL_DIR}/BoundlessSkiesNode"
+    curl -fL "${RELEASE_URL}" -o "${INSTALL_DIR}/TelescopeNetNode"
 elif command -v wget &>/dev/null; then
-    wget -q "${RELEASE_URL}" -O "${INSTALL_DIR}/BoundlessSkiesNode"
+    wget -q "${RELEASE_URL}" -O "${INSTALL_DIR}/TelescopeNetNode"
 else
     echo "ERROR: curl or wget is required"
     exit 1
 fi
-chmod 755 "${INSTALL_DIR}/BoundlessSkiesNode"
-chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/BoundlessSkiesNode"
+chmod 755 "${INSTALL_DIR}/TelescopeNetNode"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/TelescopeNetNode"
 
 # ── Write config.yaml ──────────────────────────────────────────────────────────
 CONFIG="${DATA_DIR}/config.yaml"
@@ -86,7 +86,7 @@ if [ ! -f "${CONFIG}" ]; then
         cat > "${CONFIG}" <<'YAML'
 cloud:
   enabled: true
-  url: 'https://cloud.boundlessskies.org'
+  url: 'https://cloud.telescopenet.org'
   activation_code: 'ACTIVATION_CODE_PLACEHOLDER'
   node_id: ''
   api_key: ''
@@ -120,12 +120,12 @@ fi
 # ── Install systemd service ────────────────────────────────────────────────────
 echo "Installing systemd service..."
 # We either use the bundled service file or generate a minimal one
-if [ -f "$(dirname "$0")/boundlessskies-node.service" ]; then
-    cp "$(dirname "$0")/boundlessskies-node.service" "${SERVICE_FILE}"
+if [ -f "$(dirname "$0")/telescopenet-node.service" ]; then
+    cp "$(dirname "$0")/telescopenet-node.service" "${SERVICE_FILE}"
 else
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=Boundless Skies Node Agent
+Description=The Telescope Net Node Agent
 After=network-online.target
 Wants=network-online.target
 
@@ -134,12 +134,12 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${DATA_DIR}
-ExecStart=${INSTALL_DIR}/BoundlessSkiesNode --no-browser --data-dir ${DATA_DIR}
+ExecStart=${INSTALL_DIR}/TelescopeNetNode --no-browser --data-dir ${DATA_DIR}
 Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=boundlessskies-node
+SyslogIdentifier=telescopenet-node
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
@@ -159,8 +159,8 @@ echo "System sleep targets masked (telescope host won't sleep)"
 # ── Enable and start the service ───────────────────────────────────────────────
 echo "Enabling and starting the service..."
 systemctl daemon-reload
-systemctl enable boundlessskies-node
-systemctl start  boundlessskies-node
+systemctl enable telescopenet-node
+systemctl start  telescopenet-node
 
 # ── Add current user to service group (so they can read logs) ─────────────────
 if [ -n "${SUDO_USER}" ]; then
@@ -171,8 +171,8 @@ fi
 echo ""
 echo "=== Installation complete ==="
 echo ""
-echo "  Service status : systemctl status boundlessskies-node"
-echo "  Logs           : journalctl -u boundlessskies-node -f"
+echo "  Service status : systemctl status telescopenet-node"
+echo "  Logs           : journalctl -u telescopenet-node -f"
 echo "  Dashboard      : http://localhost:5173"
 echo "  Config file    : ${CONFIG}"
 echo ""
@@ -180,8 +180,8 @@ echo ""
 if [ -z "${ACTIVATION_CODE}" ]; then
     echo "NOTE: No activation code was provided."
     echo "Edit ${CONFIG} and add your code under cloud.activation_code,"
-    echo "then restart: sudo systemctl restart boundlessskies-node"
+    echo "then restart: sudo systemctl restart telescopenet-node"
     echo ""
 fi
 
-systemctl status boundlessskies-node --no-pager || true
+systemctl status telescopenet-node --no-pager || true

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Member authentication for the Boundless Skies cloud.
+Member authentication for the The Telescope Net cloud.
 
 Token-based: each user gets a bearer token (secrets.token_urlsafe(32)) stored
 as a SHA-256 hash in the users table.  Token is returned on register/login and

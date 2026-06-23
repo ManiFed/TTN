@@ -4371,6 +4371,7 @@ html[data-night] img, html[data-night] video { filter: none; }
       <button id="cfgTab_aavso"      class="cfg-tab" onclick="switchCfgTab('aavso')">AAVSO</button>
       <button id="cfgTab_safety"     class="cfg-tab" onclick="switchCfgTab('safety')">Safety</button>
       <button id="cfgTab_advanced"   class="cfg-tab" onclick="switchCfgTab('advanced')">Advanced</button>
+      <button id="cfgTab_cloud"     class="cfg-tab" onclick="switchCfgTab('cloud')">Cloud</button>
     </div>
 
     <!-- Form view -->
@@ -4458,7 +4459,7 @@ html[data-night] img, html[data-night] video { filter: none; }
         </label>
         <div class="cfg-field-grid">
           <div class="inp-group">
-            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in the Boundless Skies network. Used to label your data contributions. Example: node_001.">?</span></div>
+            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in the The Telescope Net network. Used to label your data contributions. Example: node_001.">?</span></div>
             <input class="inp" type="text" id="cfgPhotNodeId" placeholder="node_001">
           </div>
           <div class="inp-group">
@@ -4801,6 +4802,56 @@ html[data-night] img, html[data-night] video { filter: none; }
               <option value="ERROR">ERROR</option>
             </select>
           </div>
+        </div>
+      </div>
+
+      <!-- CLOUD -->
+      <div id="cfgPanel_cloud" class="cfg-panel" style="display:none;">
+        <div id="cfgCloudStatus" style="padding:8px 10px;border-radius:4px;margin-bottom:10px;font-size:12px;display:none;"></div>
+        <label class="cfg-toggle cfg-toggle-lg">
+          <input type="checkbox" id="cfgCloudEnabled">
+          <span>Cloud Sync Enabled</span>
+          <span class="help-tip" data-tip="Connect this node to the The Telescope Net cloud. Enables observation plan downloads, measurement uploads, and night summary notifications.">?</span>
+        </label>
+        <div class="cfg-section-hdr">Registration</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">Enter your activation code to register this node. Get a code at telescopenet.org or from your network invitation.</div>
+        <div class="cfg-field-grid">
+          <div class="inp-group" style="grid-column:1/-1;">
+            <div class="inp-label">Activation Code <span class="help-tip" data-tip="One-time code that links this node to your account. Format: BS-YYYY-XXXX. Leave blank if already registered.">?</span></div>
+            <input class="inp" type="text" id="cfgCloudCode" placeholder="BS-2026-XXXX" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="inp-group" style="grid-column:1/-1;">
+            <div class="inp-label">Server URL <span class="help-tip" data-tip="The Telescope Net cloud server address. Leave as the default unless you are running a private network.">?</span></div>
+            <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://cloud.telescopenet.org">
+          </div>
+          <div class="inp-group">
+            <div class="inp-label">Node ID <span style="font-size:10px;color:var(--dim);">(auto-assigned)</span></div>
+            <input class="inp" type="text" id="cfgCloudNodeId" placeholder="assigned after registration" readonly style="opacity:0.7;cursor:default;">
+          </div>
+        </div>
+        <div class="cfg-section-hdr">Sync Settings</div>
+        <div class="cfg-field-grid">
+          <div class="inp-group">
+            <div class="inp-label">Heartbeat Interval (sec) <span class="help-tip" data-tip="How often to send a status ping to the cloud. 60 seconds is recommended.">?</span></div>
+            <input class="inp" type="number" id="cfgCloudHb" min="30" max="3600" step="10">
+          </div>
+          <div class="inp-group">
+            <div class="inp-label">Plan Poll Interval (sec) <span class="help-tip" data-tip="How often to check for a new observation plan. 300 seconds (5 min) is recommended.">?</span></div>
+            <input class="inp" type="number" id="cfgCloudPoll" min="60" max="3600" step="60">
+          </div>
+        </div>
+        <label class="cfg-toggle" style="margin-top:6px;">
+          <input type="checkbox" id="cfgCloudAutoRun">
+          <span>Auto-run observation plans</span>
+          <span class="help-tip" data-tip="Automatically slew to targets and observe when a plan arrives from the cloud each evening.">?</span>
+        </label>
+        <label class="cfg-toggle">
+          <input type="checkbox" id="cfgCloudUploadImages">
+          <span>Upload FITS images to cloud</span>
+          <span class="help-tip" data-tip="Upload raw FITS files alongside photometry results. Stored for 30 days. Increases bandwidth usage (~5 MB per image).">?</span>
+        </label>
+        <div style="margin-top:14px;padding:8px 10px;background:var(--bg2);border-radius:4px;font-size:11px;color:var(--dim);">
+          After saving cloud settings, restart the Node Agent for changes to take effect.
         </div>
       </div>
 
@@ -6709,7 +6760,7 @@ async function connectTo(host, port, setAsDefault = false, skipPermCheck = false
 let _cfgView      = 'form';
 let _cfgParsed    = {};
 let _cfgActiveTab = 'setup';
-const _CFG_TABS   = ['setup','photometry','aavso','safety','advanced'];
+const _CFG_TABS   = ['setup','photometry','aavso','safety','advanced','cloud'];
 
 function switchCfgTab(tab) {
   _cfgActiveTab = tab;
@@ -6720,6 +6771,40 @@ function switchCfgTab(tab) {
     if (btn)   btn.classList.toggle('active', t === tab);
   });
   if (tab === 'horizon') window.loadSkyMask();
+  if (tab === 'cloud')   _refreshCloudStatus();
+}
+
+async function _refreshCloudStatus() {
+  const el = document.getElementById('cfgCloudStatus');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/cloud');
+    const d = await r.json();
+    el.style.display = '';
+    if (!d.enabled) {
+      el.style.background = 'var(--bg2)';
+      el.style.color       = 'var(--dim)';
+      el.textContent       = 'Cloud sync is disabled.';
+    } else if (d.registered) {
+      el.style.background = 'rgba(34,197,94,0.12)';
+      el.style.color       = '#4ade80';
+      const nodeLabel = d.node_id ? ` — Node ID: ${d.node_id}` : '';
+      el.textContent = d.last_heartbeat_ok === false
+        ? `Registered${nodeLabel} (last heartbeat failed)`
+        : `Registered${nodeLabel}`;
+      if (d.node_id) document.getElementById('cfgCloudNodeId').value = d.node_id;
+    } else if (d.error) {
+      el.style.background = 'rgba(239,68,68,0.12)';
+      el.style.color       = '#f87171';
+      el.textContent       = `Not registered — ${d.error}`;
+    } else {
+      el.style.background = 'rgba(234,179,8,0.12)';
+      el.style.color       = '#fbbf24';
+      el.textContent       = 'Connecting…';
+    }
+  } catch (_) {
+    el.style.display = 'none';
+  }
 }
 
 function _cfgGet(obj, path, fallback) {
@@ -6803,6 +6888,14 @@ function renderCfgForm(c) {
   setVal('cfgIwPath',          _cfgGet(c, 'image_watcher.watch_path', '/mnt/seestar'));
   setVal('cfgIwDebounce',      _cfgGet(c, 'image_watcher.debounce_delay', 2.0));
   setVal('cfgLogLevel',        _cfgGet(c, 'logging.level', 'INFO'));
+  setVal('cfgCloudEnabled',      _cfgGet(c, 'cloud.enabled',              false));
+  setVal('cfgCloudCode',         _cfgGet(c, 'cloud.activation_code',      ''));
+  setVal('cfgCloudUrl',          _cfgGet(c, 'cloud.url', 'https://cloud.telescopenet.org'));
+  setVal('cfgCloudNodeId',       _cfgGet(c, 'cloud.node_id',              ''));
+  setVal('cfgCloudHb',           _cfgGet(c, 'cloud.heartbeat_interval',   60));
+  setVal('cfgCloudPoll',         _cfgGet(c, 'cloud.plan_poll_interval',   300));
+  setVal('cfgCloudAutoRun',      _cfgGet(c, 'cloud.auto_run_plans',       false));
+  setVal('cfgCloudUploadImages', _cfgGet(c, 'cloud.upload_images',        false));
 }
 
 function collectCfgForm() {
@@ -6892,6 +6985,15 @@ function collectCfgForm() {
   set('image_watcher.watch_path',     txt('cfgIwPath'));
   set('image_watcher.debounce_delay', num('cfgIwDebounce'));
   set('logging.level', sel('cfgLogLevel'));
+  set('cloud.enabled',              chk('cfgCloudEnabled'));
+  const rawCode = txt('cfgCloudCode').trim();
+  set('cloud.activation_code',      rawCode || '');
+  set('cloud.url',                  txt('cfgCloudUrl').trim() || 'https://cloud.telescopenet.org');
+  set('cloud.heartbeat_interval',   num('cfgCloudHb',   true));
+  set('cloud.plan_poll_interval',   num('cfgCloudPoll', true));
+  set('cloud.auto_run_plans',       chk('cfgCloudAutoRun'));
+  set('cloud.upload_images',        chk('cfgCloudUploadImages'));
+  // node_id and api_key are managed by CloudCommunicator — never overwritten from the form
   return c;
 }
 

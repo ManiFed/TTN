@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live stacking for the Boundless Skies node.
+Live stacking for the The Telescope Net node.
 
 This is the Seestar app's signature feature: as each sub-frame arrives it is
 star-aligned to a reference and added to a running accumulator, so the displayed

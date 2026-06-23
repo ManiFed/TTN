@@ -1,22 +1,22 @@
 #!/bin/bash
-# Boundless Skies Node Agent — macOS pkg / dmg builder
+# The Telescope Net Node Agent — macOS pkg / dmg builder
 #
 # Usage:  bash build/macos/build_dmg.sh [--sign "Developer ID: ..."]
 #
 # Prerequisites:
-#   PyInstaller bundle already built at dist/BoundlessSkiesNode
+#   PyInstaller bundle already built at dist/TelescopeNetNode
 #   pkgbuild + productbuild  (Xcode command-line tools)
 #   create-dmg (optional, brew install create-dmg)
 #
 # Outputs:
-#   dist/BoundlessSkiesNode-X.Y.Z-macOS.pkg   (primary — GUI installer)
-#   dist/BoundlessSkiesNode-X.Y.Z-macOS.dmg   (optional, if create-dmg present)
+#   dist/TelescopeNetNode-X.Y.Z-macOS.pkg   (primary — GUI installer)
+#   dist/TelescopeNetNode-X.Y.Z-macOS.dmg   (optional, if create-dmg present)
 
 set -e
 cd "$(dirname "$0")/../.."   # repo root
 
 VERSION="1.0.0"
-APP_NAME="BoundlessSkiesNode"
+APP_NAME="TelescopeNetNode"
 BUNDLE_DIR="dist/${APP_NAME}.app"
 CONTENTS="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS}/MacOS"
@@ -29,7 +29,7 @@ if [ "$1" = "--sign" ]; then
     SIGN_ID="$2"
 fi
 
-echo "=== Building Boundless Skies Node Agent for macOS v${VERSION} ==="
+echo "=== Building The Telescope Net Node Agent for macOS v${VERSION} ==="
 
 # ── Guard: require the PyInstaller bundle ──────────────────────────────────────
 if [ ! -f "${DIST_DIR}/${APP_NAME}" ]; then
@@ -53,9 +53,9 @@ cat > "${CONTENTS}/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>org.boundlessskies.nodeagent</string>
+    <string>org.telescopenet.nodeagent</string>
     <key>CFBundleName</key>
-    <string>Boundless Skies Node Agent</string>
+    <string>The Telescope Net Node Agent</string>
     <key>CFBundleVersion</key>
     <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>
@@ -72,7 +72,7 @@ cat > "${CONTENTS}/Info.plist" <<EOF
 </plist>
 EOF
 
-cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/"
+cp "${BUILD_DIR}/com.telescopenet.nodeagent.plist" "${RESOURCES_DIR}/"
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
@@ -99,7 +99,7 @@ cp -r "${BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
 
 pkgbuild \
     --root "${PKG_STAGING}" \
-    --identifier "org.boundlessskies.nodeagent" \
+    --identifier "org.telescopenet.nodeagent" \
     --version "${VERSION}" \
     --scripts "${BUILD_DIR}" \
     --install-location "/" \
@@ -116,8 +116,8 @@ if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
 <html>
 <head><meta charset="UTF-8"/></head>
 <body style="font-family: -apple-system, Helvetica; font-size: 13px; color: #1a1a1a; padding: 20px;">
-<h2 style="color:#1a1a1a;">Welcome to Boundless Skies Node Agent</h2>
-<p>This installer will set up the <strong>Boundless Skies Node Agent</strong> on your Mac.</p>
+<h2 style="color:#1a1a1a;">Welcome to The Telescope Net Node Agent</h2>
+<p>This installer will set up the <strong>The Telescope Net Node Agent</strong> on your Mac.</p>
 <p>The Node Agent runs in the background as a system service, automatically:</p>
 <ul>
 <li>Connecting to your Seestar telescope</li>
@@ -128,11 +128,11 @@ if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
 <ul>
 <li>macOS 11 or later</li>
 <li>Seestar S50 or S30 in Station Mode on your local WiFi</li>
-<li>A Boundless Skies activation code (get one at boundlessskies.org)</li>
+<li>A The Telescope Net activation code (get one at telescopenet.org)</li>
 <li>ASTAP plate solver (<a href="https://www.hnsky.org/astap.htm">hnsky.org/astap.htm</a>)</li>
 </ul>
 <p style="color:#555;">After installation, add your activation code to:<br/>
-<code>/Library/Application Support/BoundlessSkies/NodeAgent/config.yaml</code></p>
+<code>/Library/Application Support/TelescopeNet/NodeAgent/config.yaml</code></p>
 </body>
 </html>
 HTML
@@ -141,19 +141,19 @@ fi
 cat > "${DIST_DIR}/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
-    <title>Boundless Skies Node Agent ${VERSION}</title>
+    <title>The Telescope Net Node Agent ${VERSION}</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
     <choices-outline>
         <line choice="default">
-            <line choice="org.boundlessskies.nodeagent"/>
+            <line choice="org.telescopenet.nodeagent"/>
         </line>
     </choices-outline>
     <choice id="default"/>
-    <choice id="org.boundlessskies.nodeagent" visible="false">
-        <pkg-ref id="org.boundlessskies.nodeagent"/>
+    <choice id="org.telescopenet.nodeagent" visible="false">
+        <pkg-ref id="org.telescopenet.nodeagent"/>
     </choice>
-    <pkg-ref id="org.boundlessskies.nodeagent" version="${VERSION}" onConclusion="none">
+    <pkg-ref id="org.telescopenet.nodeagent" version="${VERSION}" onConclusion="none">
         ${APP_NAME}-${VERSION}-macOS-component.pkg
     </pkg-ref>
 </installer-gui-script>
@@ -172,7 +172,7 @@ rm -rf "${PKG_STAGING}" "${COMPONENT_PKG}" "${DIST_DIR}/distribution.xml"
 if command -v create-dmg &>/dev/null; then
     echo "Building .dmg..."
     create-dmg \
-        --volname "Boundless Skies Node Agent" \
+        --volname "The Telescope Net Node Agent" \
         --window-pos 200 120 \
         --window-size 600 400 \
         --icon-size 100 \

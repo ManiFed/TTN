@@ -1,5 +1,5 @@
 /* ============================================================
-   Boundless Skies — marketing site
+   The Telescope Net — marketing site
    Pulls live data from the cloud API; falls back gracefully when
    the API is unreachable so the page is never broken.
    ============================================================ */
@@ -862,7 +862,7 @@
       emailBtn.addEventListener("click", function (e) {
         e.preventDefault();
         var s = selected();
-        var lines = ["My Boundless Skies Node Build", ""];
+        var lines = ["My Telescope Net Node Build", ""];
         lines.push("Telescope : " + s.scope.name + (s.scope.price ? "  ($" + s.scope.price + ")" : "  (owned)"));
         lines.push("Computer  : " + s.comp.name  + (s.comp.price  ? "  ($" + s.comp.price  + ")" : "  (owned)"));
         if (s.adds.length) {
@@ -872,7 +872,7 @@
         var total = (owned[s.scope.id] ? 0 : s.scope.price) + (owned[s.comp.id] ? 0 : s.comp.price);
         s.adds.forEach(function (a) { total += owned[a.id] ? 0 : a.price; });
         lines.push(""); lines.push("Estimated total: $" + total.toLocaleString());
-        lines.push(""); lines.push("Join the network: https://boundlessskies.org/#builder");
+        lines.push(""); lines.push("Join the network: https://telescopenet.org/#builder");
         window.location.href = "mailto:?subject=My%20Boundless%20Skies%20Node%20Build&body=" + encodeURIComponent(lines.join("\n"));
       });
     }

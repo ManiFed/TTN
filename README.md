@@ -1,11 +1,11 @@
-# Boundless Skies — Node Software & Cloud
+# The Telescope Net — Node Software & Cloud
 
 Seestar owners donate their telescope's nights. The pipeline schedules observations of
 scientifically valuable targets, processes the data into calibrated photometry, and
 submits it to AAVSO under the contributor's name. Members do real astronomy — no
 manual intervention required.
 
-> **Boundless Skies** is an accessible astronomy charity that gives people with
+> **The Telescope Net** is an accessible astronomy charity that gives people with
 > disabilities access to real telescope time. AI schedules variable-star observations,
 > processes photometry, and submits to AAVSO on each member's behalf.
 
@@ -303,7 +303,7 @@ python3 scripts/manage.py generate-code --count 5 --expires-days 90
 python3 scripts/manage.py generate-code --count 1 --user u_abc123
 
 # Member self-service via the API
-curl -X POST https://cloud.boundlessskies.org/api/v1/me/activation-code \
+curl -X POST https://cloud.telescopenet.org/api/v1/me/activation-code \
      -H "Authorization: Bearer <your_token>"
 # → {"code": "BS-2026-ABCD1234", "expires_at": "2026-09-08T..."}
 ```
@@ -314,7 +314,7 @@ curl -X POST https://cloud.boundlessskies.org/api/v1/me/activation-code \
 
 ```bash
 # 1. Clone and set up
-git clone https://github.com/boundlessskies/node_v1 && cd node_v1-main
+git clone https://github.com/telescopenet/node_v1 && cd node_v1-main
 python3 -m venv venv && source venv/bin/activate
 pip install flask pyyaml numpy astropy pillow requests watchdog photutils astroquery pyongc
 
@@ -541,7 +541,7 @@ scoring:
 ```bash
 # Check current live weights
 curl -H "X-Admin-Key: your-admin-key" \
-     https://cloud.boundlessskies.org/api/v1/admin/tuning
+     https://cloud.telescopenet.org/api/v1/admin/tuning
 
 # Response:
 # {
@@ -555,7 +555,7 @@ curl -H "X-Admin-Key: your-admin-key" \
 curl -X POST -H "X-Admin-Key: your-admin-key" \
      -H "Content-Type: application/json" \
      -d '{"rollback_to_id": 5}' \
-     https://cloud.boundlessskies.org/api/v1/admin/tuning/rollback
+     https://cloud.telescopenet.org/api/v1/admin/tuning/rollback
 ```
 
 ---
@@ -592,9 +592,9 @@ python3 build/build.py
 python3 build/build.py --bundle-only
 
 # Outputs:
-#   Windows  → dist/BoundlessSkiesNode-Setup.exe   (requires NSIS + NSSM on PATH)
-#   macOS    → dist/BoundlessSkiesNode-X.Y.Z.pkg
-#   Linux    → dist/BoundlessSkiesNode-linux-x86_64
+#   Windows  → dist/TelescopeNetNode-Setup.exe   (requires NSIS + NSSM on PATH)
+#   macOS    → dist/TelescopeNetNode-X.Y.Z.pkg
+#   Linux    → dist/TelescopeNetNode-linux-x86_64
 ```
 
 **Windows (NSIS + NSSM)**
@@ -603,20 +603,20 @@ python3 build/build.py --bundle-only
 - Calls `powercfg /change standby-timeout-ac 0` to disable AC idle sleep
 
 **macOS (.pkg)**
-- Installs to `/Applications/BoundlessSkiesNode/`
+- Installs to `/Applications/TelescopeNetNode/`
 - Installs a launchd plist → `/Library/LaunchDaemons/` (auto-start at boot)
 - Calls `pmset -c sleep 0` to disable AC idle sleep
-- Data: `/Library/Application Support/BoundlessSkies/NodeAgent/`
+- Data: `/Library/Application Support/TelescopeNet/NodeAgent/`
 
 **Linux (systemd)**
 ```bash
 # One-line install
-curl -sSL https://boundlessskies.org/install.sh | sudo bash --code BS-2026-XXXXXXXX
+curl -sSL https://telescopenet.org/install.sh | sudo bash --code BS-2026-XXXXXXXX
 
 # Or manually
 sudo bash build/linux/install.sh --code BS-2026-XXXXXXXX
 ```
-- Creates `boundlessskies` service user; installs systemd unit; enables at boot
+- Creates `telescopenet` service user; installs systemd unit; enables at boot
 - Masks `sleep.target`, `suspend.target`, `hibernate.target`, `hybrid-sleep.target`
 
 ---
@@ -784,7 +784,7 @@ cloud/ (Flask, port 8800)
 ```yaml
 cloud:
   enabled: true
-  url: https://cloud.boundlessskies.org
+  url: https://cloud.telescopenet.org
   activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
   auto_run_plans: true     # automatically execute observation plans from the cloud
 ```
@@ -866,7 +866,7 @@ observatory:
 ```yaml
 cloud:
   enabled: true
-  url: https://cloud.boundlessskies.org
+  url: https://cloud.telescopenet.org
   activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
   auto_run_plans: true
 ```
@@ -989,5 +989,5 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 
 ---
 
-*Boundless Skies — The night sky belongs to everyone.*
+*The Telescope Net — The night sky belongs to everyone.*
 *Founded 2025.*

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CloudCommunicator — connects this node to the Boundless Skies cloud.
+CloudCommunicator — connects this node to the The Telescope Net cloud.
 
 Reads config["cloud"]:
     cloud:
@@ -88,6 +88,7 @@ class CloudCommunicator:
         # Status surface for the dashboard
         self.status: dict = {
             "registered": bool(self._node_id and self._api_key),
+            "node_id": self._node_id,
             "last_heartbeat_ok": None,
             "last_plan_id": None,
             "plan_items": 0,
@@ -145,6 +146,7 @@ class CloudCommunicator:
         self._api_key = resp["api_key"]
         self._save_state()
         self.status["registered"] = True
+        self.status["node_id"] = self._node_id
         self.status["error"] = None
         logger.info("Registered with cloud as %s", self._node_id)
         return True

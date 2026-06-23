@@ -2,11 +2,11 @@
 ///
 /// The cloud layer runs Flask + SQLite on port 8800 (see cloud/main.py).
 /// Override the base URL at build time with:
-///   flutter run --dart-define=BS_API_BASE=https://api.boundlessskies.org
+///   flutter run --dart-define=BS_API_BASE=https://api.telescopenet.org
 library;
 
 class AppConfig {
-  /// Base URL of the Boundless Skies cloud API (no trailing slash).
+  /// Base URL of the The Telescope Net cloud API (no trailing slash).
   static const String apiBase = String.fromEnvironment(
     'BS_API_BASE',
     defaultValue: 'http://localhost:8800',

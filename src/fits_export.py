@@ -108,11 +108,11 @@ def export_enhanced_fits(
             # ── Processing block ──────────────────────────────────────────────
             node_id  = phot_cfg.get("node_id", "node_unknown")
             now_utc  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            _set_if_absent(hdr, "SWCREATE", f"Boundless Skies Node {node_id}")
+            _set_if_absent(hdr, "SWCREATE", f"The Telescope Net Node {node_id}")
             _set_if_absent(hdr, "DATE-BLD",  now_utc, comment="UTC timestamp of header enrichment")
 
             # HISTORY is always appended (additive, never overwrites)
-            hdr["HISTORY"] = f"Processed by Boundless Skies Node v1 ({node_id})"
+            hdr["HISTORY"] = f"Processed by The Telescope Net Node v1 ({node_id})"
             if result.get("magnitude") is not None:
                 mag = result["magnitude"]
                 err = result.get("uncertainty", 0.0)
