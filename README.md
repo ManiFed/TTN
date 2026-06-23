@@ -1,7 +1,5 @@
 # Boundless Skies — Node Software & Cloud
 
-**The world's first automated telescope network built for people with disabilities.**
-
 Seestar owners donate their telescope's nights. The pipeline schedules observations of
 scientifically valuable targets, processes the data into calibrated photometry, and
 submits it to AAVSO under the contributor's name. Members do real astronomy — no
