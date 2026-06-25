@@ -134,6 +134,14 @@ class ApiClient {
         if (pushToken != null) 'push_token': pushToken,
       });
 
+  /// Active targets sorted by network priority (GET /targets — public).
+  Future<List<Target>> targets() async {
+    final json = await _get('/targets');
+    return ((json['targets'] as List?) ?? [])
+        .map((e) => Target.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Photometric light curve for one target (GET /lightcurves/<name>?days=<n>).
   Future<List<LightCurvePoint>> lightCurve(String targetName,
       {int days = 90}) async {

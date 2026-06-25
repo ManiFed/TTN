@@ -174,6 +174,40 @@ class LightCurvePoint {
       );
 }
 
+/// An active observation target (GET /targets).
+class Target {
+  final String targetId;
+  final String name;
+  final String targetType;
+  final double? mag;
+  final String magBand;
+  final double priority;
+  final double? bestScore;
+  final int nMeasurements;
+
+  const Target({
+    required this.targetId,
+    required this.name,
+    required this.targetType,
+    required this.mag,
+    required this.magBand,
+    required this.priority,
+    required this.bestScore,
+    required this.nMeasurements,
+  });
+
+  factory Target.fromJson(Map<String, dynamic> j) => Target(
+        targetId: _asStr(j['target_id']),
+        name: _asStr(j['name']),
+        targetType: _asStr(j['target_type']),
+        mag: j['mag'] == null ? null : _asDouble(j['mag']),
+        magBand: _asStr(j['mag_band']),
+        priority: _asDouble(j['priority']),
+        bestScore: j['best_score'] == null ? null : _asDouble(j['best_score']),
+        nMeasurements: _asInt(j['n_measurements']),
+      );
+}
+
 /// An in-app notification (GET /me/notifications).
 class AppNotification {
   final int id;

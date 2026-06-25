@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dashboard_tab.dart';
+import 'me_screen.dart';
 import 'nodes_tab.dart';
 import 'notifications_tab.dart';
 import 'observations_tab.dart';
@@ -55,12 +56,26 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.account_circle_outlined, size: 30),
             tooltip: 'Account',
             onSelected: (v) {
-              if (v == 'signout') context.read<AppState>().signOut();
+              if (v == 'me') {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const MeScreen()),
+                );
+              } else if (v == 'signout') {
+                context.read<AppState>().signOut();
+              }
             },
             itemBuilder: (context) => [
               PopupMenuItem<String>(
                 enabled: false,
                 child: Text(name.isEmpty ? 'Signed in' : name),
+              ),
+              const PopupMenuItem<String>(
+                value: 'me',
+                child: ListTile(
+                  leading: Icon(Icons.person_outline),
+                  title: Text('Me'),
+                ),
               ),
               const PopupMenuItem<String>(
                 value: 'signout',
