@@ -1,9 +1,11 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import '../theme.dart';
+import '../widgets/aladin_sky.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -49,13 +51,20 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: BSTheme.night,
+      backgroundColor: kIsWeb ? Colors.transparent : BSTheme.night,
       body: Stack(
         children: [
-          // Subtle radial glow background
+          // Background: Aladin live sky on web, painted glow on native
           Positioned.fill(
-            child: CustomPaint(painter: _NightGlowPainter()),
+            child: kIsWeb
+                ? const AladinSky()
+                : CustomPaint(painter: _NightGlowPainter()),
           ),
+          // Subtle dark veil so the glass panel reads against bright sky regions
+          if (kIsWeb)
+            Positioned.fill(
+              child: Container(color: const Color(0x55000000)),
+            ),
           // Brandmark
           const SafeArea(
             child: Padding(

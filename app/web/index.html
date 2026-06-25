@@ -35,8 +35,21 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&display=swap" rel="stylesheet">
+  <!-- Aladin Lite v3 — loaded eagerly so it's ready when the login screen renders -->
+  <link rel="preconnect" href="https://aladin.cds.unistra.fr" crossorigin />
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8" async></script>
+
   <style>
     body { background: #02030A; margin: 0; }
+    /* Hide all Aladin chrome — only show the sky canvas */
+    .ttn-sky .aladin-logo-container, .ttn-sky .aladin-reticle,
+    .ttn-sky .aladin-fov, .ttn-sky .aladin-location,
+    .ttn-sky .aladin-box, .ttn-sky .aladin-widgets-toolbar,
+    .ttn-sky .aladin-vertical-list, .ttn-sky .aladin-horizontal-list,
+    .ttn-sky .aladin-popup-container, .ttn-sky .aladin-btn,
+    .ttn-sky .aladin-tooltip-container, .ttn-sky .aladin-cooFrame,
+    .ttn-sky .aladin-view-label, .ttn-sky .aladin-color-picker { display: none !important; }
+    .ttn-sky, .ttn-sky canvas { pointer-events: none !important; }
   </style>
 </head>
 <body>
