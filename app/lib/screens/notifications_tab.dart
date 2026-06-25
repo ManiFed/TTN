@@ -92,12 +92,32 @@ class _NotificationCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
-          color: BSTheme.glassBg,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              (unread ? BSTheme.accent : const Color(0xFFA0B9FF))
+                  .withValues(alpha: unread ? 0.12 : 0.06),
+              const Color(0x12A0B9FF),
+              const Color(0x08060E1E),
+            ],
+            stops: const [0.0, 0.45, 1.0],
+          ),
           border: Border.all(
             color: unread
                 ? BSTheme.accent.withValues(alpha: 0.28)
                 : BSTheme.glassBorder,
           ),
+          boxShadow: unread
+              ? [
+                  BoxShadow(
+                    color: BSTheme.accent.withValues(alpha: 0.12),
+                    blurRadius: 22,
+                    spreadRadius: -8,
+                    offset: const Offset(0, 8),
+                  ),
+                ]
+              : null,
         ),
         child: IntrinsicHeight(
           child: Row(

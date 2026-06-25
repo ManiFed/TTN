@@ -87,8 +87,25 @@ class _ObservationCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
-          color: BSTheme.glassBg,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              magColor.withValues(alpha: 0.10),
+              const Color(0x12A0B9FF),
+              const Color(0x08060E1E),
+            ],
+            stops: const [0.0, 0.45, 1.0],
+          ),
           border: Border.all(color: BSTheme.glassBorder),
+          boxShadow: [
+            BoxShadow(
+              color: magColor.withValues(alpha: 0.10),
+              blurRadius: 22,
+              spreadRadius: -8,
+              offset: const Offset(0, 8),
+            ),
+          ],
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
