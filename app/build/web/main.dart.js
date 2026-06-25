@@ -7777,7 +7777,7 @@ a75:function a75(){this.a=null},
 aHx(a,b){var s,r
 if(b==null)s=null
 else{r=t.N
-s=b.nF(b,new A.a6U(),r,r)}return A.jc("https://boundless-skies-cloud.fly.dev/api/v1"+a).a11(0,s)},
+s=b.nF(b,new A.a6U(),r,r)}return A.jc("https://network.boundlessskies.org/api/v1"+a).a11(0,s)},
 a6U:function a6U(){},
 a5X(){var s=0,r=A.M(t.H),q=1,p=[],o,n,m,l,k,j,i,h,g,f
 var $async$a5X=A.N(function(a,b){if(a===1){p.push(b)
