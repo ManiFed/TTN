@@ -50,6 +50,7 @@ _config: dict = {}   # set by create_app()
 
 _WEBSITE_DIR = os.path.join(os.path.dirname(__file__), "..", "website")
 _DASHBOARD_DIR = os.path.join(_WEBSITE_DIR, "dashboard")
+_APP_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "build", "web")
 
 
 def create_app(config: dict) -> Flask:
@@ -75,6 +76,20 @@ def serve_dashboard_asset(filename):
     if os.path.isfile(full):
         return send_from_directory(_DASHBOARD_DIR, filename)
     return send_from_directory(_DASHBOARD_DIR, "index.html")
+
+
+@app.route("/app")
+@app.route("/app/")
+def serve_app():
+    return send_from_directory(_APP_DIR, "index.html")
+
+
+@app.route("/app/<path:filename>")
+def serve_app_asset(filename):
+    full = os.path.join(_APP_DIR, filename)
+    if os.path.isfile(full):
+        return send_from_directory(_APP_DIR, filename)
+    return send_from_directory(_APP_DIR, "index.html")
 
 
 @app.route("/<path:filename>")

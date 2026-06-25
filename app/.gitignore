@@ -13,7 +13,10 @@ ios/
 linux/
 macos/
 windows/
-web/
+
+# web/ source is tracked (manifest, index.html, icons)
+# build/web/ output is tracked so Fly.io can serve it without a build step
+!build/web/
 
 # IDE
 .idea/

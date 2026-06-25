@@ -1,0 +1,35 @@
+{
+    "name": "The Telescope Net",
+    "short_name": "Telescope Net",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#02030A",
+    "theme_color": "#02030A",
+    "description": "The member app for The Telescope Net — the world's first automated telescope network for people with disabilities.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
