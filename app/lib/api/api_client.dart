@@ -122,11 +122,20 @@ class ApiClient {
 
   Future<void> markNotificationRead(int id) => _post('/me/notifications/$id/read', {});
 
-  Future<String> generateActivationCode({String? locationName}) async {
-    final json = await _post('/me/activation-code', {
-      if (locationName != null && locationName.isNotEmpty)
-        'location_name': locationName,
-    });
+  Future<String> generateActivationCode({
+    String? locationName,
+    double? lat,
+    double? lon,
+  }) async {
+    final body = <String, dynamic>{};
+    if (lat != null && lon != null) {
+      body['latitude'] = lat;
+      body['longitude'] = lon;
+    }
+    if (locationName != null && locationName.isNotEmpty) {
+      body['location_name'] = locationName;
+    }
+    final json = await _post('/me/activation-code', body);
     return json['code'] as String;
   }
 

@@ -4472,6 +4472,7 @@ html[data-night] img, html[data-night] video { filter: none; }
       <button id="cfgTab_photometry" class="cfg-tab" onclick="switchCfgTab('photometry')">Photometry</button>
       <button id="cfgTab_aavso"      class="cfg-tab" onclick="switchCfgTab('aavso')">AAVSO</button>
       <button id="cfgTab_safety"     class="cfg-tab" onclick="switchCfgTab('safety')">Safety</button>
+      <button id="cfgTab_cloud"      class="cfg-tab" onclick="switchCfgTab('cloud')">Cloud</button>
       <button id="cfgTab_advanced"   class="cfg-tab" onclick="switchCfgTab('advanced')">Advanced</button>
     </div>
 
@@ -4805,6 +4806,36 @@ html[data-night] img, html[data-night] video { filter: none; }
       </div>
 
       <!-- ADVANCED -->
+      <!-- CLOUD -->
+      <div id="cfgPanel_cloud" class="cfg-panel" style="display:none;">
+        <div id="cfgCloudStatusBar" style="display:none;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:14px;background:var(--glass-bg);border:1px solid var(--border);"></div>
+        <label class="cfg-toggle cfg-toggle-lg">
+          <input type="checkbox" id="cfgCloudEnabled">
+          <span>Connect to The Telescope Net</span>
+          <span class="help-tip" data-tip="Enable the cloud connection. The node will register, receive observation plans, and upload photometry results to the network.">?</span>
+        </label>
+        <div class="cfg-section-hdr">Connection</div>
+        <div class="cfg-field-grid" style="grid-template-columns:1fr;">
+          <div class="inp-group">
+            <div class="inp-label">Cloud URL <span class="help-tip" data-tip="The URL of The Telescope Net cloud server. Leave as the default unless you are running a private instance.">?</span></div>
+            <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://node.boundlessskies.org">
+          </div>
+          <div class="inp-group" id="cfgCloudCodeGroup">
+            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from the Boundless Skies mobile app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
+            <input class="inp" type="text" id="cfgCloudCode" placeholder="BS-2024-XXXXXXXX" style="text-transform:uppercase;letter-spacing:1px;">
+            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from the Boundless Skies app → Telescopes → Connect telescope. After saving and restarting, this field will clear once registered.</div>
+          </div>
+        </div>
+        <div class="cfg-section-hdr">Behavior</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <label class="cfg-toggle">
+            <input type="checkbox" id="cfgCloudAutoRun">
+            <span>Auto-run plans from the cloud</span>
+            <span class="help-tip" data-tip="When a new observation plan arrives from the network, start it automatically. If off, plans are downloaded but must be started manually from the Schedule panel.">?</span>
+          </label>
+        </div>
+      </div>
+
       <div id="cfgPanel_advanced" class="cfg-panel" style="display:none;">
         <div class="cfg-section-hdr">ALPACA Discovery</div>
         <div class="cfg-field-grid">
@@ -6819,7 +6850,7 @@ async function connectTo(host, port, setAsDefault = false, skipPermCheck = false
 let _cfgView      = 'form';
 let _cfgParsed    = {};
 let _cfgActiveTab = 'setup';
-const _CFG_TABS   = ['setup','photometry','aavso','safety','advanced'];
+const _CFG_TABS   = ['setup','photometry','aavso','safety','cloud','advanced'];
 
 function switchCfgTab(tab) {
   _cfgActiveTab = tab;
@@ -6830,6 +6861,31 @@ function switchCfgTab(tab) {
     if (btn)   btn.classList.toggle('active', t === tab);
   });
   if (tab === 'horizon') window.loadSkyMask();
+  if (tab === 'cloud') _loadCloudRegistrationStatus();
+}
+
+async function _loadCloudRegistrationStatus() {
+  const bar = document.getElementById('cfgCloudStatusBar');
+  const codeGroup = document.getElementById('cfgCloudCodeGroup');
+  if (!bar) return;
+  try {
+    const r = await fetch('/api/cloud');
+    if (!r.ok) { bar.style.display = 'none'; return; }
+    const d = await r.json();
+    bar.style.display = '';
+    if (d.registered) {
+      bar.style.borderColor = 'var(--green)';
+      bar.innerHTML = '<span style="color:var(--green-hi)">&#9679; Registered</span>'
+        + ' &mdash; Node ID: <code style="font-size:11px">' + (d.node_id || '') + '</code>'
+        + (d.last_heartbeat_ok ? ' &mdash; <span style="color:var(--green-hi)">heartbeat OK</span>' : '');
+      if (codeGroup) codeGroup.style.display = 'none';
+    } else {
+      bar.style.borderColor = 'var(--warn, #f5a623)';
+      bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Not registered</span>'
+        + ' &mdash; paste your activation code below, save, then restart the node software.';
+      if (codeGroup) codeGroup.style.display = '';
+    }
+  } catch (_) { bar.style.display = 'none'; }
 }
 
 function _cfgGet(obj, path, fallback) {
@@ -6914,6 +6970,10 @@ function renderCfgForm(c) {
   setVal('cfgIwPath',          _cfgGet(c, 'image_watcher.watch_path', '/mnt/seestar'));
   setVal('cfgIwDebounce',      _cfgGet(c, 'image_watcher.debounce_delay', 2.0));
   setVal('cfgLogLevel',        _cfgGet(c, 'logging.level', 'INFO'));
+  setVal('cfgCloudEnabled', _cfgGet(c, 'cloud.enabled',           false));
+  setVal('cfgCloudUrl',     _cfgGet(c, 'cloud.url',               ''));
+  setVal('cfgCloudCode',    _cfgGet(c, 'cloud.activation_code',   ''));
+  setVal('cfgCloudAutoRun', _cfgGet(c, 'cloud.auto_run_plans',    false));
 }
 
 function collectCfgForm() {
@@ -7008,6 +7068,11 @@ function collectCfgForm() {
   set('image_watcher.watch_path',     txt('cfgIwPath'));
   set('image_watcher.debounce_delay', num('cfgIwDebounce'));
   set('logging.level', sel('cfgLogLevel'));
+  set('cloud.enabled',          chk('cfgCloudEnabled'));
+  set('cloud.url',              txt('cfgCloudUrl').trim());
+  const _code = txt('cfgCloudCode').trim().toUpperCase();
+  if (_code) set('cloud.activation_code', _code);
+  set('cloud.auto_run_plans',   chk('cfgCloudAutoRun'));
   return c;
 }
 

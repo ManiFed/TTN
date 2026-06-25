@@ -1,3 +1,6 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -285,7 +288,10 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
   String? _code;
   bool _busy = false;
+  bool _locating = false;
   String? _error;
+  double? _lat;
+  double? _lon;
 
   @override
   void dispose() {
@@ -293,10 +299,40 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     super.dispose();
   }
 
+  Future<void> _detectLocation() async {
+    setState(() { _locating = true; _error = null; });
+    try {
+      final pos = await html.window.navigator.geolocation.getCurrentPosition(
+        enableHighAccuracy: true,
+      );
+      final lat = (pos.coords!.latitude as num).toDouble();
+      final lon = (pos.coords!.longitude as num).toDouble();
+      if (mounted) {
+        setState(() {
+          _lat = lat;
+          _lon = lon;
+          _locating = false;
+          // Pre-fill name field if empty
+          if (_locationCtrl.text.trim().isEmpty) {
+            _locationCtrl.text =
+                '${lat.toStringAsFixed(4)}°, ${lon.toStringAsFixed(4)}°';
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _locating = false;
+          _error = 'Location access denied. Enter a location name instead.';
+        });
+      }
+    }
+  }
+
   Future<void> _generate() async {
     final location = _locationCtrl.text.trim();
-    if (location.isEmpty) {
-      setState(() => _error = 'Enter the telescope\'s location first.');
+    if (_lat == null && location.isEmpty) {
+      setState(() => _error = 'Enter a location or tap the GPS button.');
       return;
     }
     setState(() {
@@ -308,7 +344,11 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       final code = await context
           .read<AppState>()
           .api
-          .generateActivationCode(locationName: location);
+          .generateActivationCode(
+            locationName: location.isEmpty ? null : location,
+            lat: _lat,
+            lon: _lon,
+          );
       if (mounted) {
         setState(() {
           _busy = false;
@@ -354,23 +394,64 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           Text('Connect a telescope', style: tt.headlineSmall),
           const SizedBox(height: 10),
           Text(
-            'Enter the location of the telescope. This is used for scheduling '
-            'and sky conditions — city or observatory name is fine.',
+            'Enter the location of the telescope — used for scheduling and sky '
+            'conditions. Tap the GPS button to detect automatically.',
             style: tt.bodyMedium,
           ),
           const SizedBox(height: 20),
-          TextField(
-            controller: _locationCtrl,
-            enabled: !_busy && _code == null,
-            decoration: const InputDecoration(
-              labelText: 'Location',
-              hintText: 'e.g. Starfront Observatories, Rockwood TX',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.location_on_outlined),
-            ),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _generate(),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _locationCtrl,
+                  enabled: !_busy && _code == null,
+                  decoration: InputDecoration(
+                    labelText: 'Location',
+                    hintText: 'e.g. Starfront Observatories, Rockwood TX',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.location_on_outlined),
+                    suffixIcon: _lat != null
+                        ? const Tooltip(
+                            message: 'GPS coordinates detected',
+                            child: Icon(Icons.gps_fixed,
+                                color: Colors.green, size: 18),
+                          )
+                        : null,
+                  ),
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _generate(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: 'Detect my location',
+                child: FilledButton.tonal(
+                  onPressed: (_busy || _code != null || _locating)
+                      ? null
+                      : _detectLocation,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(48, 56),
+                    padding: EdgeInsets.zero,
+                  ),
+                  child: _locating
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location),
+                ),
+              ),
+            ],
           ),
+          if (_lat != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              'GPS: ${_lat!.toStringAsFixed(5)}°, ${_lon!.toStringAsFixed(5)}°',
+              style: const TextStyle(fontSize: 11, color: Colors.green),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -388,9 +469,18 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             )
           else ...[
             Text(
-              'During node setup, enter this code when prompted. '
-              'The telescope will appear here automatically once registered.',
+              'Enter this code in the node software to activate your telescope:',
               style: tt.bodySmall,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '1. On the node computer, open a browser to http://localhost:5173\n'
+              '2. Go to Settings → Cloud tab\n'
+              '3. Paste the code and save — the telescope will appear here.',
+              style: tt.bodySmall?.copyWith(
+                fontFamily: 'monospace',
+                height: 1.6,
+              ),
             ),
             const SizedBox(height: 16),
             Container(

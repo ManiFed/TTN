@@ -784,9 +784,17 @@ def api_me_generate_activation_code(user):
     """
     body = request.get_json(force=True, silent=True) or {}
     location_name = str(body.get("location_name") or "").strip()
+    body_lat = body.get("latitude")
+    body_lon = body.get("longitude")
 
     lat, lon = None, None
-    if location_name:
+    if body_lat is not None and body_lon is not None:
+        try:
+            lat = float(body_lat)
+            lon = float(body_lon)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid latitude or longitude."}), 400
+    elif location_name:
         lat, lon = _geocode_location(location_name)
         if lat is None:
             return jsonify({"error": f"Could not find location: {location_name}"}), 400
