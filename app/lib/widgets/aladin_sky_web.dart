@@ -80,7 +80,7 @@ String _initScript(int id) => '''
       aladin.gotoRaDec(ra, dec);
       // Slow parallax drift — ~0.1 deg/sec along RA
       setInterval(function() {
-        ra += 0.01;
+        ra += 0.05;
         if (ra >= 360) ra -= 360;
         aladin.gotoRaDec(ra, dec);
       }, 100);
