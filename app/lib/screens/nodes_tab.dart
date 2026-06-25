@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
@@ -118,7 +119,8 @@ class _NodeCard extends StatelessWidget {
   }
 }
 
-/// Bottom sheet to claim a node by its node ID + API key (printed at install).
+/// Bottom sheet that generates a one-time activation code the member types
+/// into the node installer to link the telescope to their account.
 class _ClaimSheet extends StatefulWidget {
   const _ClaimSheet();
 
@@ -127,101 +129,117 @@ class _ClaimSheet extends StatefulWidget {
 }
 
 class _ClaimSheetState extends State<_ClaimSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final _nodeId = TextEditingController();
-  final _apiKey = TextEditingController();
+  String? _code;
   bool _busy = false;
   String? _error;
 
   @override
-  void dispose() {
-    _nodeId.dispose();
-    _apiKey.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _generate();
   }
 
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _generate() async {
     setState(() {
       _busy = true;
       _error = null;
+      _code = null;
     });
     try {
-      await context.read<AppState>().api.claimNode(
-            _nodeId.text.trim(),
-            _apiKey.text.trim(),
-          );
-      if (mounted) Navigator.of(context).pop(true);
+      final code = await context.read<AppState>().api.generateActivationCode();
+      if (mounted) setState(() { _busy = false; _code = code; });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = '$e';
-        });
-      }
+      if (mounted) setState(() { _busy = false; _error = '$e'; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
     return Padding(
       padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 24,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        left: 24,
+        right: 24,
+        top: 28,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 28,
       ),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Connect a telescope',
-                style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Connect a telescope', style: tt.headlineSmall),
+          const SizedBox(height: 10),
+          Text(
+            'During node setup, enter this code when prompted. '
+            'The telescope will appear here automatically once registered.',
+            style: tt.bodyMedium,
+          ),
+          const SizedBox(height: 24),
+
+          if (_busy)
+            const Center(child: CircularProgressIndicator())
+          else if (_error != null) ...[
+            Text(_error!, style: TextStyle(color: BSTheme.danger)),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _generate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try again'),
+            ),
+          ] else if (_code != null) ...[
+            // Code display
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _code!,
+                      style: tt.headlineMedium?.copyWith(
+                        fontFamily: 'monospace',
+                        letterSpacing: 2,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Copy',
+                    icon: const Icon(Icons.copy_outlined),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: _code!));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Code copied')),
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             Text(
-              'Enter the Node ID and key shown when the telescope was set up.',
-              style: Theme.of(context).textTheme.bodyMedium,
+              'Valid for 30 days. Once the node registers, '
+              'pull to refresh the telescope list.',
+              style: tt.bodySmall,
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
-            TextFormField(
-              controller: _nodeId,
-              decoration: const InputDecoration(
-                labelText: 'Node ID',
-                prefixIcon: Icon(Icons.tag),
-              ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Required' : null,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _apiKey,
-              decoration: const InputDecoration(
-                labelText: 'API key',
-                prefixIcon: Icon(Icons.key),
-              ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Required' : null,
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: BSTheme.danger)),
-            ],
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _busy ? null : _submit,
-              child: _busy
-                  ? const SizedBox(
-                      height: 22,
-                      width: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2.5),
-                    )
-                  : const Text('Connect'),
+            OutlinedButton.icon(
+              onPressed: _generate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Generate new code'),
             ),
           ],
-        ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }
+
 }
