@@ -43,6 +43,7 @@ TYPE_PRIORITY = {
     "GRB":     0.90,
     "CV":      0.80,   # cataclysmic variables / novae in outburst
     "NOVA":    0.90,
+    "EXOPLANET": 0.85, # transit window — time-critical, publishable
     "YSO":     0.55,
     "AGN":     0.50,
     "EB":      0.55,   # eclipsing binaries
@@ -53,7 +54,9 @@ TYPE_PRIORITY = {
 # How often each class benefits from re-observation
 TYPE_CADENCE_HOURS = {
     "SN": 24.0, "TDE": 24.0, "GRB": 2.0, "NOVA": 12.0,
-    "CV": 12.0, "EB": 4.0, "VAR": 48.0, "AGN": 72.0, "unknown": 48.0,
+    "CV": 12.0, "EB": 4.0, "VAR": 48.0, "AGN": 72.0,
+    "EXOPLANET": 0.0,  # cadence driven by ephemeris, not a fixed interval
+    "unknown": 48.0,
 }
 
 
@@ -374,6 +377,98 @@ def fetch_aavso(cfg: dict) -> list:
     return out
 
 
+def _upsert_ephemeris(target_id: str, period_days: float, epoch_bjd: float,
+                      duration_hours: float, depth_ppt: float) -> None:
+    db.execute(
+        """INSERT INTO transit_ephemerides
+               (target_id, period_days, epoch_bjd, duration_hours, depth_ppt, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s)
+           ON CONFLICT (target_id) DO UPDATE SET
+               period_days    = EXCLUDED.period_days,
+               epoch_bjd      = EXCLUDED.epoch_bjd,
+               duration_hours = EXCLUDED.duration_hours,
+               depth_ppt      = EXCLUDED.depth_ppt,
+               updated_at     = EXCLUDED.updated_at""",
+        (target_id, period_days, epoch_bjd, duration_hours, depth_ppt, _now()),
+    )
+
+
+def fetch_tess(cfg: dict) -> list:
+    """
+    Confirmed transiting exoplanets from the NASA Exoplanet Archive (no auth).
+
+    Filters: 4 < V < 12, transit depth > 5 ppt, duration < 4 h.
+    Stores transit ephemerides in the transit_ephemerides table after upsert.
+    """
+    mag_limit = float(cfg.get("mag_limit", 12.0))
+    min_depth_ppt = float(cfg.get("min_depth_ppt", 5.0))
+    max_duration_h = float(cfg.get("max_duration_hours", 4.0))
+
+    query = (
+        "SELECT pl_name,ra,dec,sy_vmag,pl_orbper,pl_tranmid,pl_trandur,pl_trandep "
+        "FROM ps "
+        "WHERE tran_flag=1 "
+        "AND pl_orbper IS NOT NULL AND pl_trandur IS NOT NULL "
+        "AND pl_tranmid IS NOT NULL "
+        f"AND sy_vmag IS NOT NULL AND sy_vmag BETWEEN 4 AND {mag_limit}"
+    )
+    try:
+        rows = _http_get_json(
+            "https://exoplanetarchive.ipac.caltech.edu/TAP/sync",
+            params={"query": query, "format": "json"},
+            timeout=45,
+        )
+    except Exception as exc:
+        logger.warning("TESS fetch failed: %s", exc)
+        return []
+
+    if not isinstance(rows, list):
+        logger.warning("TESS: unexpected response type %s", type(rows))
+        return []
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        name = (row.get("pl_name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        try:
+            ra = float(row["ra"])
+            dec = float(row["dec"])
+            vmag = float(row["sy_vmag"])
+            period = float(row["pl_orbper"])
+            epoch_bjd = float(row["pl_tranmid"])
+            dur_h = float(row["pl_trandur"])
+            depth_ppt = float(row.get("pl_trandep") or 0) * 1000  # ppm → ppt
+        except (TypeError, ValueError, KeyError):
+            continue
+
+        if depth_ppt < min_depth_ppt or dur_h > max_duration_h or period <= 0:
+            continue
+
+        out.append({
+            "name": name,
+            "ra_deg": ra,
+            "dec_deg": dec,
+            "mag": vmag,
+            "mag_band": "V",
+            "target_type": "EXOPLANET",
+            "time_critical": True,
+            "source": "tess",
+            "_ephemeris": {
+                "period_days": period,
+                "epoch_bjd": epoch_bjd,
+                "duration_hours": dur_h,
+                "depth_ppt": depth_ppt,
+            },
+        })
+
+    logger.info("TESS: fetched %d transiting exoplanets", len(out))
+    return out
+
+
 _FETCHERS: dict[str, Callable[[dict], list]] = {
     "alerce": fetch_alerce,
     "gaia":   fetch_gaia,
@@ -381,6 +476,7 @@ _FETCHERS: dict[str, Callable[[dict], list]] = {
     "atlas":  fetch_atlas,
     "asassn": fetch_asassn,
     "aavso":  fetch_aavso,
+    "tess":   fetch_tess,
 }
 
 
@@ -419,10 +515,10 @@ def _store(candidate: dict) -> bool:
     cadence = TYPE_CADENCE_HOURS.get(ttype, 48.0)
 
     if existing:
+        used_tid = existing["target_id"]
         sources = db.loads(existing["sources"], [])
         if source not in sources:
             sources.append(source)
-        # Keep the most specific classification and the freshest magnitude
         new_type = existing["target_type"]
         if new_type in ("unknown", "VAR") and ttype not in ("unknown",):
             new_type = ttype
@@ -436,23 +532,34 @@ def _store(candidate: dict) -> bool:
             (candidate.get("mag"), candidate.get("mag"), candidate.get("mag_band"),
              new_type, TYPE_PRIORITY.get(new_type, 0.4),
              1 if candidate.get("time_critical") else 0,
-             json.dumps(sources), _now(), existing["target_id"]),
+             json.dumps(sources), _now(), used_tid),
         )
-        return False
+        new_row = False
+    else:
+        used_tid = _target_id_for(name)
+        db.execute(
+            """INSERT INTO targets
+                   (target_id, name, ra_deg, dec_deg, mag, mag_band, target_type,
+                    priority, time_critical, cadence_hours, sources,
+                    discovered_at, last_updated, active)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+               ON CONFLICT DO NOTHING""",
+            (used_tid, name, candidate["ra_deg"], candidate["dec_deg"],
+             candidate.get("mag"), candidate.get("mag_band", ""),
+             ttype, priority, 1 if candidate.get("time_critical") else 0,
+             cadence, json.dumps([source]), _now(), _now()),
+        )
+        new_row = True
 
-    db.execute(
-        """INSERT INTO targets
-               (target_id, name, ra_deg, dec_deg, mag, mag_band, target_type,
-                priority, time_critical, cadence_hours, sources,
-                discovered_at, last_updated, active)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
-           ON CONFLICT DO NOTHING""",
-        (_target_id_for(name), name, candidate["ra_deg"], candidate["dec_deg"],
-         candidate.get("mag"), candidate.get("mag_band", ""),
-         ttype, priority, 1 if candidate.get("time_critical") else 0,
-         cadence, json.dumps([source]), _now(), _now()),
-    )
-    return True
+    eph = candidate.get("_ephemeris")
+    if eph:
+        _upsert_ephemeris(
+            used_tid,
+            eph["period_days"], eph["epoch_bjd"],
+            eph["duration_hours"], eph["depth_ppt"],
+        )
+
+    return new_row
 
 
 def ingest_all(config: dict) -> dict:

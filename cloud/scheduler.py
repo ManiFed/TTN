@@ -28,6 +28,7 @@ from typing import Optional
 
 from cloud import db, registry
 from cloud.conditions import altitude_curve, night_window
+from cloud.transit_windows import get_tonight_transits
 from src.shared_models import ObservationPlan, PlanItem
 
 logger = logging.getLogger("cloud.scheduler")
@@ -99,9 +100,64 @@ def generate_plan(node: dict, config: dict) -> Optional[ObservationPlan]:
     utc_offset = timedelta(hours=float(node.get("utc_offset_hours", 0.0)))
 
     items: list[PlanItem] = []
+
+    # ── Phase 1: lock in transit windows ──────────────────────────────────────
+    try:
+        transit_windows = get_tonight_transits(
+            t0, t1,
+            lat_deg=node["latitude"],
+            lon_deg=node["longitude"],
+            min_alt_deg=min_alt,
+        )
+    except Exception as exc:
+        logger.warning("Transit window lookup failed: %s", exc)
+        transit_windows = []
+
+    for tw in transit_windows:
+        if len(items) >= max_targets:
+            break
+        obs_min = (tw.obs_end_utc - tw.obs_start_utc).total_seconds() / 60
+        need = max(1, math.ceil(obs_min / STEP_MIN))
+        start_offset = (tw.obs_start_utc - t0).total_seconds() / 60
+        s0 = max(0, int(start_offset / STEP_MIN))
+        if s0 + need > n_slots:
+            continue
+        if not all(free[s0:s0 + need]):
+            continue  # another transit already claimed these slots
+
+        for s in range(s0, s0 + need):
+            free[s] = False
+
+        # Transit photometry: short exposures, continuous, ~30s cadence
+        exp_dur = min(float(node.get("max_exposure_s", 30.0)), 30.0)
+        exp_count = max(10, int(obs_min * 60 / exp_dur))
+        start_local = tw.obs_start_utc + utc_offset
+        items.append(PlanItem(
+            target=tw.name,
+            ra=round(tw.ra_deg / 15.0, 4),
+            dec=round(tw.dec_deg, 4),
+            expDur=exp_dur,
+            expCount=exp_count,
+            binning=1,
+            startTime=start_local.strftime("%H:%M"),
+            target_id=tw.target_id,
+            score=0.85,
+            filter=(node.get("filters") or "CV").split(",")[0].strip(),
+            notes=(f"type=EXOPLANET mag={tw.mag:.1f} "
+                   f"depth={tw.depth_ppt:.1f}ppt "
+                   f"dur={tw.duration_hours:.2f}h "
+                   f"mid={tw.t_mid_utc.strftime('%H:%M')}UTC"),
+        ))
+        logger.info("Transit locked: %s  mid=%s  window=%.0f min",
+                    tw.name, tw.t_mid_utc.strftime("%H:%M"), obs_min)
+
+    # ── Phase 2: greedily pack remaining slots with scored targets ─────────────
+    scored_ids = {item.target_id for item in items}
     for row in rows:
         if len(items) >= max_targets:
             break
+        if row["target_id"] in scored_ids:
+            continue
 
         exp_dur, exp_count = choose_exposure(row["mag"], node)
         duration_min = exp_dur * exp_count / 60.0 + SLEW_OVERHEAD_MIN
@@ -109,14 +165,11 @@ def generate_plan(node: dict, config: dict) -> Optional[ObservationPlan]:
         if need > n_slots:
             continue
 
-        # Altitude per slot for this target
         curve = altitude_curve(row["ra_deg"], row["dec_deg"],
                                node["latitude"], node["longitude"],
                                t0, t1, step_min=STEP_MIN)
         alts = [a for _, a in curve]
 
-        # Candidate start slots where the whole observation stays above min_alt
-        # and every slot is free; prefer the one with highest mean altitude.
         best_start, best_mean = None, -1.0
         for s in range(0, n_slots - need + 1):
             window = alts[s:s + need]
@@ -138,7 +191,7 @@ def generate_plan(node: dict, config: dict) -> Optional[ObservationPlan]:
         comp = db.loads(row["components"], {})
         items.append(PlanItem(
             target=row["name"],
-            ra=round(row["ra_deg"] / 15.0, 4),     # node wants decimal hours
+            ra=round(row["ra_deg"] / 15.0, 4),
             dec=round(row["dec_deg"], 4),
             expDur=exp_dur,
             expCount=exp_count,

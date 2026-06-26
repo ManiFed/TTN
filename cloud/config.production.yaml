@@ -40,6 +40,11 @@ alerts:
     enabled: true
     default_watchlist: true
     vsx_names: []
+  tess:
+    enabled: true
+    mag_limit: 12.0
+    min_depth_ppt: 5.0
+    max_duration_hours: 4.0
 
 scoring:
   weights:

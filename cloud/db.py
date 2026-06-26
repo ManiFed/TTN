@@ -303,6 +303,16 @@ _SCHEMA: list[str] = [
     )
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email)",
+    """
+    CREATE TABLE IF NOT EXISTS transit_ephemerides (
+        target_id      TEXT PRIMARY KEY,
+        period_days    DOUBLE PRECISION NOT NULL,
+        epoch_bjd      DOUBLE PRECISION NOT NULL,
+        duration_hours DOUBLE PRECISION NOT NULL,
+        depth_ppt      DOUBLE PRECISION DEFAULT 0,
+        updated_at     TEXT NOT NULL
+    )
+    """,
 ]
 
 # Seed statements run once after schema creation (idempotent via ON CONFLICT DO NOTHING).

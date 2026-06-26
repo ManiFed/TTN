@@ -41,6 +41,11 @@ alerts:
     enabled: true
     default_watchlist: true
     vsx_names: []          # extra VSX identifiers to keep on the programme
+  tess:
+    enabled: true
+    mag_limit: 12.0         # host-star V mag; Seestar S50 needs V < 12 for photometry
+    min_depth_ppt: 5.0      # minimum transit depth in ppt (5 ppt = 5 mmag)
+    max_duration_hours: 4.0 # skip transits longer than 4 h (don't fit one night)
 
 scoring:
   weights:                 # relative importance of composite components
