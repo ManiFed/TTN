@@ -277,8 +277,8 @@ class _StatusDotState extends State<_StatusDot>
 
 // ── Claim sheet ───────────────────────────────────────────────────────────────
 
-/// Bottom sheet that generates a one-time activation code the member types
-/// into the node installer to link the telescope to their account.
+/// Bottom sheet that connects a telescope node to the member's account.
+/// Flow: enter location → generate code → enter pairing token → push to node.
 class _ClaimSheet extends StatefulWidget {
   const _ClaimSheet();
 
@@ -290,6 +290,7 @@ enum _LocStep { idle, geocoding, confirming, confirmed }
 
 class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
+  final _pairCtrl = TextEditingController();
   String? _code;
   bool _busy = false;
   bool _locating = false;
@@ -297,6 +298,8 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   double? _lat;
   double? _lon;
   String? _resolvedLocation;
+  bool _pushed = false;
+  bool _pushing = false;
   _LocStep _step = _LocStep.idle;
 
   @override
@@ -308,6 +311,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   @override
   void dispose() {
     _locationCtrl.dispose();
+    _pairCtrl.dispose();
     super.dispose();
   }
 
@@ -676,74 +680,86 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
   }
 
+  Future<void> _pushToTelescope() async {
+    final token = _pairCtrl.text.trim().toUpperCase();
+    if (token.isEmpty) {
+      setState(() => _error = 'Enter the pairing token shown in the terminal.');
+      return;
+    }
+    setState(() { _pushing = true; _error = null; });
+    try {
+      await context.read<AppState>().api.pushActivationCode(token, _code!);
+      if (mounted) setState(() { _pushed = true; _pushing = false; });
+    } catch (e) {
+      if (mounted) setState(() { _pushing = false; _error = '$e'; });
+    }
+  }
+
   List<Widget> _buildCodeSection(TextTheme tt, BuildContext context) {
+    if (_pushed) {
+      return [
+        const Icon(Icons.check_circle_outline, color: Colors.green, size: 48),
+        const SizedBox(height: 16),
+        Text('Telescope connected!', style: tt.titleLarge),
+        const SizedBox(height: 8),
+        Text(
+          'The node software will register within 30 seconds. '
+          'Pull to refresh the telescope list.',
+          style: tt.bodyMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ];
+    }
+
     return [
-      Text(
-        'Enter this code in the node software to activate your telescope:',
-        style: tt.bodySmall,
-      ),
-      const SizedBox(height: 6),
-      Text(
-        '1. On the telescope computer, make sure the node software is running\n'
-        '2. Open a browser on that computer to http://localhost:5173\n'
-        '3. Go to Settings → Cloud tab\n'
-        '4. Paste the code and save — the telescope will appear here.',
-        style: tt.bodySmall?.copyWith(
-          fontFamily: 'monospace',
-          height: 1.6,
-        ),
-      ),
-      const SizedBox(height: 16),
-      Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _code!,
-                style: tt.headlineMedium?.copyWith(
-                  fontFamily: 'monospace',
-                  letterSpacing: 2,
-                  fontWeight: FontWeight.w700,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            IconButton(
-              tooltip: 'Copy',
-              icon: const Icon(Icons.copy_outlined),
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: _code!));
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Code copied')),
-                  );
-                }
-              },
-            ),
-          ],
-        ),
-      ),
+      Text('Enter the pairing token', style: tt.titleMedium),
       const SizedBox(height: 8),
       Text(
-        'Valid for 30 days. Once the node registers, '
-        'pull to refresh the telescope list.',
-        style: tt.bodySmall,
-        textAlign: TextAlign.center,
+        'Look at the terminal window where the node software is running. '
+        'You\'ll see a pairing token like NOVA-4827.',
+        style: tt.bodyMedium,
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 20),
+      TextField(
+        controller: _pairCtrl,
+        autofocus: true,
+        textCapitalization: TextCapitalization.characters,
+        decoration: const InputDecoration(
+          labelText: 'Pairing token',
+          hintText: 'e.g. NOVA-4827',
+          border: OutlineInputBorder(),
+          prefixIcon: Icon(Icons.link_outlined),
+        ),
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _pushToTelescope(),
+        onChanged: (_) => setState(() {}),
+      ),
+      const SizedBox(height: 16),
+      if (_pushing)
+        const Center(child: CircularProgressIndicator())
+      else
+        FilledButton.icon(
+          onPressed: _pairCtrl.text.trim().isEmpty ? null : _pushToTelescope,
+          icon: const Icon(Icons.send_outlined, size: 18),
+          label: const Text('Connect telescope'),
+        ),
+      const SizedBox(height: 16),
       OutlinedButton.icon(
         onPressed: () => setState(() {
           _code = null;
           _error = null;
+          _pushed = false;
+          _pushing = false;
+          _pairCtrl.clear();
           _resetLocation();
           _locationCtrl.clear();
         }),
-        icon: const Icon(Icons.refresh),
+        icon: const Icon(Icons.arrow_back, size: 16),
         label: const Text('Start over'),
       ),
     ];

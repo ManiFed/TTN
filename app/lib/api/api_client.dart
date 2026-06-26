@@ -139,6 +139,12 @@ class ApiClient {
     return json['code'] as String;
   }
 
+  Future<void> pushActivationCode(String pairingToken, String activationCode) =>
+      _post('/nodes/pair', {
+        'pairing_token': pairingToken.trim().toUpperCase(),
+        'activation_code': activationCode.trim().toUpperCase(),
+      });
+
   Future<void> setNotificationPrefs({bool? email, bool? push, String? pushToken}) =>
       _put('/me/notifications/prefs', {
         if (email != null) 'notification_email': email,

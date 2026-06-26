@@ -212,6 +212,53 @@ def _validate_and_consume_code(code: str, node_id: str) -> str | None:
     return row["user_id"]  # may be None
 
 
+# ── Pairing store (in-memory, TTL 30 min) ────────────────────────────────────
+import time as _time
+import threading as _threading
+
+_pair_store: dict = {}
+_pair_lock = _threading.Lock()
+
+def _pair_gc() -> None:
+    now = _time.time()
+    with _pair_lock:
+        stale = [k for k, v in _pair_store.items() if v["expires_at"] < now]
+        for k in stale:
+            del _pair_store[k]
+
+@app.route("/api/v1/nodes/pair", methods=["POST"])
+@auth.require_member
+def api_pair_submit(user):
+    """App submits {pairing_token, activation_code} to push a code to a node."""
+    body = request.get_json(force=True, silent=True) or {}
+    token = str(body.get("pairing_token") or "").strip().upper()
+    code  = str(body.get("activation_code") or "").strip().upper()
+    if not token or not code:
+        return jsonify({"error": "pairing_token and activation_code required"}), 400
+    row = db.query_one("SELECT used_at FROM activation_codes WHERE code = %s", (code,))
+    if not row:
+        return jsonify({"error": "activation code not found"}), 404
+    if row.get("used_at"):
+        return jsonify({"error": "activation code already used"}), 409
+    _pair_gc()
+    with _pair_lock:
+        _pair_store[token] = {"code": code, "expires_at": _time.time() + 1800}
+    logger.info("Pairing stored for token %s by member %s", token, user["user_id"])
+    return jsonify({"ok": True})
+
+@app.route("/api/v1/nodes/pair/<token>", methods=["GET"])
+def api_pair_claim(token):
+    """Node polls this to receive its activation code. Consumes the entry."""
+    token = token.strip().upper()
+    _pair_gc()
+    with _pair_lock:
+        entry = _pair_store.pop(token, None)
+    if not entry:
+        return jsonify({"code": None})
+    logger.info("Pairing claimed for token %s", token)
+    return jsonify({"code": entry["code"]})
+
+
 @app.route("/api/v1/nodes/register", methods=["POST"])
 def api_register():
     info = request.get_json(force=True, silent=True) or {}

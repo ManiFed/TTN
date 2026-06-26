@@ -29,12 +29,23 @@ node behaves exactly as before.
 
 import json
 import logging
+import random
 import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
 
 from src.shared_models import expand_env
+
+_PAIR_WORDS = [
+    "NOVA","STAR","MOON","LENS","DOME","VEGA","LYRA","ORYX","CRAB","HALO",
+    "FLUX","APEX","IRIS","MIRA","ARGO","ZETA","ARCH","BODE","COMA","DUSK",
+]
+
+def _make_pair_token() -> str:
+    word = random.choice(_PAIR_WORDS)
+    digits = random.randint(1000, 9999)
+    return f"{word}-{digits}"
 
 logger = logging.getLogger("cloud_communicator")
 
@@ -78,6 +89,7 @@ class CloudCommunicator:
         # that resolves from the environment.  An unset var expands to "" so the
         # node falls through to auto-registration as if no key were configured.
         self._api_key = str(expand_env(cloud_cfg.get("api_key", "")) or "")
+        self._pair_token: str = ""
         self._load_state()
 
         self._stop = threading.Event()
@@ -89,6 +101,7 @@ class CloudCommunicator:
         self.status: dict = {
             "registered": bool(self._node_id and self._api_key),
             "node_id": self._node_id,
+            "pair_token": self._pair_token,
             "last_heartbeat_ok": None,
             "last_plan_id": None,
             "plan_items": 0,
@@ -102,12 +115,27 @@ class CloudCommunicator:
         if not self._url:
             logger.error("cloud.url not configured — communicator not started")
             return
-        for name, target in (("cloud-heartbeat", self._heartbeat_loop),
-                             ("cloud-plan", self._plan_loop)):
+        loops = [("cloud-heartbeat", self._heartbeat_loop),
+                 ("cloud-plan", self._plan_loop)]
+        if not (self._node_id and self._api_key):
+            loops.append(("cloud-pair", self._pair_loop))
+        for name, target in loops:
             t = threading.Thread(target=target, daemon=True, name=name)
             t.start()
             self._threads.append(t)
         logger.info("Cloud communicator started → %s", self._url)
+        if not (self._node_id and self._api_key) and self._pair_token:
+            print(
+                f"\n  ┌─────────────────────────────────────────────┐\n"
+                f"  │  Telescope not yet connected to Boundless   │\n"
+                f"  │  Skies. Open the app and enter:             │\n"
+                f"  │                                             │\n"
+                f"  │      Pairing token:  {self._pair_token:<8}            │\n"
+                f"  │                                             │\n"
+                f"  │  App → Telescopes → Connect telescope       │\n"
+                f"  └─────────────────────────────────────────────┘\n",
+                flush=True,
+            )
 
     def stop(self) -> None:
         self._stop.set()
@@ -154,20 +182,24 @@ class CloudCommunicator:
     def _load_state(self) -> None:
         """Credentials persisted from a previous auto-registration win over
         blank config values, never over explicit ones."""
-        if self._node_id and self._api_key:
-            return
         try:
             state = json.loads(_STATE_FILE.read_text())
-            self._node_id = state.get("node_id", "")
-            self._api_key = state.get("api_key", "")
+            if not (self._node_id and self._api_key):
+                self._node_id = state.get("node_id", "")
+                self._api_key = state.get("api_key", "")
+            self._pair_token = state.get("pair_token", "")
         except (OSError, ValueError):
             pass
+        if not self._pair_token:
+            self._pair_token = _make_pair_token()
+            self._save_state()
 
     def _save_state(self) -> None:
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
             _STATE_FILE.write_text(json.dumps(
-                {"node_id": self._node_id, "api_key": self._api_key}, indent=2))
+                {"node_id": self._node_id, "api_key": self._api_key,
+                 "pair_token": self._pair_token}, indent=2))
         except OSError as exc:
             logger.warning("Could not persist cloud credentials: %s", exc)
 
@@ -215,6 +247,51 @@ class CloudCommunicator:
                 else:
                     self._flush_queue()
             self._stop.wait(self._heartbeat_s)
+
+    # ── Pairing loop (pre-registration only) ──────────────────────────────────
+
+    def _pair_loop(self) -> None:
+        """Poll the cloud for an activation code submitted by the app."""
+        while not self._stop.is_set():
+            if self._node_id and self._api_key:
+                break  # already registered — exit this loop
+            try:
+                import requests
+                resp = requests.get(
+                    self._url + f"/api/v1/nodes/pair/{self._pair_token}",
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    code = resp.json().get("code")
+                    if code:
+                        self._apply_paired_code(code)
+                        break
+            except Exception as exc:
+                logger.debug("Pair poll failed: %s", exc)
+            self._stop.wait(30)
+
+    def _apply_paired_code(self, code: str) -> None:
+        """Save the activation code to config and trigger immediate registration."""
+        import yaml
+        cfg_path = Path("config.yaml")
+        try:
+            cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        except Exception:
+            cfg = {}
+        if "cloud" not in cfg or not isinstance(cfg["cloud"], dict):
+            cfg["cloud"] = {}
+        cfg["cloud"]["activation_code"] = code
+        cfg["cloud"]["enabled"] = True
+        if not cfg["cloud"].get("url"):
+            cfg["cloud"]["url"] = self._url
+        try:
+            cfg_path.write_text(yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+            logger.info("Activation code received via pairing and saved to config.yaml")
+            self._config.setdefault("cloud", {})["activation_code"] = code
+            self._config["cloud"]["enabled"] = True
+        except Exception as exc:
+            logger.warning("Could not write activation code to config: %s", exc)
+        self._ensure_registered()
 
     # ── Plan / interrupt polling ───────────────────────────────────────────────
 

@@ -4455,6 +4455,35 @@ html[data-night] img, html[data-night] video { filter: none; }
   </div>
 </div>
 
+<!-- Welcome / activation modal -->
+<div class="modal hidden" id="welcomeModal">
+  <div class="modal-content" style="max-width:420px;width:90%;padding:36px 32px 28px;text-align:center;">
+    <div style="font-size:48px;margin-bottom:12px;">🌌</div>
+    <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;margin-bottom:8px;">Connect to Boundless Skies</div>
+    <div style="font-size:13px;color:var(--dim);margin-bottom:28px;line-height:1.5;">
+      Paste the activation code from the Boundless Skies app to link this telescope to the network.
+      <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
+    </div>
+    <input id="welcomeCodeInput" class="inp" type="text"
+      placeholder="BS-2024-XXXXXXXX"
+      autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+      style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase;width:100%;box-sizing:border-box;margin-bottom:14px;"
+      oninput="this.value=this.value.toUpperCase()"
+      onkeydown="if(event.key==='Enter')submitActivationCode()">
+    <div id="welcomeErr" style="font-size:12px;color:var(--red,#e05252);min-height:18px;margin-bottom:10px;"></div>
+    <button class="btn btn-green" id="btnWelcomeConnect"
+      onclick="submitActivationCode()"
+      style="width:100%;font-size:14px;padding:11px 0;letter-spacing:1px;">
+      Connect
+    </button>
+    <div style="margin-top:18px;">
+      <button onclick="closeWelcomeModal()" style="background:none;border:none;color:var(--dim);font-size:11px;cursor:pointer;text-decoration:underline;">
+        Skip for now
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Config editor modal -->
 <div class="modal hidden cfg-modal" id="cfgModal" onclick="if(event.target===this)closeConfigModal()">
   <div class="modal-content" style="max-width:780px;width:95%;max-height:90vh;height:90vh;">
@@ -8370,6 +8399,79 @@ setInterval(async () => {
     document.addEventListener("mouseup", onUp);
   });
 })();
+
+// ── First-run activation modal ────────────────────────────────────────────────
+
+function closeWelcomeModal() {
+  document.getElementById('welcomeModal').classList.add('hidden');
+}
+
+async function _checkFirstRun() {
+  try {
+    const [cfgR, cloudR] = await Promise.all([
+      fetch('/api/config/parsed'),
+      fetch('/api/cloud').catch(() => null),
+    ]);
+    if (!cfgR.ok) return;
+    const cfg = await cfgR.json();
+    const cloudCfg = cfg.cloud || {};
+    // Already have a code saved or already registered → don't show
+    if (cloudCfg.activation_code) return;
+    if (cloudR && cloudR.ok) {
+      const cs = await cloudR.json();
+      if (cs.registered) return;
+    }
+    document.getElementById('welcomeModal').classList.remove('hidden');
+    setTimeout(() => document.getElementById('welcomeCodeInput').focus(), 80);
+  } catch (_) {}
+}
+
+async function submitActivationCode() {
+  const input  = document.getElementById('welcomeCodeInput');
+  const errEl  = document.getElementById('welcomeErr');
+  const btn    = document.getElementById('btnWelcomeConnect');
+  const code   = input.value.trim().toUpperCase();
+  errEl.textContent = '';
+  if (!code) { errEl.textContent = 'Please enter your activation code.'; return; }
+  if (!/^BS-\d{4}-[A-Z0-9]{8}$/.test(code)) {
+    errEl.textContent = 'Code should look like BS-2024-XXXXXXXX.'; return;
+  }
+  btn.disabled = true; btn.textContent = 'Connecting…';
+  try {
+    const cfgR = await fetch('/api/config/parsed');
+    const cfg  = cfgR.ok ? await cfgR.json() : {};
+    if (!cfg.cloud) cfg.cloud = {};
+    cfg.cloud.activation_code = code;
+    cfg.cloud.enabled = true;
+    if (!cfg.cloud.url) cfg.cloud.url = 'https://node.boundlessskies.org';
+    const r = await fetch('/api/config/parsed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      errEl.textContent = 'Save failed: ' + (d.error || r.statusText);
+      btn.disabled = false; btn.textContent = 'Connect';
+      return;
+    }
+    // Success
+    const content = document.querySelector('#welcomeModal .modal-content');
+    content.innerHTML = `
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Activation code saved!</div>
+      <div style="font-size:13px;color:var(--dim);line-height:1.6;">
+        Restart the node software to complete the connection.<br>
+        <span style="font-size:11px;opacity:0.6;">The telescope will register automatically on next startup.</span>
+      </div>
+      <button class="btn btn-dim" onclick="closeWelcomeModal()" style="margin-top:24px;width:100%;">Close</button>`;
+  } catch (e) {
+    errEl.textContent = 'Request failed: ' + e.message;
+    btn.disabled = false; btn.textContent = 'Connect';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', _checkFirstRun);
 </script>
 </body>
 </html>"""

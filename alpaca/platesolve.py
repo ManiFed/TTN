@@ -230,45 +230,51 @@ def solve_image_array(
     image_array,
     ra_deg: float,
     dec_deg: float,
-    astap_path: str = "astap",
+    solver: str = "astrometry",
+    solver_path: str = "solve-field",
     search_radius: float = 10.0,
+    pixel_scale: Optional[float] = None,
 ) -> Optional[tuple]:
     """
     Plate-solve an ALPACA image array and return its frame-centre (ra_deg, dec_deg).
 
-    Writes a temporary FITS, runs ASTAP (reusing photometry._run_astap, which
-    writes WCS back into the header), then reads the world coordinate at the
-    central pixel. Returns None if the solve fails.
+    solver        – "astrometry" (Astrometry.net) or "astap"
+    solver_path   – path to solve-field or astap binary
+    search_radius – search radius in degrees
+    pixel_scale   – arcsec/px hint (speeds up astrometry.net solve)
     """
     import numpy as np
     from astropy.io import fits
     from astropy.wcs import WCS
-    from src.photometry import _run_astap
+    from src.photometry import _run_astrometry_net, _run_astap
 
     data = np.asarray(image_array, dtype=np.float32)
-    if data.ndim == 3:          # colour / 3-plane ALPACA response → first plane
+    if data.ndim == 3:
         data = data[0]
     if data.ndim != 2:
         logger.error("solve_image_array: expected 2-D image, got shape %s", data.shape)
         return None
-    # ALPACA delivers ImageArray column-major (x, y); transpose to (row, col).
-    data = data.T
+    data = data.T  # ALPACA column-major → row-major
 
     tmp_path = None
     try:
-        fd, tmp_path = tempfile.mkstemp(suffix=".fits", prefix="bs_solve_")
+        fd, tmp_path = tempfile.mkstemp(suffix=".fits", prefix="bs_solve_", dir="/tmp")
         os.close(fd)
         fits.PrimaryHDU(data=data).writeto(tmp_path, overwrite=True)
 
-        if not _run_astap(tmp_path, ra_deg, dec_deg, astap_path, search_radius):
+        if solver == "astrometry":
+            ok = _run_astrometry_net(tmp_path, ra_deg, dec_deg,
+                                     solver_path, search_radius, pixel_scale)
+        else:
+            ok = _run_astap(tmp_path, ra_deg, dec_deg, solver_path, search_radius)
+
+        if not ok:
             return None
 
         with fits.open(tmp_path, memmap=False, ignore_missing_simple=True) as hdul:
             hdr = hdul[0].header
             ny, nx = data.shape
             wcs = WCS(hdr, naxis=2)
-            # FITS pixels are 1-indexed and centre-of-pixel; image centre is
-            # ((nx+1)/2, (ny+1)/2) in FITS convention.
             sky = wcs.pixel_to_world((nx + 1) / 2.0 - 1.0, (ny + 1) / 2.0 - 1.0)
             return float(sky.ra.deg), float(sky.dec.deg)
     except Exception as exc:
@@ -294,8 +300,10 @@ def center_on_target_device(
     tolerance_arcmin: float = 3.0,
     max_iterations: int = 4,
     settle_s: float = 2.0,
-    astap_path: str = "astap",
+    solver: str = "astrometry",
+    solver_path: str = "solve-field",
     search_radius: float = 10.0,
+    pixel_scale: Optional[float] = None,
     readout_timeout: float = 60.0,
     cancel_check: Optional[Callable[[], bool]] = None,
     progress_cb: Optional[Callable[[CenterIteration], None]] = None,
@@ -304,16 +312,19 @@ def center_on_target_device(
     Run the auto-centering loop against live ALPACA Telescope + Camera wrappers.
 
     target_ra / target_dec are in **degrees**.
+    solver / solver_path – passed through to solve_image_array.
     """
     def slew_fn(ra_hours: float, dec_deg: float) -> None:
-        telescope.slew_to_coordinates(ra_hours, dec_deg)  # blocking
+        telescope.slew_to_coordinates(ra_hours, dec_deg)
 
     def capture_fn():
         camera.expose(exposure_s, readout_timeout=readout_timeout, cancel_check=cancel_check)
         return camera.image_array()
 
     def solve_fn(image, ra_deg, dec_deg):
-        return solve_image_array(image, ra_deg, dec_deg, astap_path, search_radius)
+        return solve_image_array(image, ra_deg, dec_deg,
+                                 solver=solver, solver_path=solver_path,
+                                 search_radius=search_radius, pixel_scale=pixel_scale)
 
     return center_on_target(
         slew_fn, capture_fn, solve_fn, target_ra, target_dec,
