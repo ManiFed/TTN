@@ -28,7 +28,9 @@ from typing import Optional
 from cloud import db, registry, tuning
 from cloud.conditions import (
     airmass_from_alt, altitude_curve, angular_separation_deg,
-    cloud_cover_at, fetch_weather, moon_state, night_window,
+    astro_cloud_cover_at, cloud_cover_at, fetch_astronomy_weather,
+    fetch_weather, moon_state, night_window,
+    seeing_score_at, transparency_score_at,
 )
 
 logger = logging.getLogger("cloud.scoring")
@@ -114,20 +116,55 @@ def light_pollution_factor(target_mag: Optional[float], node: dict) -> float:
 
 
 def weather_factor(node: dict, night: Optional[tuple]) -> float:
-    """Mean forecast clear-sky fraction over the coming night (0 = overcast)."""
+    """
+    Composite astronomy-weather score for the coming night (0 = terrible, 1 = perfect).
+
+    Blends three components weighted equally:
+      - clear-sky fraction (1 - cloud_cover)
+      - seeing quality (atmospheric steadiness)
+      - transparency (atmospheric extinction)
+
+    Prefers 7timer ASTRO data (seeing + transparency + astronomy-specific cloud
+    cover); falls back to Open-Meteo cloud cover when 7timer is unavailable.
+    """
     if night is None:
         return 0.0
-    forecast = fetch_weather(node["latitude"], node["longitude"])
-    if forecast is None:
-        return 0.5   # no forecast — neutral
+
+    lat, lon = node["latitude"], node["longitude"]
+    astro = fetch_astronomy_weather(lat, lon)
+    generic = fetch_weather(lat, lon) if astro is None else None
+
     t0, t1 = night
-    samples, t = [], t0
+    cloud_samples, seeing_samples, transp_samples = [], [], []
+    t = t0
     while t <= t1:
-        cc = cloud_cover_at(forecast, t)
+        # cloud cover — prefer 7timer, fall back to Open-Meteo
+        if astro is not None:
+            cc = astro_cloud_cover_at(astro, t)
+        else:
+            cc = cloud_cover_at(generic, t)
         if cc is not None:
-            samples.append(1.0 - cc)
+            cloud_samples.append(1.0 - cc)
+
+        if astro is not None:
+            s = seeing_score_at(astro, t)
+            if s is not None:
+                seeing_samples.append(s)
+            tr = transparency_score_at(astro, t)
+            if tr is not None:
+                transp_samples.append(tr)
+
         t += timedelta(hours=1)
-    return sum(samples) / len(samples) if samples else 0.5
+
+    clear = sum(cloud_samples) / len(cloud_samples) if cloud_samples else 0.5
+    seeing = sum(seeing_samples) / len(seeing_samples) if seeing_samples else None
+    transp = sum(transp_samples) / len(transp_samples) if transp_samples else None
+
+    if seeing is not None and transp is not None:
+        # All three components available — equal weight blend
+        return (clear + seeing + transp) / 3.0
+    # Only cloud data available
+    return clear
 
 
 def moon_factor(target: dict, night: Optional[tuple]) -> float:

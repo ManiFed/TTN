@@ -70,6 +70,63 @@ class Node {
   }
 }
 
+/// One entry in the telescope spec catalog (GET /telescopes).
+///
+/// Mirrors `telescope_specs.catalog_list()` on the cloud: physical specs plus
+/// the derived parameters the connect-flow confirmation card shows.
+class TelescopeSpec {
+  final String key;
+  final String displayName;
+  final double apertureMm;
+  final double focalLengthMm;
+  final double focalRatio;
+  final double pixelScaleArcsec;
+  final double fovDeg;
+  final String mountType;
+  final int tier;
+  final String cameraModel;
+
+  const TelescopeSpec({
+    required this.key,
+    required this.displayName,
+    required this.apertureMm,
+    required this.focalLengthMm,
+    required this.focalRatio,
+    required this.pixelScaleArcsec,
+    required this.fovDeg,
+    required this.mountType,
+    required this.tier,
+    required this.cameraModel,
+  });
+
+  bool get isCustom => key == 'custom';
+
+  factory TelescopeSpec.fromJson(Map<String, dynamic> j) => TelescopeSpec(
+        key: _asStr(j['key']),
+        displayName: _asStr(j['telescope_model']).isNotEmpty
+            ? _asStr(j['telescope_model'])
+            : _asStr(j['display_name']),
+        apertureMm: _asDouble(j['aperture_mm']),
+        focalLengthMm: _asDouble(j['focal_length_mm']),
+        focalRatio: _asDouble(j['focal_ratio']),
+        pixelScaleArcsec: _asDouble(j['pixel_scale_arcsec']),
+        fovDeg: _asDouble(j['fov_deg']),
+        mountType: _asStr(j['mount_type']),
+        tier: _asInt(j['tier']),
+        cameraModel: _asStr(j['camera_model']),
+      );
+
+  /// The custom-spec payload sent with the activation code (only set fields).
+  Map<String, dynamic> toSpecPayload() => {
+        if (apertureMm > 0) 'aperture_mm': apertureMm,
+        if (focalLengthMm > 0) 'focal_length_mm': focalLengthMm,
+        if (pixelScaleArcsec > 0) 'pixel_scale_arcsec': pixelScaleArcsec,
+        if (fovDeg > 0) 'fov_deg': fovDeg,
+        if (mountType.isNotEmpty) 'mount_type': mountType,
+        if (cameraModel.isNotEmpty) 'camera_model': cameraModel,
+      };
+}
+
 /// Cumulative member statistics (GET /me/stats).
 class MemberStats {
   final int totalObservations;

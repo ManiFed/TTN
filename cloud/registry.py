@@ -69,14 +69,15 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                node_id, api_key, owner_name, owner_email,
                latitude, longitude, elevation, city, country, utc_offset_hours,
                light_pollution_mpsas, bortle,
-               tier, telescope_model, aperture_mm, focal_length_mm, fov_deg,
+               tier, telescope_model, telescope_serial, telescope_name,
+               aperture_mm, focal_length_mm, fov_deg,
                pixel_scale_arcsec, mount_type, max_exposure_s,
                camera_model, cooled_camera,
                filter_set, filters, mag_bright_limit, mag_faint_limit, min_altitude_deg,
                has_dew_heater, has_power_mgmt, has_enclosure, has_ups,
                horizon_mask, scheduling_notes, preferred_targets,
                status, registered_at, last_heartbeat)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id) DO UPDATE SET
                owner_name=excluded.owner_name, owner_email=excluded.owner_email,
                latitude=excluded.latitude, longitude=excluded.longitude,
@@ -86,6 +87,8 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                bortle=excluded.bortle,
                tier=excluded.tier,
                telescope_model=excluded.telescope_model,
+               telescope_serial=excluded.telescope_serial,
+               telescope_name=excluded.telescope_name,
                aperture_mm=excluded.aperture_mm,
                focal_length_mm=excluded.focal_length_mm, fov_deg=excluded.fov_deg,
                pixel_scale_arcsec=excluded.pixel_scale_arcsec,
@@ -113,6 +116,8 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
             mpsas, bortle,
             int(info.get("tier", 1)),
             node.telescope_model,
+            str(info.get("telescope_serial", "") or ""),
+            str(info.get("telescope_name", "") or ""),
             node.aperture_mm, node.focal_length_mm, node.fov_deg,
             node.pixel_scale_arcsec,
             str(info.get("mount_type", "alt_az") or "alt_az"),

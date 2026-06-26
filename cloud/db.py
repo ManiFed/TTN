@@ -277,13 +277,17 @@ _SCHEMA: list[str] = [
         used_at          TEXT,
         observatory_name TEXT DEFAULT '',
         latitude         DOUBLE PRECISION,
-        longitude        DOUBLE PRECISION
+        longitude        DOUBLE PRECISION,
+        telescope_model  TEXT DEFAULT '',
+        telescope_specs  TEXT DEFAULT '{}'
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_codes_user ON activation_codes(user_id)",
     "ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS observatory_name TEXT DEFAULT ''",
     "ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
     "ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
+    "ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS telescope_model TEXT DEFAULT ''",
+    "ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS telescope_specs TEXT DEFAULT '{}'",
     """
     CREATE TABLE IF NOT EXISTS site_config (
         id              INTEGER PRIMARY KEY CHECK (id = 1),
@@ -323,6 +327,8 @@ _SEEDS: list[str] = [
 # Columns added after initial schema. init() applies these idempotently.
 _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "tier",               "INTEGER DEFAULT 1"),
+    ("nodes", "telescope_serial",   "TEXT DEFAULT ''"),
+    ("nodes", "telescope_name",     "TEXT DEFAULT ''"),
     ("nodes", "camera_model",       "TEXT DEFAULT ''"),
     ("nodes", "mount_type",         "TEXT DEFAULT 'alt_az'"),
     ("nodes", "cooled_camera",      "INTEGER DEFAULT 0"),

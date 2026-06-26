@@ -1,0 +1,27 @@
+{
+  "submitted_at": "2026-06-26T02:32:40.058948+00:00",
+  "measurement": {
+    "target_name": "T CrB",
+    "bjd": 2461217.609755,
+    "magnitude": 9.9875,
+    "uncertainty": 0.1352,
+    "filter": "CV",
+    "airmass": 1.107,
+    "fwhm": 4.0,
+    "snr": 217.6,
+    "comparison_stars": 5,
+    "quality_flag": "good",
+    "node_id": "seestar-live-001",
+    "zero_point": 22.845,
+    "zp_scatter": 0.135,
+    "fits_file": "bs_science_i8r9sukp.fits"
+  },
+  "observer_code": "EGBA",
+  "dry_run": true,
+  "status": "dry_run",
+  "accepted": 0,
+  "rejected": 0,
+  "message": "dry_run: file saved, no POST",
+  "file_path": "aavso_submissions/2026-06-26/T_CrB_2461217.609755.txt",
+  "response_path": null
+}

@@ -288,8 +288,11 @@ class _ClaimSheet extends StatefulWidget {
 
 enum _LocStep { idle, geocoding, confirming, confirmed }
 
+enum _ScopeStep { idle, confirming, confirmed }
+
 class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
+  final _scopeCtrl = TextEditingController();
   final _pairCtrl = TextEditingController();
   String? _code;
   bool _busy = false;
@@ -302,17 +305,77 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   bool _pushing = false;
   _LocStep _step = _LocStep.idle;
 
+  // Telescope selection (mirrors the location flow: type a model → confirm).
+  List<TelescopeSpec> _catalog = [];
+  TelescopeSpec? _selectedScope;
+  bool _scopeIsCustom = false;
+  _ScopeStep _scopeStep = _ScopeStep.idle;
+
   @override
   void initState() {
     super.initState();
     _locationCtrl.addListener(() => setState(() {}));
+    _scopeCtrl.addListener(() => setState(() {}));
+    _loadCatalog();
+  }
+
+  Future<void> _loadCatalog() async {
+    try {
+      final list = await context.read<AppState>().api.telescopes();
+      if (mounted) setState(() => _catalog = list);
+    } catch (_) {
+      // Non-fatal: the user can still type a model name (custom / ALPACA).
+    }
+  }
+
+  /// Catalog entries whose name/camera matches the typed query.
+  List<TelescopeSpec> get _scopeSuggestions {
+    final q = _scopeCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    return _catalog
+        .where((s) =>
+            !s.isCustom &&
+            (s.displayName.toLowerCase().contains(q) ||
+                s.cameraModel.toLowerCase().contains(q) ||
+                s.key.replaceAll('_', ' ').contains(q)))
+        .take(6)
+        .toList();
   }
 
   @override
   void dispose() {
     _locationCtrl.dispose();
+    _scopeCtrl.dispose();
     _pairCtrl.dispose();
     super.dispose();
+  }
+
+  void _resetScope() {
+    _selectedScope = null;
+    _scopeIsCustom = false;
+    _scopeStep = _ScopeStep.idle;
+    _error = null;
+  }
+
+  void _selectScope(TelescopeSpec spec) {
+    setState(() {
+      _selectedScope = spec;
+      _scopeIsCustom = false;
+      _scopeCtrl.text = spec.displayName;
+      _scopeStep = _ScopeStep.confirming;
+      _error = null;
+    });
+  }
+
+  /// User typed a model we don't recognise → treat as custom; the node will
+  /// autodetect real specs from the connected ALPACA device on first boot.
+  void _useCustomScope() {
+    setState(() {
+      _selectedScope = null;
+      _scopeIsCustom = true;
+      _scopeStep = _ScopeStep.confirmed;
+      _error = null;
+    });
   }
 
   void _resetLocation() {
@@ -419,6 +482,9 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       _code = null;
     });
     try {
+      final scopeModel = _scopeIsCustom
+          ? _scopeCtrl.text.trim()
+          : _selectedScope?.displayName;
       final code = await context
           .read<AppState>()
           .api
@@ -426,6 +492,8 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             locationName: location.isEmpty ? null : location,
             lat: _lat,
             lon: _lon,
+            telescopeModel: scopeModel,
+            telescopeSpecs: _selectedScope?.toSpecPayload(),
           );
       if (mounted) {
         setState(() {
@@ -470,7 +538,15 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           ),
           Text('Connect a telescope', style: tt.headlineSmall),
           const SizedBox(height: 10),
-          if (_code == null) ..._buildLocationSection(tt),
+          if (_code == null) ...[
+            ..._buildScopeSection(tt),
+            if (_scopeStep == _ScopeStep.confirmed) ...[
+              const SizedBox(height: 20),
+              const Divider(height: 1),
+              const SizedBox(height: 20),
+              ..._buildLocationSection(tt),
+            ],
+          ],
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -483,7 +559,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             ..._buildCodeSection(tt, context)
           else if (_busy)
             const Center(child: CircularProgressIndicator())
-          else if (_step == _LocStep.confirmed)
+          else if (_scopeStep == _ScopeStep.confirmed && _step == _LocStep.confirmed)
             FilledButton(
               onPressed: _generate,
               child: const Text('Get activation code'),
@@ -493,6 +569,186 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       ),
     );
   }
+
+  List<Widget> _buildScopeSection(TextTheme tt) {
+    switch (_scopeStep) {
+      case _ScopeStep.idle:
+        final suggestions = _scopeSuggestions;
+        final typed = _scopeCtrl.text.trim();
+        return [
+          Text(
+            'Which telescope is this? We\'ll fill in its specs for you.',
+            style: tt.bodyMedium,
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _scopeCtrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Telescope model',
+              hintText: 'e.g. Seestar S50, Vespera II, Dwarf 3',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.travel_explore_outlined),
+            ),
+            textInputAction: TextInputAction.search,
+          ),
+          if (suggestions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: BSTheme.glassBorder),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                children: [
+                  for (final s in suggestions)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.center_focus_strong_outlined, size: 18),
+                      title: Text(s.displayName,
+                          style: const TextStyle(fontSize: 14)),
+                      subtitle: Text(
+                        '${s.apertureMm.toStringAsFixed(0)} mm  ·  '
+                        'f/${s.focalRatio.toStringAsFixed(1)}  ·  '
+                        '${s.pixelScaleArcsec.toStringAsFixed(2)}″/px',
+                        style: const TextStyle(fontSize: 12, color: BSTheme.ink3),
+                      ),
+                      onTap: () => _selectScope(s),
+                    ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          if (typed.isNotEmpty && suggestions.isEmpty)
+            OutlinedButton.icon(
+              onPressed: _useCustomScope,
+              icon: const Icon(Icons.tune, size: 16),
+              label: Text('Use "$typed" — detect specs on connect'),
+            ),
+        ];
+
+      case _ScopeStep.confirming:
+        final s = _selectedScope!;
+        return [
+          Text('Is this your telescope?', style: tt.titleMedium),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            decoration: BoxDecoration(
+              border: Border.all(color: BSTheme.glassBorder),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.center_focus_strong_outlined,
+                        size: 18, color: BSTheme.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        s.displayName,
+                        style: const TextStyle(
+                          fontFamily: 'Geist',
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: BSTheme.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _specRow('Aperture', '${s.apertureMm.toStringAsFixed(0)} mm'),
+                _specRow('Focal length',
+                    '${s.focalLengthMm.toStringAsFixed(0)} mm  (f/${s.focalRatio.toStringAsFixed(1)})'),
+                _specRow('Pixel scale', '${s.pixelScaleArcsec.toStringAsFixed(2)}″/px'),
+                _specRow('Field of view', '${s.fovDeg.toStringAsFixed(2)}°'),
+                _specRow('Mount', s.mountType == 'alt_az' ? 'Alt-azimuth' : 'Equatorial'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(_resetScope),
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Change'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () =>
+                      setState(() => _scopeStep = _ScopeStep.confirmed),
+                  icon: const Icon(Icons.check, size: 16),
+                  label: const Text('Yes, this is it'),
+                ),
+              ),
+            ],
+          ),
+        ];
+
+      case _ScopeStep.confirmed:
+        final label = _scopeIsCustom
+            ? '${_scopeCtrl.text.trim()} (specs auto-detected on connect)'
+            : _selectedScope!.displayName;
+        return [
+          Row(
+            children: [
+              const Icon(Icons.check_circle_outline,
+                  size: 18, color: Colors.green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 13,
+                    color: BSTheme.ink,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (!_busy)
+                TextButton(
+                  onPressed: () => setState(_resetScope),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  child: const Text('Change'),
+                ),
+            ],
+          ),
+        ];
+    }
+  }
+
+  Widget _specRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 96,
+              child: Text(label,
+                  style: const TextStyle(fontSize: 12, color: BSTheme.ink3)),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'Geist',
+                      fontWeight: FontWeight.w500,
+                      color: BSTheme.ink)),
+            ),
+          ],
+        ),
+      );
 
   List<Widget> _buildLocationSection(TextTheme tt) {
     switch (_step) {
@@ -758,6 +1014,8 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           _pairCtrl.clear();
           _resetLocation();
           _locationCtrl.clear();
+          _resetScope();
+          _scopeCtrl.clear();
         }),
         icon: const Icon(Icons.arrow_back, size: 16),
         label: const Text('Start over'),

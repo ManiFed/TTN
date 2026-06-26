@@ -19,6 +19,11 @@ class AppState extends ChangeNotifier {
   Member? member;
   String? lastError;
 
+  /// Whether the member has at least one claimed node. Null = not yet checked.
+  bool? _hasNode;
+  bool get hasNode => _hasNode == true;
+  bool get nodesLoaded => _hasNode != null;
+
   /// Set by PushService when a notification is tapped while app is cold/backgrounded.
   /// HomeScreen reads and clears this to jump to the right tab.
   int? pendingTab;
@@ -39,10 +44,15 @@ class AppState extends ChangeNotifier {
         await _auth.clear();
       }
       status = AuthStatus.signedOut;
+      notifyListeners();
+      return;
     } catch (_) {
       // Offline but we have a token — let them in optimistically.
       status = AuthStatus.signedIn;
+      notifyListeners();
+      return;
     }
+    await _fetchNodes();
     notifyListeners();
   }
 
@@ -59,6 +69,7 @@ class AppState extends ChangeNotifier {
       await action();
       member = await _api.me();
       status = AuthStatus.signedIn;
+      await _fetchNodes();
       notifyListeners();
       return true;
     } on ApiException catch (e) {
@@ -72,9 +83,26 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Re-check node count — call after a node is claimed in the setup flow.
+  Future<void> refreshNodes() async {
+    await _fetchNodes();
+    notifyListeners();
+  }
+
+  Future<void> _fetchNodes() async {
+    try {
+      final nodes = await _api.nodes();
+      _hasNode = nodes.isNotEmpty;
+    } catch (_) {
+      // Network failure — don't gate the UI; assume connected and let tabs show empty.
+      _hasNode = true;
+    }
+  }
+
   Future<void> signOut() async {
     await _auth.clear();
     member = null;
+    _hasNode = null;
     status = AuthStatus.signedOut;
     notifyListeners();
   }

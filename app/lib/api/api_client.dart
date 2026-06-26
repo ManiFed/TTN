@@ -122,10 +122,20 @@ class ApiClient {
 
   Future<void> markNotificationRead(int id) => _post('/me/notifications/$id/read', {});
 
+  /// Public telescope spec catalog (GET /telescopes) for the connect-flow picker.
+  Future<List<TelescopeSpec>> telescopes() async {
+    final json = await _get('/telescopes');
+    return ((json['telescopes'] as List?) ?? [])
+        .map((e) => TelescopeSpec.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<String> generateActivationCode({
     String? locationName,
     double? lat,
     double? lon,
+    String? telescopeModel,
+    Map<String, dynamic>? telescopeSpecs,
   }) async {
     final body = <String, dynamic>{};
     if (lat != null && lon != null) {
@@ -134,6 +144,12 @@ class ApiClient {
     }
     if (locationName != null && locationName.isNotEmpty) {
       body['location_name'] = locationName;
+    }
+    if (telescopeModel != null && telescopeModel.isNotEmpty) {
+      body['telescope_model'] = telescopeModel;
+    }
+    if (telescopeSpecs != null && telescopeSpecs.isNotEmpty) {
+      body['telescope_specs'] = telescopeSpecs;
     }
     final json = await _post('/me/activation-code', body);
     return json['code'] as String;

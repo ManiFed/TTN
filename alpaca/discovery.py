@@ -10,16 +10,36 @@ import json
 import logging
 import socket
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 DISCOVERY_MESSAGE = b"alpacadiscovery1"
 BROADCAST_ADDR = "255.255.255.255"
 
 
+def _fetch_device_info(address: str, port: int) -> dict:
+    """Query the ALPACA management API for device name and serial (UniqueID)."""
+    try:
+        url = f"http://{address}:{port}/management/v1/configureddevices"
+        r = requests.get(url, timeout=3)
+        r.raise_for_status()
+        devices = r.json().get("Value", [])
+        for dev in devices:
+            if dev.get("DeviceType", "").lower() == "telescope":
+                return {
+                    "device_name": dev.get("DeviceName", ""),
+                    "serial": dev.get("UniqueID", ""),
+                }
+    except Exception:
+        pass
+    return {}
+
+
 def discover_servers(port: int = 32227, timeout: float = 5.0) -> list[dict]:
     """
     Broadcast the ALPACA discovery datagram and return a list of discovered
-    servers as dicts: {"address": str, "port": int}.
+    servers as dicts: {"address": str, "port": int, "device_name": str, "serial": str}.
     """
     found = []
 
@@ -49,5 +69,15 @@ def discover_servers(port: int = 32227, timeout: float = 5.0) -> list[dict]:
 
     if not found:
         logger.warning("No ALPACA servers found within %.1f s", timeout)
+        return found
+
+    for entry in found:
+        info = _fetch_device_info(entry["address"], entry["port"])
+        entry.update(info)
+        if info.get("device_name"):
+            logger.info(
+                "  → %s (serial: %s)",
+                info["device_name"], info.get("serial", "unknown"),
+            )
 
     return found

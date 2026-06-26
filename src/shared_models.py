@@ -78,6 +78,8 @@ class NodeInfo:
     # ── Hardware: telescope ────────────────────────────────────────────────────
     tier: int = 1                    # 1=Seestar, 2=Filtered, 3=Spectroscopy
     telescope_model: str = "ZWO Seestar S50"
+    telescope_serial: str = ""       # ALPACA UniqueID (physical device identifier)
+    telescope_name: str = ""         # ALPACA DeviceName (human-readable label from scope)
     aperture_mm: float = 50.0
     focal_length_mm: float = 250.0
     fov_deg: float = 1.27

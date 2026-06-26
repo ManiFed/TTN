@@ -63,6 +63,15 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     Returns a measurement dict on success, None on unrecoverable failure.
     """
     t0 = time.monotonic()
+    # Fill any unset photometry params from the telescope spec catalog (pixel
+    # scale, field radius, magnitude limits, read noise, FWHM fallback, …).
+    # Idempotent and explicit-config-wins, so a fully-specified config (e.g. the
+    # Seestar S50 in config.yaml) is left exactly as-is.
+    try:
+        from src.telescope_specs import enrich_config_with_telescope
+        config = enrich_config_with_telescope(config)
+    except Exception as exc:
+        logger.debug("Telescope enrichment skipped: %s", exc)
     phot_cfg = config.get("photometry", {})
     node_id = phot_cfg.get("node_id", "node_unknown")
     filter_name = phot_cfg.get("filter_name", "CV")
@@ -184,7 +193,8 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     logger.debug("Target pixel: x=%.1f  y=%.1f", tx, ty)
 
     # ── Step 3: Estimate FWHM ─────────────────────────────────────────────────
-    fwhm_px = _estimate_fwhm(data)
+    fwhm_fallback = float(phot_cfg.get("fwhm_fallback_px", 4.0))
+    fwhm_px = _estimate_fwhm(data, fallback_px=fwhm_fallback)
     logger.info("FWHM estimate: %.2f px", fwhm_px)
 
     # Aperture geometry
@@ -698,12 +708,15 @@ def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
 
 # ── Step 3 helpers: FWHM estimation ───────────────────────────────────────────
 
-def _estimate_fwhm(data: np.ndarray) -> float:
+def _estimate_fwhm(data: np.ndarray, fallback_px: float = 4.0) -> float:
     """
     Estimate image FWHM in pixels using DAOStarFinder on bright, non-saturated
     stars, fitting second-moment Gaussians on 21×21 stamps.
 
-    Falls back to 4.0 px (typical for Seestar f/5 at good seeing) on failure.
+    ``fallback_px`` is the last-resort PSF width used when no sources can be
+    measured.  It is derived per-telescope from the pixel scale (see
+    ``telescope_specs.derive_params``); the default 4.0 px matches the Seestar
+    S50 (f/5) at typical seeing.
     """
     try:
         from photutils.detection import DAOStarFinder
@@ -711,13 +724,13 @@ def _estimate_fwhm(data: np.ndarray) -> float:
 
         _, median, std = sigma_clipped_stats(data, sigma=3.0)
         if std <= 0:
-            return 4.0
+            return fallback_px
 
         daofind = DAOStarFinder(fwhm=5.0, threshold=7.0 * std, exclude_border=True)
         sources = daofind(data - median)
         if sources is None or len(sources) == 0:
-            logger.debug("DAOStarFinder found no sources — using default FWHM 4.0 px")
-            return 4.0
+            logger.debug("DAOStarFinder found no sources — using fallback FWHM %.1f px", fallback_px)
+            return fallback_px
 
         # Sort by peak flux; skip top 10% (possibly saturated) and bottom 50%
         sources.sort("peak")
@@ -761,12 +774,12 @@ def _estimate_fwhm(data: np.ndarray) -> float:
                 fwhms.append(fwhm)
 
         if not fwhms:
-            return 4.0
+            return fallback_px
         return float(np.median(fwhms))
 
     except Exception as exc:
-        logger.warning("FWHM estimation failed: %s — using default 4.0 px", exc)
-        return 4.0
+        logger.warning("FWHM estimation failed: %s — using fallback %.1f px", exc, fallback_px)
+        return fallback_px
 
 
 # ── Step 4 helpers: comparison star queries ───────────────────────────────────

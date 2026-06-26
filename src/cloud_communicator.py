@@ -73,6 +73,7 @@ class CloudCommunicator:
         get_conditions: Optional[Callable[[], dict]] = None,
         on_plan: Optional[Callable[[list], None]] = None,
         on_interrupt: Optional[Callable[[dict], None]] = None,
+        get_telescope_specs: Optional[Callable[[], dict]] = None,
     ) -> None:
         cloud_cfg = config.get("cloud", {})
         self._url = str(cloud_cfg.get("url", "")).rstrip("/")
@@ -81,6 +82,7 @@ class CloudCommunicator:
         self._upload_images = bool(cloud_cfg.get("upload_images", False))
         self._config = config
         self._get_conditions = get_conditions
+        self._get_telescope_specs = get_telescope_specs
         self._on_plan = on_plan
         self._on_interrupt = on_interrupt
 
@@ -143,6 +145,48 @@ class CloudCommunicator:
 
     # ── Registration ───────────────────────────────────────────────────────────
 
+    def _telescope_payload(self) -> dict:
+        """
+        Build the telescope-spec portion of the registration payload.
+
+        Ground-truth precedence: live ALPACA device (``get_telescope_specs``
+        callback) overrides the spec-catalog entry resolved from the configured
+        model name.  Returns only the NodeInfo/registry telescope columns.
+        """
+        try:
+            from src.telescope_specs import lookup, derive_params
+        except Exception as exc:
+            logger.debug("telescope_specs unavailable: %s", exc)
+            return {}
+
+        obs = self._config.get("observatory", {})
+        model = obs.get("telescope") or obs.get("telescope_model") or ""
+        derived: dict = {}
+        spec = lookup(model)
+        if spec is not None:
+            derived = derive_params(spec)
+
+        # Live ALPACA autodetect wins where it can report a value.
+        if self._get_telescope_specs is not None:
+            try:
+                live = self._get_telescope_specs() or {}
+                derived.update({k: v for k, v in live.items() if v not in (None, "", 0, 0.0)})
+            except Exception as exc:
+                logger.debug("Live telescope spec callback failed: %s", exc)
+
+        if not derived:
+            return {}
+
+        # Select the columns the cloud nodes table actually stores; filter_set
+        # must be a JSON string (registry stores it verbatim).
+        keys = ("tier", "telescope_model", "aperture_mm", "focal_length_mm",
+                "fov_deg", "pixel_scale_arcsec", "mount_type", "max_exposure_s",
+                "camera_model", "cooled_camera", "mag_bright_limit", "mag_faint_limit")
+        out = {k: derived[k] for k in keys if k in derived}
+        if "filter_set" in derived:
+            out["filter_set"] = json.dumps(derived["filter_set"])
+        return out
+
     def _ensure_registered(self) -> bool:
         if self._node_id and self._api_key:
             return True
@@ -157,9 +201,15 @@ class CloudCommunicator:
             "longitude":        obs.get("longitude") or 0.0,
             "elevation":        obs.get("elevation", 0.0),
             "telescope_model":  obs.get("telescope", "ZWO Seestar S50"),
+            "telescope_serial": obs.get("telescope_serial", ""),
+            "telescope_name":   obs.get("telescope_name", ""),
             "filters":          phot.get("filter_name", "CV"),
             "utc_offset_hours": _utc_offset_hours(),
         }
+        # Full telescope specs so the scheduler/photometry on the cloud knows
+        # this node's optics & sensor.  Ground-truth order: live ALPACA device →
+        # spec catalog (by model name) → leave to the cloud's column defaults.
+        payload.update(self._telescope_payload())
         # Include activation code on first boot if present in config
         activation_code = str(cloud_cfg.get("activation_code", "") or "").strip()
         if activation_code:

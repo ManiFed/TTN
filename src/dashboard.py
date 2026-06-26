@@ -40,6 +40,7 @@ from src.photometry import run_pipeline as _run_photometry
 from src.aavso_submission import submit as _aavso_submit
 from src.fits_export import export_enhanced_fits as _export_fits
 from src.geolocation import enrich_config_with_location
+from src.telescope_specs import enrich_config_with_telescope
 from src.stacking import LiveStacker
 from src.cloud_communicator import CloudCommunicator
 
@@ -683,6 +684,18 @@ def _cloud_conditions() -> dict:
     return out
 
 
+def _cloud_telescope_specs() -> dict:
+    """Live ALPACA hardware specs for the registration payload.
+
+    Reads aperture/focal length off the connected telescope and pixel
+    size/sensor/cooler off the camera, so *any* ALPACA-compatible rig registers
+    with its real optics.  Returns {} when no device is connected (the catalog
+    entry for the configured model is then used instead)."""
+    from src.telescope_specs import detect_telescope_specs
+    model = _load_config().get("observatory", {}).get("telescope", "")
+    return detect_telescope_specs(_tel, _cam, fallback_model=model)
+
+
 def _on_cloud_plan(items: list) -> None:
     """A new observation plan arrived from the cloud.  Validate it with the
     same gate as /api/schedule/run; execute it only when auto_run_plans is on
@@ -730,11 +743,14 @@ def _on_safety_unsafe() -> None:
 
 _scan_lock  = threading.Lock()
 _scan_state: dict = {
-    "running":    False,
-    "cancelled":  False,
-    "directions": [],   # list of 12 dicts: {az, status, horizon_alt, steps}
-    "result":     None, # [[alt, az], …] on completion
-    "error":      None,
+    "running":       False,
+    "cancelled":     False,
+    "directions":    [],   # list of 12 dicts: {az, status, horizon_alt, steps, cloud_suspect}
+    "result":        None, # [[alt, az], …] on completion
+    "error":         None,
+    "cloud_warning": False, # >40% of completed directions had 0 stars at top altitude
+    "cloud_abort":   False, # scan terminated early due to widespread cloud cover
+    "cloud_dirs":    0,     # count of directions flagged as cloud-suspected
 }
 
 
@@ -1135,26 +1151,42 @@ def _run_horizon_scan(
     star_threshold: int,
     settle_s: float,
 ) -> None:
-    """Background thread: slew to 12 azimuths × N altitudes, count stars, build mask."""
+    """Background thread: slew to 12 azimuths × N altitudes, count stars, build mask.
+
+    Cloud detection: structural obstructions (trees, buildings) only block low
+    altitudes.  If the topmost test position for a spoke already shows zero stars,
+    that reading is a cloud suspect rather than a true horizon.  When >67% of
+    completed spokes are cloud-suspected the scan aborts early; >40% sets a
+    warning flag so the user knows to treat the result with caution.
+    """
     import numpy as np
 
     N       = 12
     AZ_STEP = 30
 
+    # Fraction thresholds for cloud detection (fraction of completed directions)
+    CLOUD_WARN_FRAC  = 0.40   # warn when this fraction of spokes suspect clouds
+    CLOUD_ABORT_FRAC = 0.67   # abort when this fraction of spokes suspect clouds
+
     directions = [
-        {"az": i * AZ_STEP, "status": "pending", "horizon_alt": None, "steps": []}
+        {"az": i * AZ_STEP, "status": "pending", "horizon_alt": None,
+         "steps": [], "cloud_suspect": False}
         for i in range(N)
     ]
     with _scan_lock:
         _scan_state.update({
-            "running":    True,
-            "cancelled":  False,
-            "directions": directions,
-            "result":     None,
-            "error":      None,
+            "running":       True,
+            "cancelled":     False,
+            "directions":    directions,
+            "result":        None,
+            "error":         None,
+            "cloud_warning": False,
+            "cloud_abort":   False,
+            "cloud_dirs":    0,
         })
 
     result_alts: list[float] = []
+    cloud_dir_count = 0   # directions whose top altitude had < star_threshold stars
 
     try:
         for i in range(N):
@@ -1171,8 +1203,9 @@ def _run_horizon_scan(
                 altitudes.append(floor_alt)
 
             last_clear_alt: Optional[float] = None
+            top_alt_stars: Optional[int]    = None   # stars at highest tested altitude
 
-            for alt in altitudes:
+            for alt_idx, alt in enumerate(altitudes):
                 with _scan_lock:
                     if _scan_state["cancelled"]:
                         _scan_state["running"] = False
@@ -1202,6 +1235,10 @@ def _run_horizon_scan(
                 except Exception as exc:
                     logger.error("Scan: exposure at Alt=%.1f Az=%.1f failed: %s", alt, az, exc)
 
+                # Record star count at the highest tested altitude for this spoke
+                if alt_idx == 0 and stars is not None:
+                    top_alt_stars = stars
+
                 with _scan_lock:
                     _scan_state["directions"][i]["steps"].append(
                         {"alt": alt, "stars": stars}
@@ -1210,15 +1247,62 @@ def _run_horizon_scan(
                 if stars is not None and stars >= star_threshold:
                     last_clear_alt = alt
                 elif last_clear_alt is not None:
-                    # Transition found: had sky, now blocked → stop descending
+                    # Transition found: had sky, now blocked → stop descending.
+                    # This is the real horizon for this azimuth — don't keep going.
                     break
 
-            # ── derive horizon altitude for this azimuth ──────────────────────
+            # ── Cloud detection for this direction ────────────────────────────
+            # A structural obstruction only blocks low altitude.  If the top
+            # altitude already had zero stars AND we never found clear sky, that's
+            # a cloud signal, not a permanent obstruction.
+            cloud_suspect = (
+                top_alt_stars is not None
+                and top_alt_stars < star_threshold
+                and last_clear_alt is None
+            )
+            if cloud_suspect:
+                cloud_dir_count += 1
+                logger.warning(
+                    "Scan: Az=%.0f° — 0 stars at %.1f° (cloud cover suspected, not obstruction)",
+                    az, start_alt,
+                )
+
+            with _scan_lock:
+                _scan_state["directions"][i]["cloud_suspect"] = cloud_suspect
+                _scan_state["cloud_dirs"] = cloud_dir_count
+
+            # ── Rolling cloud-abort check (after ≥3 directions) ──────────────
+            dirs_done = i + 1
+            if dirs_done >= 3:
+                cloud_frac = cloud_dir_count / dirs_done
+                if cloud_frac > CLOUD_ABORT_FRAC:
+                    logger.error(
+                        "Scan: aborting — %d/%d directions show no stars at %.1f° "
+                        "(widespread cloud cover suspected)",
+                        cloud_dir_count, dirs_done, start_alt,
+                    )
+                    with _scan_lock:
+                        _scan_state["cloud_warning"] = True
+                        _scan_state["cloud_abort"]   = True
+                        _scan_state["error"] = (
+                            f"{cloud_dir_count}/{dirs_done} directions showed no stars at "
+                            f"{start_alt:.0f}° — clouds suspected. "
+                            "Wait for a clear night and try again."
+                        )
+                        _scan_state["running"] = False
+                    return
+                elif cloud_frac > CLOUD_WARN_FRAC:
+                    with _scan_lock:
+                        _scan_state["cloud_warning"] = True
+
+            # ── Derive horizon altitude for this azimuth ──────────────────────
             if last_clear_alt is None:
-                # Never saw sky from start_alt down — fully blocked
+                # Never saw sky — could be full obstruction OR cloud.
+                # Store start_alt as a conservative limit; the cloud_suspect flag
+                # tells the UI not to trust this reading.
                 horizon_alt = round(start_alt, 1)
             elif last_clear_alt <= floor_alt + 1e-6:
-                # Still clear at the hardware floor — horizon is below it
+                # Still clear at the hardware floor — real horizon is below our range
                 horizon_alt = 0.0
             else:
                 horizon_alt = round(last_clear_alt, 1)
@@ -1227,6 +1311,11 @@ def _run_horizon_scan(
             with _scan_lock:
                 _scan_state["directions"][i]["status"]      = "done"
                 _scan_state["directions"][i]["horizon_alt"] = horizon_alt
+
+        # Final cloud-warning pass over all completed directions
+        if cloud_dir_count / N > CLOUD_WARN_FRAC:
+            with _scan_lock:
+                _scan_state["cloud_warning"] = True
 
         result = [[result_alts[i], i * AZ_STEP] for i in range(N)]
         with _scan_lock:
@@ -1411,7 +1500,8 @@ def _load_config() -> dict:
             cfg = yaml.safe_load(fh)
     except FileNotFoundError:
         cfg = {}
-    return enrich_config_with_location(cfg)
+    cfg = enrich_config_with_location(cfg)
+    return enrich_config_with_telescope(cfg)
 
 
 # ── Pier cam (ZWO SDK live preview) ───────────────────────────────────────────
@@ -1623,8 +1713,32 @@ def api_connect():
             _tel = Telescope(host, port, num, api_ver)
             _tel.connect()
             tel_ok = True
+            tel_device_name = ""
+            tel_serial = ""
+            try:
+                from alpaca.discovery import _fetch_device_info
+                _dinfo = _fetch_device_info(host, port)
+                tel_device_name = _dinfo.get("device_name", "")
+                tel_serial = _dinfo.get("serial", "")
+            except Exception:
+                pass
             with _state_lock:
-                _state["telescope"].update(enabled=True, connected=True)
+                _state["telescope"].update(
+                    enabled=True, connected=True,
+                    device_name=tel_device_name, serial=tel_serial,
+                )
+            if tel_serial:
+                try:
+                    cfg_w = _load_config()
+                    cfg_w.setdefault("observatory", {})["telescope_serial"] = tel_serial
+                    if tel_device_name:
+                        cfg_w["observatory"]["telescope_name"] = tel_device_name
+                    with open("config.yaml", "w") as fh:
+                        yaml.dump(cfg_w, fh, default_flow_style=False,
+                                  sort_keys=False, allow_unicode=True)
+                    logger.info("Telescope identified: %s (serial: %s)", tel_device_name, tel_serial)
+                except Exception as exc:
+                    logger.warning("Could not save telescope serial: %s", exc)
             if _safety_mgr is not None:
                 _safety_mgr.attach_telescope(_tel)
         except Exception as exc:
@@ -4821,6 +4935,16 @@ html[data-night] img, html[data-night] video { filter: none; }
               <div id="scanDirectionBars" style="display:flex;gap:2px;height:20px;align-items:flex-end;"></div>
             </div>
 
+            <!-- Cloud warning banner (hidden when no cloud concern) -->
+            <div id="scanCloudWarning" style="display:none;margin-bottom:8px;padding:7px 10px;border-radius:6px;
+                 background:rgba(192,132,252,0.12);border:1px solid #c084fc;font-size:10px;
+                 color:#c084fc;line-height:1.5;">
+              <strong>Possible cloud cover detected</strong> — purple spokes had no stars at the top
+              altitude. Clouds produce the same zero-star result as a permanent obstruction but are
+              temporary. Wait for a clear night and re-scan before applying the result.
+              <div id="scanCloudDetail" style="margin-top:3px;opacity:.8;"></div>
+            </div>
+
             <div style="display:flex;gap:8px;">
               <button id="btnStartScan"  class="btn" style="flex:1;background:var(--blue);color:#fff;"
                       onclick="startHorizonScan()">Scan Horizon</button>
@@ -6305,14 +6429,21 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
     if (_scanOvly && _scanOvly.directions && _scanOvly.directions.length === N) {
       const dirs = _scanOvly.directions;
 
-      // Colour-code each spoke by status
+      // Colour-code each spoke by status.
+      // cloud_suspect (amber) = no stars at the top altitude — likely clouds, not a wall.
+      // done + horizon_alt=0 (green) = clear to the floor.
+      // done + horizon_alt>0 (orange-red) = real obstruction found.
       for (let i = 0; i < N; i++) {
         const d   = dirs[i];
         const az  = i * AZ_STEP;
         const a   = az * Math.PI / 180;
         const [ex, ey] = toXY(0, az);
-        const col = d.status === 'scanning' ? '#f0c040'
-                  : d.status === 'done'     ? (d.horizon_alt === 0 ? '#3fb950' : '#e06030')
+        const col = d.status === 'scanning'
+                  ? '#f0c040'
+                  : d.status === 'done' && d.cloud_suspect
+                  ? '#c084fc'   // purple = cloud-suspected reading
+                  : d.status === 'done'
+                  ? (d.horizon_alt === 0 ? '#3fb950' : '#e06030')
                   : '#243040';  // pending
         ctx.save();
         ctx.strokeStyle = col;
@@ -6331,7 +6462,11 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
             ctx.save();
             ctx.beginPath();
             ctx.arc(sx, sy, 3, 0, 2 * Math.PI);
-            ctx.fillStyle   = clear ? '#56d364' : (hasSky ? '#e06030' : '#888');
+            // Purple dot for cloud-suspect positions (no stars at top altitude)
+            ctx.fillStyle = d.cloud_suspect ? '#c084fc'
+                          : clear           ? '#56d364'
+                          : hasSky          ? '#e06030'
+                          :                   '#888';
             ctx.globalAlpha = 0.9;
             ctx.fill();
             ctx.restore();
@@ -6344,11 +6479,16 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
           const ly = CY - (MAX_R + 14) * Math.cos(a);
           ctx.save();
           ctx.font          = "bold 10px monospace";
-          ctx.fillStyle     = d.status === 'scanning' ? '#f0c040' : (d.horizon_alt === 0 ? '#3fb950' : '#e06030');
+          ctx.fillStyle     = d.status === 'scanning' ? '#f0c040'
+                            : d.cloud_suspect         ? '#c084fc'
+                            : d.horizon_alt === 0     ? '#3fb950'
+                            :                           '#e06030';
           ctx.textAlign     = "center";
           ctx.textBaseline  = "middle";
           const rimLbl = d.status === 'scanning' ? '…'
-                       : (d.horizon_alt === 0 ? DIR_LABELS[i] + ' ✓' : DIR_LABELS[i] + ' ' + d.horizon_alt + '°');
+                       : d.cloud_suspect          ? DIR_LABELS[i] + ' ?'
+                       : d.horizon_alt === 0      ? DIR_LABELS[i] + ' ✓'
+                       :                            DIR_LABELS[i] + ' ' + d.horizon_alt + '°';
           ctx.fillText(rimLbl, lx, ly);
           ctx.restore();
         }
@@ -6619,22 +6759,51 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
 
   function _scanEl(id) { return document.getElementById(id); }
 
-  function _setScanUI(running, hasResult) {
-    const start  = _scanEl("btnStartScan");
-    const cancel = _scanEl("btnCancelScan");
-    const apply  = _scanEl("btnApplyScan");
-    const fields = _scanEl("scanConfigFields");
-    const prog   = _scanEl("scanProgress");
-    if (start)  start.style.display  = running || hasResult ? "none" : "";
+  function _setScanUI(running, hasResult, cloudAbort) {
+    const start   = _scanEl("btnStartScan");
+    const cancel  = _scanEl("btnCancelScan");
+    const apply   = _scanEl("btnApplyScan");
+    const fields  = _scanEl("scanConfigFields");
+    const prog    = _scanEl("scanProgress");
+    if (start)  start.style.display  = running || hasResult || cloudAbort ? "none" : "";
     if (cancel) cancel.style.display = running ? "" : "none";
-    if (apply)  apply.style.display  = (!running && hasResult) ? "" : "none";
+    // Block Apply when the scan was aborted due to clouds
+    if (apply)  apply.style.display  = (!running && hasResult && !cloudAbort) ? "" : "none";
     if (fields) fields.style.opacity = running ? "0.4" : "1";
-    if (prog)   prog.style.display   = (running || hasResult) ? "" : "none";
+    if (prog)   prog.style.display   = (running || hasResult || cloudAbort) ? "" : "none";
+    // Show a Rescan button after a cloud abort so the user can try again
+    let rescanBtn = _scanEl("btnRescanAfterCloud");
+    if (!rescanBtn && cloudAbort) {
+      rescanBtn = document.createElement("button");
+      rescanBtn.id = "btnRescanAfterCloud";
+      rescanBtn.className = "btn";
+      rescanBtn.style.cssText = "flex:1;background:#c084fc;color:#fff;";
+      rescanBtn.textContent = "Try Again";
+      rescanBtn.onclick = function () {
+        rescanBtn.remove();
+        window.setScanOverlay(null);
+        _setScanUI(false, false, false);
+        const lbl = _scanEl("scanProgressLabel");
+        if (lbl) { lbl.textContent = ""; }
+        const warn = _scanEl("scanCloudWarning");
+        if (warn) warn.style.display = "none";
+        const prog2 = _scanEl("scanProgress");
+        if (prog2) prog2.style.display = "none";
+        const s2 = _scanEl("btnStartScan");
+        if (s2) s2.style.display = "";
+      };
+      const btnRow = start && start.parentElement;
+      if (btnRow) btnRow.appendChild(rescanBtn);
+    } else if (rescanBtn && !cloudAbort) {
+      rescanBtn.remove();
+    }
   }
 
   function _updateProgressUI(state) {
-    const label = _scanEl("scanProgressLabel");
-    const bars  = _scanEl("scanDirectionBars");
+    const label       = _scanEl("scanProgressLabel");
+    const bars        = _scanEl("scanDirectionBars");
+    const cloudBanner = _scanEl("scanCloudWarning");
+    const cloudDetail = _scanEl("scanCloudDetail");
     if (!label || !bars || !state.directions) return;
 
     // Status line
@@ -6643,28 +6812,46 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
     if (state.running && scanning) {
       label.textContent = `Scanning ${DIR_LABELS[state.directions.indexOf(scanning)]} (${done}/12)…`;
       label.style.color = "var(--blue)";
+    } else if (!state.running && state.cloud_abort) {
+      label.textContent = "Scan aborted — " + (state.error || "cloud cover suspected");
+      label.style.color = "#c084fc";
     } else if (!state.running && state.error) {
       label.textContent = "Scan failed: " + state.error;
       label.style.color = "var(--red)";
     } else if (!state.running && state.result) {
-      label.textContent = "Scan complete — review the dashed orange profile, then Apply.";
-      label.style.color = "var(--green)";
+      const warn = state.cloud_warning ? " (cloud warning — see below)" : "";
+      label.textContent = "Scan complete — review the dashed orange profile, then Apply." + warn;
+      label.style.color = state.cloud_warning ? "#c084fc" : "var(--green)";
+    }
+
+    // Cloud warning banner
+    if (cloudBanner) {
+      const showBanner = state.cloud_warning || state.cloud_abort;
+      cloudBanner.style.display = showBanner ? "" : "none";
+      if (showBanner && cloudDetail) {
+        const nd = state.cloud_dirs || 0;
+        const total = state.directions.length;
+        cloudDetail.textContent = `${nd} of ${total} directions returned zero stars at the highest scanned altitude.`;
+      }
     }
 
     // Per-direction bar chart
     bars.innerHTML = "";
     state.directions.forEach(function (d, i) {
       const bar = document.createElement("div");
-      bar.title = DIR_LABELS[i] + (d.horizon_alt != null ? "  " + d.horizon_alt + "°" : "");
+      const tipSuffix = d.cloud_suspect ? " (cloud?)" : (d.horizon_alt != null ? "  " + d.horizon_alt + "°" : "");
+      bar.title = DIR_LABELS[i] + tipSuffix;
       const heightPct = d.status === "done"
         ? Math.max(4, Math.round((d.horizon_alt / 90) * 100))
         : (d.status === "scanning" ? 50 : 4);
+      const bg = d.status === "done" && d.cloud_suspect ? "#c084fc"
+               : d.status === "done"    ? (d.horizon_alt === 0 ? "var(--green)" : "#e06030")
+               : d.status === "scanning" ? "#f0c040"
+               :                           "var(--border)";
       bar.style.cssText = [
         "flex:1", "border-radius:2px 2px 0 0", "transition:height .3s",
         "height:" + heightPct + "%",
-        "background:" + (d.status === "done"
-          ? (d.horizon_alt === 0 ? "var(--green)" : "#e06030")
-          : (d.status === "scanning" ? "#f0c040" : "var(--border)")),
+        "background:" + bg,
       ].join(";");
       bars.appendChild(bar);
     });
@@ -6676,10 +6863,10 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
       const s = await r.json();
       window.setScanOverlay(s);
       _updateProgressUI(s);
-      _setScanUI(s.running, !!s.result);
+      _setScanUI(s.running, !!s.result, !!s.cloud_abort);
       if (!s.running) {
         clearInterval(_pollTimer); _pollTimer = null;
-        _scanResult = s.result || null;
+        _scanResult = (!s.cloud_abort && s.result) ? s.result : null;
       }
     } catch (_) {}
   }
@@ -6694,7 +6881,7 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
       settle:         parseFloat(_scanEl("scanSettle")?.value)      || 2,
     };
     _scanResult = null;
-    _setScanUI(true, false);
+    _setScanUI(true, false, false);
     try {
       const r = await fetch("/api/safety/horizon-scan", {
         method: "POST",
@@ -6704,11 +6891,11 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
       const d = await r.json();
       if (!d.ok) {
         alert("Scan failed to start: " + (d.error || "unknown"));
-        _setScanUI(false, false); return;
+        _setScanUI(false, false, false); return;
       }
     } catch (e) {
       alert("Scan failed to start: " + e.message);
-      _setScanUI(false, false); return;
+      _setScanUI(false, false, false); return;
     }
     _pollTimer = setInterval(_poll, 1500);
     _poll();
@@ -6720,16 +6907,18 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
     } catch (_) {}
     clearInterval(_pollTimer); _pollTimer = null;
     window.setScanOverlay(null);
-    _setScanUI(false, false);
+    _setScanUI(false, false, false);
     const label = _scanEl("scanProgressLabel");
     if (label) { label.textContent = "Scan cancelled."; label.style.color = "var(--dim)"; }
+    const warn = _scanEl("scanCloudWarning");
+    if (warn) warn.style.display = "none";
   };
 
   window.applyHorizonScanResult = function () {
     if (!_scanResult) return;
     window.loadAltsFromResult(_scanResult);
     _scanResult = null;
-    _setScanUI(false, false);
+    _setScanUI(false, false, false);
     const prog = _scanEl("scanProgress");
     if (prog) prog.style.display = "none";
     // Prompt the user to review and save
@@ -6747,11 +6936,11 @@ es.onmessage = e => { try { appendLog(JSON.parse(e.data)); } catch {} };
   // Re-poll on tab open in case a scan is already running
   document.addEventListener("DOMContentLoaded", function () {
     fetch("/api/safety/horizon-scan/status").then(r => r.json()).then(function (s) {
-      if (s.running || s.result) {
+      if (s.running || s.result || s.cloud_abort) {
         window.setScanOverlay(s);
         _updateProgressUI(s);
-        _setScanUI(s.running, !!s.result);
-        _scanResult = s.result || null;
+        _setScanUI(s.running, !!s.result, !!s.cloud_abort);
+        _scanResult = (!s.cloud_abort && s.result) ? s.result : null;
         if (s.running) _pollTimer = setInterval(_poll, 1500);
       }
     }).catch(function () {});
@@ -8528,6 +8717,7 @@ def launch(port: int = 5173) -> None:
             cfg,
             get_conditions=_cloud_conditions,
             on_plan=_on_cloud_plan,
+            get_telescope_specs=_cloud_telescope_specs,
         )
         _cloud.start()
 

@@ -19,6 +19,8 @@ Public/query endpoints (for dashboard & app):
     GET  /api/v1/targets                 → active targets with best scores
     GET  /api/v1/lightcurves/<name>      → aggregated light curve
     GET  /api/v1/network/status          → node + data summary
+    GET  /api/v1/weather?lat=&lon=       → astronomy weather forecast (7timer ASTRO)
+    GET  /api/v1/light-pollution?lat=&lon= → sky brightness (mpsas, bortle, source)
 
 Admin endpoints (X-Admin-Key header):
     POST /api/v1/interrupts              → broadcast a high-priority target
@@ -40,6 +42,7 @@ from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
+from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
 logger = logging.getLogger("cloud.server")
 
@@ -264,19 +267,35 @@ def api_register():
     info = request.get_json(force=True, silent=True) or {}
     activation_code = str(info.pop("activation_code", "") or "").strip().upper()
 
-    # If the node hasn't set its own location, pull it from the activation code
+    # If the node hasn't set its own location/telescope, pull them from the
+    # activation code the member created in the app.
     node_lat = float(info.get("latitude") or 0.0)
     node_lon = float(info.get("longitude") or 0.0)
-    if activation_code and (node_lat == 0.0 and node_lon == 0.0):
+    if activation_code:
         code_row = db.query_one(
-            "SELECT latitude, longitude, observatory_name FROM activation_codes WHERE code = %s",
+            "SELECT latitude, longitude, observatory_name, telescope_model, telescope_specs"
+            " FROM activation_codes WHERE code = %s",
             (activation_code,),
         )
-        if code_row and code_row.get("latitude") and code_row.get("longitude"):
-            info["latitude"] = code_row["latitude"]
-            info["longitude"] = code_row["longitude"]
-            if not info.get("owner_name") and code_row.get("observatory_name"):
-                info["owner_name"] = code_row["observatory_name"]
+        if code_row:
+            if (node_lat == 0.0 and node_lon == 0.0
+                    and code_row.get("latitude") and code_row.get("longitude")):
+                info["latitude"] = code_row["latitude"]
+                info["longitude"] = code_row["longitude"]
+                if not info.get("owner_name") and code_row.get("observatory_name"):
+                    info["owner_name"] = code_row["observatory_name"]
+            # Backfill telescope specs only where the node left them unset, so a
+            # node that autodetected real ALPACA hardware always wins.
+            if code_row.get("telescope_model") and not info.get("telescope_model"):
+                info["telescope_model"] = code_row["telescope_model"]
+            try:
+                specs = json.loads(code_row.get("telescope_specs") or "{}")
+            except (TypeError, ValueError):
+                specs = {}
+            for key, val in specs.items():
+                if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
+                    continue
+                info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
 
     try:
         creds = registry.register_node(
@@ -679,6 +698,83 @@ def api_health():
     return jsonify({"ok": db_ok, "db": db_ok, "server_time": _now()}), code
 
 
+@app.route("/api/v1/weather", methods=["GET"])
+def api_weather():
+    """
+    Astronomy weather forecast for a lat/lon.
+
+    Query params: lat, lon (required)
+    Returns 7timer ASTRO forecast: cloud cover, seeing, transparency per 3-h slot.
+    """
+    try:
+        lat = float(request.args["lat"])
+        lon = float(request.args["lon"])
+    except (KeyError, ValueError):
+        return jsonify({"error": "lat and lon query params required"}), 400
+
+    forecast = fetch_astronomy_weather(lat, lon)
+    if forecast is None:
+        return jsonify({"error": "weather data unavailable"}), 503
+
+    # Serialise datetime objects to ISO strings
+    payload = {
+        "source": "7timer_astro",
+        "latitude": lat,
+        "longitude": lon,
+        "slots": [
+            {
+                "time": t.isoformat(),
+                "cloud_cover_pct": forecast["cloud_cover"][i],
+                "seeing": forecast["seeing"][i],
+                "transparency": forecast["transparency"][i],
+                "lifted_index": forecast["lifted_index"][i],
+                "wind_kmh": forecast["wind_kmh"][i],
+                "humidity_pct": forecast["humidity"][i],
+            }
+            for i, t in enumerate(forecast["times"])
+        ],
+    }
+    return jsonify(payload)
+
+
+@app.route("/api/v1/light-pollution", methods=["GET"])
+def api_light_pollution():
+    """
+    Sky brightness for a lat/lon.
+
+    Query params: lat, lon (required)
+    Returns mpsas, bortle, and the data source used.
+    Cached server-side for 7 days per location.
+    """
+    try:
+        lat = float(request.args["lat"])
+        lon = float(request.args["lon"])
+    except (KeyError, ValueError):
+        return jsonify({"error": "lat and lon query params required"}), 400
+
+    lp_api_key = _config.get("light_pollution", {}).get("api_key", "")
+    result = fetch_light_pollution_detail(lat, lon, lp_api_key)
+    return jsonify({
+        "latitude": lat,
+        "longitude": lon,
+        "mpsas": result["mpsas"],
+        "bortle": result["bortle"],
+        "source": result["source"],
+        "radiance_nw_cm2_sr": result.get("radiance"),
+    })
+
+
+@app.route("/api/v1/telescopes", methods=["GET"])
+def api_telescopes():
+    """Public telescope spec catalog — powers the app's model picker.
+
+    Each entry includes the physical specs plus the derived parameters
+    (pixel scale, FOV, magnitude limits) so the app can show a confirmation
+    card without recomputing the physics."""
+    from src import telescope_specs
+    return jsonify({"telescopes": telescope_specs.catalog_list()})
+
+
 @app.errorhandler(Exception)
 def handle_unhandled_error(exc):
     logger.error("Unhandled exception: %s", exc, exc_info=True)
@@ -907,13 +1003,32 @@ def api_me_generate_activation_code(user):
         if lat is None:
             return jsonify({"error": f"Could not find location: {location_name}"}), 400
 
+    # Telescope chosen in the app's connect flow.  We store the model name and,
+    # when the model is in the catalog, the full derived spec set so the node
+    # registers with correct optics even if it can't autodetect them.
+    telescope_model = str(body.get("telescope_model") or "").strip()
+    telescope_specs_json = "{}"
+    if telescope_model:
+        from src import telescope_specs as _ts
+        spec = _ts.lookup(telescope_model)
+        specs = dict(body.get("telescope_specs") or {})
+        if spec is not None:
+            telescope_model = spec.display_name
+            # Catalog-derived params as the base; client-supplied custom specs win.
+            merged = _ts.derive_params(spec)
+            merged.update({k: v for k, v in specs.items() if v not in (None, "")})
+            specs = merged
+        telescope_specs_json = json.dumps(specs)
+
     code = _generate_activation_code()
     expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     db.execute(
         "INSERT INTO activation_codes"
-        " (code, user_id, created_at, expires_at, observatory_name, latitude, longitude)"
-        " VALUES (%s,%s,%s,%s,%s,%s,%s)",
-        (code, user["user_id"], _now(), expires, location_name, lat, lon),
+        " (code, user_id, created_at, expires_at, observatory_name, latitude, longitude,"
+        "  telescope_model, telescope_specs)"
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (code, user["user_id"], _now(), expires, location_name, lat, lon,
+         telescope_model, telescope_specs_json),
     )
     logger.info("Activation code generated for member %s: %s (location: %s)",
                 user["user_id"], code, location_name or "not set")
