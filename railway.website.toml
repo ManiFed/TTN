@@ -1,0 +1,9 @@
+# Website service — thetelescope.net
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.website"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 10
+restartPolicyType = "always"

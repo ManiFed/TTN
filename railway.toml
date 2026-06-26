@@ -1,3 +1,4 @@
+# API service — api.thetelescope.net
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile.cloud"
