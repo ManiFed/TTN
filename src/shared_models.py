@@ -140,6 +140,7 @@ class NodeInfo:
     # + 0.20 × (clear_nights_30d / 30)
     # + 0.15 × precision_factor          (= max(0, 1 − mean_uncertainty / 0.3))
     reliability_score: float = 0.5
+    scheduler_trust_score: float = 0.5  # reliability after recent incident penalties
 
     def to_dict(self) -> dict:
         return asdict(self)

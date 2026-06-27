@@ -16,7 +16,7 @@ from typing import Optional
 
 import time
 
-from cloud import db
+from cloud import db, incidents
 from cloud.conditions import fetch_light_pollution, fetch_light_pollution_detail
 from src.shared_models import NodeInfo
 
@@ -243,6 +243,10 @@ def refresh_node_performance(node_id: str) -> dict:
 
         precision_factor = max(0, 1 − mean_uncertainty / 0.30)
         (0.30 mag is the AAVSO quality-gate ceiling; perfect = 0 uncertainty)
+
+    Scheduler trust is reliability minus recent classified incident penalty.
+    System-caused incidents do not penalize the node; environmental incidents
+    are light; node-attributed incidents carry the strongest penalty.
     """
     totals = db.query_one(
         """SELECT
@@ -294,6 +298,8 @@ def refresh_node_performance(node_id: str) -> dict:
             + 0.15 * precision_factor
         )
         reliability = round(max(0.0, min(1.0, reliability)), 4)
+    incident_penalty = incidents.recent_scheduler_penalty(node_id)
+    scheduler_trust = round(max(0.0, min(1.0, reliability * (1.0 - incident_penalty))), 4)
 
     db.execute(
         """UPDATE nodes SET
@@ -305,15 +311,16 @@ def refresh_node_performance(node_id: str) -> dict:
                clear_nights_30d   = %s,
                outlier_rate       = %s,
                reliability_score  = %s,
+               scheduler_trust_score = %s,
                perf_updated_at    = %s
            WHERE node_id = %s""",
         (total, accepted, rejected, round(mean_unc, 4), round(mean_fwhm, 2),
-         clear_nights, round(outlier_rate, 4), reliability, _now(), node_id),
+         clear_nights, round(outlier_rate, 4), reliability, scheduler_trust, _now(), node_id),
     )
     logger.info(
         "Performance refresh %s: %d obs, accepted=%d, outlier_rate=%.2f, "
-        "clear_30d=%d, reliability=%.3f",
-        node_id, total, accepted, outlier_rate, clear_nights, reliability,
+        "clear_30d=%d, reliability=%.3f, trust=%.3f",
+        node_id, total, accepted, outlier_rate, clear_nights, reliability, scheduler_trust,
     )
     return {
         "node_id":           node_id,
@@ -325,6 +332,8 @@ def refresh_node_performance(node_id: str) -> dict:
         "clear_nights_30d":  clear_nights,
         "outlier_rate":      outlier_rate,
         "reliability_score": reliability,
+        "scheduler_trust_score": scheduler_trust,
+        "incident_penalty": incident_penalty,
     }
 
 

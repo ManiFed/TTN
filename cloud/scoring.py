@@ -7,6 +7,7 @@ Scoring engine — composite score for every (target, node) pair.
           + w_time       · time_criticality
           + w_coverage   · coverage_gap
           + w_observe    · observability
+          + w_roi        · science_roi
 
 Observability is itself a weighted blend of: light pollution penalty against
 target magnitude, weather (cloud forecast over the coming night), moon
@@ -41,6 +42,7 @@ DEFAULT_WEIGHTS = {
     "time":       0.15,
     "coverage":   0.15,
     "observe":    0.25,
+    "roi":        0.10,
 }
 
 # The observability sub-weights are auto-tuned: they are seeded from
@@ -135,6 +137,84 @@ def coverage_gap(target: dict) -> float:
     neglect = historical_neglect(target)
     science = float(target.get("priority", 0.5))
     return 0.4 * recency + 0.6 * (neglect * science)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def science_roi(target: dict, window_days: int = 90) -> float:
+    """Balanced science-yield score for a target from recent network outcomes.
+
+    Blends accepted-data yield, cadence-gap closure, and time-critical success.
+    Sparse histories are pulled toward 0.5 so new targets/classes remain viable.
+    """
+    name = target.get("name")
+    if not name:
+        return 0.5
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    rows = db.query(
+        """SELECT received_at, aavso_submitted, validation_status, quality_flag
+           FROM measurements
+           WHERE target_name = %s AND received_at >= %s
+           ORDER BY received_at ASC LIMIT 200""",
+        (name, cutoff),
+    )
+    total = len(rows)
+    if total == 0:
+        return 0.5
+
+    accepted = sum(
+        1 for row in rows
+        if int(row.get("aavso_submitted") or 0) == 1
+        and row.get("validation_status") != "outlier"
+        and row.get("quality_flag") in ("good", "acceptable")
+    )
+    accepted_yield = accepted / total
+
+    cadence_h = max(1.0, float(target.get("cadence_hours", 24.0) or 24.0))
+    gap_closures = 0
+    prev = None
+    for row in rows:
+        try:
+            when = datetime.fromisoformat(row["received_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if prev is None or (when - prev).total_seconds() / 3600.0 >= cadence_h * 0.75:
+            gap_closures += 1
+        prev = when
+    gap_value = gap_closures / total
+
+    timely = 0.5
+    if target.get("time_critical"):
+        try:
+            discovered = datetime.fromisoformat(target["discovered_at"])
+        except (KeyError, TypeError, ValueError):
+            timely = accepted_yield
+        else:
+            urgent_rows = []
+            for row in rows:
+                try:
+                    when = datetime.fromisoformat(row["received_at"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if 0 <= (when - discovered).total_seconds() <= 72 * 3600:
+                    urgent_rows.append(row)
+            if urgent_rows:
+                urgent_accepted = sum(
+                    1 for row in urgent_rows
+                    if int(row.get("aavso_submitted") or 0) == 1
+                    and row.get("validation_status") != "outlier"
+                    and row.get("quality_flag") in ("good", "acceptable")
+                )
+                timely = urgent_accepted / len(urgent_rows)
+            else:
+                timely = 0.5
+
+    raw = 0.45 * accepted_yield + 0.35 * gap_value + 0.20 * timely
+    evidence = min(1.0, total / 20.0)
+    return round(_clamp01(0.5 * (1.0 - evidence) + raw * evidence), 4)
 
 
 def light_pollution_factor(target_mag: Optional[float], node: dict) -> float:
@@ -294,6 +374,7 @@ def score_target_for_node(target: dict, node: dict, night: Optional[tuple],
         "time":       time_criticality(target),
         "coverage":   coverage_gap(target),
         "observe":    obs,
+        "roi":        science_roi(target),
         "visibility_minutes": vis_min,
         "best_alt_deg": round(best_alt, 1),
     }
@@ -303,17 +384,23 @@ def score_target_for_node(target: dict, node: dict, night: Optional[tuple],
     else:
         total_w = sum(weights.values()) or 1.0
         total = sum(weights[k] * components[k]
-                    for k in ("brightness", "science", "time", "coverage", "observe")) / total_w
+                    for k in ("brightness", "science", "time", "coverage", "observe", "roi")) / total_w
 
-        # Apply node reliability as a multiplier.
-        # reliability_score is 0..1; new nodes start at 0.5.
+        # Apply learned scheduler trust as a multiplier.
+        # scheduler_trust_score is 0..1; new nodes start at 0.5.
         # Scaling: total × (0.5 + 0.5 × reliability) means:
-        #   reliability=1.0 → ×1.00 (no penalty)
-        #   reliability=0.5 → ×0.75 (new/unknown node — slight preference for proven ones)
-        #   reliability=0.0 → ×0.50 (persistently poor node — still gets some assignments)
-        reliability = float(node.get("reliability_score", 0.5) or 0.5)
-        total = total * (0.5 + 0.5 * reliability)
-        components["reliability_score"] = round(reliability, 3)
+        #   trust=1.0 → ×1.00 (no penalty)
+        #   trust=0.5 → ×0.75 (new/unknown node — slight preference for proven ones)
+        #   trust=0.0 → ×0.50 (persistently poor node — still gets some assignments)
+        trust = float(
+            node.get("scheduler_trust_score")
+            if node.get("scheduler_trust_score") is not None
+            else node.get("reliability_score", 0.5)
+            or 0.5
+        )
+        total = total * (0.5 + 0.5 * trust)
+        components["reliability_score"] = round(float(node.get("reliability_score", trust) or trust), 3)
+        components["scheduler_trust_score"] = round(trust, 3)
 
     components["total"] = round(total, 4)
     components["explanation"] = explain_score(target, node, components, weights)
@@ -328,6 +415,7 @@ def explain_score(target: dict, node: dict, components: dict, weights: dict) -> 
         "time": "urgency",
         "coverage": "coverage & neglect",
         "observe": "observability",
+        "roi": "science ROI",
     }
     ranked = sorted(
         (
@@ -359,6 +447,8 @@ def explain_score(target: dict, node: dict, components: dict, weights: dict) -> 
         "best_alt_deg": components.get("best_alt_deg"),
         "visibility_minutes": components.get("visibility_minutes"),
         "reliability_score": components.get("reliability_score"),
+        "scheduler_trust_score": components.get("scheduler_trust_score"),
+        "roi_score": components.get("roi"),
         "target_type": target.get("target_type", "unknown"),
         "node_id": node.get("node_id", ""),
     }

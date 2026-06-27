@@ -54,6 +54,7 @@ scoring:
     time: 0.15
     coverage: 0.15
     observe: 0.25
+    roi: 0.10
   observability_weights:   # seed only — auto-tuned live values live in the DB
     light_pollution: 0.20
     weather: 0.25

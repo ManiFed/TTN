@@ -79,6 +79,7 @@ _SCHEMA: list[str] = [
         clear_nights_30d       INTEGER DEFAULT 0,
         outlier_rate           DOUBLE PRECISION DEFAULT 0.0,
         reliability_score      DOUBLE PRECISION DEFAULT 0.5,
+        scheduler_trust_score  DOUBLE PRECISION DEFAULT 0.5,
         perf_updated_at        TEXT DEFAULT ''
     )
     """,
@@ -384,6 +385,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "clear_nights_30d",   "INTEGER DEFAULT 0"),
     ("nodes", "outlier_rate",       "DOUBLE PRECISION DEFAULT 0.0"),
     ("nodes", "reliability_score",  "DOUBLE PRECISION DEFAULT 0.5"),
+    ("nodes", "scheduler_trust_score", "DOUBLE PRECISION DEFAULT 0.5"),
     ("nodes", "perf_updated_at",      "TEXT DEFAULT ''"),
     ("nodes", "portable",             "INTEGER DEFAULT 0"),
     ("nodes", "vacation_until",       "TEXT DEFAULT ''"),
