@@ -4,12 +4,18 @@ class AppConfig {
   /// All cloud routes are versioned under /api/v1.
   static const String apiPrefix = '/api/v1';
 
-  /// Derives the API base from the current page origin at runtime so no
-  /// dart-define or rebuild is needed when the deployment URL changes.
-  /// Falls back to localhost for local dev.
+  /// Production cloud URL used by native (iOS/Android) builds.
+  static const String _productionBase = 'https://api.thetelescope.net';
+
+  /// For web builds, derives the API base from the page origin so dev and prod
+  /// work without a rebuild. For native builds, Uri.base is a file:// URI so
+  /// origin is empty — fall back to the hardcoded production URL.
+  /// Override with --dart-define=API_BASE=http://localhost:8800 for local dev.
   static String get apiBase {
+    const override = String.fromEnvironment('API_BASE');
+    if (override.isNotEmpty) return override;
     final origin = Uri.base.origin;
-    if (origin.isEmpty || origin == 'null') return 'http://localhost:8800';
+    if (origin.isEmpty || origin == 'null') return _productionBase;
     return origin;
   }
 

@@ -1,12 +1,12 @@
-API_BASE   := https://network.boundlessskies.org
-BASE_HREF  := /app/
+API_BASE   := https://api.thetelescope.net
+BASE_HREF  := /
 
 # Build the Flutter PWA and commit the output so Railway picks it up
 .PHONY: build-web
 build-web:
 	cd app && flutter build web --release \
 		--base-href=$(BASE_HREF) \
-		--dart-define=BS_API_BASE=$(API_BASE)
+		--dart-define=API_BASE=$(API_BASE)
 
 # Build + stage + commit + push in one shot
 .PHONY: deploy-web
