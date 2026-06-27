@@ -1,0 +1,506 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BS0001010000000000000001 /* BoundlessSkiesApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000001 /* BoundlessSkiesApp.swift */; };
+		BS0001010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000002 /* ContentView.swift */; };
+		BS0001010000000000000003 /* TextToSpeechManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000003 /* TextToSpeechManager.swift */; };
+		BS0001010000000000000004 /* HapticManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000004 /* HapticManager.swift */; };
+		BS0001010000000000000005 /* HapticEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000005 /* HapticEvent.swift */; };
+		BS0001010000000000000006 /* HapticStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000006 /* HapticStyle.swift */; };
+		BS0001010000000000000007 /* SpeechHapticsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000007 /* SpeechHapticsViewModel.swift */; };
+		BS0001010000000000000008 /* SpeakingStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000008 /* SpeakingStatusView.swift */; };
+		BS0001010000000000000009 /* HapticTestSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000009 /* HapticTestSection.swift */; };
+		BS000101000000000000000A /* SpeechControlsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS000201000000000000000A /* SpeechControlsSection.swift */; };
+		BS000101000000000000000B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BS000201000000000000000B /* Assets.xcassets */; };
+		BS000101000000000000000C /* TextToSpeechManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS000201000000000000000C /* TextToSpeechManagerTests.swift */; };
+		BS000101000000000000000D /* HapticManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BS000201000000000000000D /* HapticManagerTests.swift */; };
+		BS000101000000000000000E /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BS0002010000000000000010 /* GoogleService-Info.plist */; };
+		BS000101000000000000000F /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = BS000F010000000000000001 /* FirebaseMessaging */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		BS0003010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BS0004010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BS0005010000000000000001;
+			remoteInfo = BoundlessSkies;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		BS0002010000000000000001 /* BoundlessSkiesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundlessSkiesApp.swift; sourceTree = "<group>"; };
+		BS0002010000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		BS0002010000000000000003 /* TextToSpeechManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSpeechManager.swift; sourceTree = "<group>"; };
+		BS0002010000000000000004 /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		BS0002010000000000000005 /* HapticEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticEvent.swift; sourceTree = "<group>"; };
+		BS0002010000000000000006 /* HapticStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticStyle.swift; sourceTree = "<group>"; };
+		BS0002010000000000000007 /* SpeechHapticsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechHapticsViewModel.swift; sourceTree = "<group>"; };
+		BS0002010000000000000008 /* SpeakingStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakingStatusView.swift; sourceTree = "<group>"; };
+		BS0002010000000000000009 /* HapticTestSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticTestSection.swift; sourceTree = "<group>"; };
+		BS000201000000000000000A /* SpeechControlsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechControlsSection.swift; sourceTree = "<group>"; };
+		BS000201000000000000000B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		BS000201000000000000000C /* TextToSpeechManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextToSpeechManagerTests.swift; sourceTree = "<group>"; };
+		BS000201000000000000000D /* HapticManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManagerTests.swift; sourceTree = "<group>"; };
+		BS000201000000000000000E /* BoundlessSkies.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BoundlessSkies.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BS000201000000000000000F /* BoundlessSkiesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BoundlessSkiesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BS0002010000000000000010 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BS0006010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BS000101000000000000000F /* FirebaseMessaging in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BS0006010000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		BS0007010000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				BS0007010000000000000002 /* BoundlessSkies */,
+				BS0007010000000000000003 /* BoundlessSkiesTests */,
+				BS0007010000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000002 /* BoundlessSkies */ = {
+			isa = PBXGroup;
+			children = (
+				BS0002010000000000000001 /* BoundlessSkiesApp.swift */,
+				BS0002010000000000000002 /* ContentView.swift */,
+				BS0007010000000000000005 /* Managers */,
+				BS0007010000000000000006 /* Models */,
+				BS0007010000000000000007 /* ViewModels */,
+				BS0007010000000000000008 /* Views */,
+				BS000201000000000000000B /* Assets.xcassets */,
+				BS0002010000000000000010 /* GoogleService-Info.plist */,
+			);
+			path = BoundlessSkies;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000003 /* BoundlessSkiesTests */ = {
+			isa = PBXGroup;
+			children = (
+				BS000201000000000000000C /* TextToSpeechManagerTests.swift */,
+				BS000201000000000000000D /* HapticManagerTests.swift */,
+			);
+			path = BoundlessSkiesTests;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BS000201000000000000000E /* BoundlessSkies.app */,
+				BS000201000000000000000F /* BoundlessSkiesTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000005 /* Managers */ = {
+			isa = PBXGroup;
+			children = (
+				BS0002010000000000000003 /* TextToSpeechManager.swift */,
+				BS0002010000000000000004 /* HapticManager.swift */,
+			);
+			path = Managers;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000006 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				BS0002010000000000000005 /* HapticEvent.swift */,
+				BS0002010000000000000006 /* HapticStyle.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000007 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				BS0002010000000000000007 /* SpeechHapticsViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		BS0007010000000000000008 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				BS0002010000000000000008 /* SpeakingStatusView.swift */,
+				BS0002010000000000000009 /* HapticTestSection.swift */,
+				BS000201000000000000000A /* SpeechControlsSection.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BS0005010000000000000001 /* BoundlessSkies */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BS0008010000000000000001 /* Build configuration list for PBXNativeTarget "BoundlessSkies" */;
+			buildPhases = (
+				BS0009010000000000000001 /* Sources */,
+				BS0006010000000000000001 /* Frameworks */,
+				BS000A010000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BoundlessSkies;
+			packageProductDependencies = (
+				BS000F010000000000000001 /* FirebaseMessaging */,
+			);
+			productName = BoundlessSkies;
+			productReference = BS000201000000000000000E /* BoundlessSkies.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BS0005010000000000000002 /* BoundlessSkiesTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BS0008010000000000000002 /* Build configuration list for PBXNativeTarget "BoundlessSkiesTests" */;
+			buildPhases = (
+				BS0009010000000000000002 /* Sources */,
+				BS0006010000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BS000B010000000000000001 /* PBXTargetDependency */,
+			);
+			name = BoundlessSkiesTests;
+			productName = BoundlessSkiesTests;
+			productReference = BS000201000000000000000F /* BoundlessSkiesTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BS0004010000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					BS0005010000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					BS0005010000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = BS0005010000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = BS0008010000000000000003 /* Build configuration list for PBXProject "BoundlessSkies" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = BS0007010000000000000001;
+			packageReferences = (
+				BS000E010000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
+			productRefGroup = BS0007010000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BS0005010000000000000001 /* BoundlessSkies */,
+				BS0005010000000000000002 /* BoundlessSkiesTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		BS000A010000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BS000101000000000000000B /* Assets.xcassets in Resources */,
+				BS000101000000000000000E /* GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BS0009010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BS0001010000000000000001 /* BoundlessSkiesApp.swift in Sources */,
+				BS0001010000000000000002 /* ContentView.swift in Sources */,
+				BS0001010000000000000003 /* TextToSpeechManager.swift in Sources */,
+				BS0001010000000000000004 /* HapticManager.swift in Sources */,
+				BS0001010000000000000005 /* HapticEvent.swift in Sources */,
+				BS0001010000000000000006 /* HapticStyle.swift in Sources */,
+				BS0001010000000000000007 /* SpeechHapticsViewModel.swift in Sources */,
+				BS0001010000000000000008 /* SpeakingStatusView.swift in Sources */,
+				BS0001010000000000000009 /* HapticTestSection.swift in Sources */,
+				BS000101000000000000000A /* SpeechControlsSection.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BS0009010000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BS000101000000000000000C /* TextToSpeechManagerTests.swift in Sources */,
+				BS000101000000000000000D /* HapticManagerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BS000B010000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BS0005010000000000000001 /* BoundlessSkies */;
+			targetProxy = BS0003010000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		BS000C010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		BS000C010000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		BS000C010000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = BoundlessSkies/BoundlessSkies.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Boundless Skies";
+				INFOPLIST_KEY_CFBundleName = boundless_skies;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Used to detect your telescope's location during setup.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The Telescope Net uses your location to set up portable observing sessions and estimate sky quality.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.thetelescope.node;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BS000C010000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = BoundlessSkies/BoundlessSkies.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Boundless Skies";
+				INFOPLIST_KEY_CFBundleName = boundless_skies;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Used to detect your telescope's location during setup.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The Telescope Net uses your location to set up portable observing sessions and estimate sky quality.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.thetelescope.node;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BS000C010000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.boundlessskies.native.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BoundlessSkies.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BoundlessSkies";
+			};
+			name = Debug;
+		};
+		BS000C010000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.boundlessskies.native.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BoundlessSkies.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BoundlessSkies";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		BS0008010000000000000001 /* Build configuration list for PBXNativeTarget "BoundlessSkies" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BS000C010000000000000003 /* Debug */,
+				BS000C010000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BS0008010000000000000002 /* Build configuration list for PBXNativeTarget "BoundlessSkiesTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BS000C010000000000000005 /* Debug */,
+				BS000C010000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BS0008010000000000000003 /* Build configuration list for PBXProject "BoundlessSkies" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BS000C010000000000000001 /* Debug */,
+				BS000C010000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		BS000E010000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BS000F010000000000000001 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BS000E010000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = BS0004010000000000000001 /* Project object */;
+}

@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r cloud/requirements.txt
 COPY cloud/ cloud/
 COPY src/ src/
 COPY website/ website/
+COPY app/build/web/ app/build/web/
 
 RUN mkdir -p /app/cloud_data/aavso_batches /app/cloud_data/raw_images
 

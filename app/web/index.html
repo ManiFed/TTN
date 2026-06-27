@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="The member app for The Telescope Net — the world's first automated telescope network for people with disabilities.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Telescope Net">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>The Telescope Net</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#02030A">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&display=swap" rel="stylesheet">
+  <!-- Aladin Lite v3 — loaded eagerly so it's ready when the login screen renders -->
+  <link rel="preconnect" href="https://aladin.cds.unistra.fr" crossorigin />
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8" async></script>
+  <script>
+    window.BS_API_BASE = window.BS_API_BASE ||
+      (window.location.hostname === 'app.thetelescope.net' ? 'https://api.thetelescope.net' : '');
+  </script>
+
+  <style>
+    body { background: #02030A; margin: 0; }
+    /* Hide all Aladin chrome — only show the sky canvas */
+    .ttn-sky .aladin-logo-container, .ttn-sky .aladin-reticle,
+    .ttn-sky .aladin-fov, .ttn-sky .aladin-location,
+    .ttn-sky .aladin-box, .ttn-sky .aladin-widgets-toolbar,
+    .ttn-sky .aladin-vertical-list, .ttn-sky .aladin-horizontal-list,
+    .ttn-sky .aladin-popup-container, .ttn-sky .aladin-btn,
+    .ttn-sky .aladin-tooltip-container, .ttn-sky .aladin-cooFrame,
+    .ttn-sky .aladin-view-label, .ttn-sky .aladin-color-picker { display: none !important; }
+    .ttn-sky, .ttn-sky canvas { pointer-events: none !important; }
+  </style>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

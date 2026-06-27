@@ -974,7 +974,7 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 | Sleep prevention | OS-native APIs | `SetThreadExecutionState` (Win), `caffeinate` (Mac), `systemd-inhibit` (Linux) |
 | Packaging | PyInstaller one-file | NSIS (Win), pkgbuild/productbuild (Mac), systemd install.sh (Linux) |
 | Marketing site | HTML/CSS/JavaScript (static) | `tour.html` — interactive scrollytelling, Aladin Lite sky vis, live API data |
-| Member portal | Native SwiftUI iOS app + HTML/CSS/JS (Phase 2) | iOS app in `app/`; Phase 1 website scaffolding in `website/future/`; accessibility-first design |
+| Member portal | Flutter + HTML/CSS/JS (Phase 2) | Phase 1 scaffolding in `website/future/`; accessibility-first design |
 
 ---
 

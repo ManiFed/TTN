@@ -1,24 +1,25 @@
-IOS_SCHEME      := BoundlessSkies
-IOS_DESTINATION := platform=iOS Simulator,name=iPhone 16
+API_BASE   := https://api.thetelescope.net
+BASE_HREF  := /
 
-# Build the native SwiftUI iOS app.
-.PHONY: build-ios
-build-ios:
-	cd app && xcodebuild -scheme $(IOS_SCHEME) \
-		-destination '$(IOS_DESTINATION)' \
-		build
+# Build the Flutter PWA and commit the output so Railway picks it up
+.PHONY: build-web
+build-web:
+	cd app && flutter build web --release \
+		--base-href=$(BASE_HREF) \
+		--dart-define=API_BASE=$(API_BASE)
 
-.PHONY: test-ios
-test-ios:
-	cd app && xcodebuild -scheme $(IOS_SCHEME) \
-		-destination '$(IOS_DESTINATION)' \
-		test
+# Build + stage + commit + push in one shot
+.PHONY: deploy-web
+deploy-web: build-web
+	git add app/build/web/
+	git commit -m "chore: rebuild Flutter web for production"
+	git push origin main
 
 # Deploy the cloud server to Railway
 .PHONY: deploy-cloud
 deploy-cloud:
 	railway up --detach
 
-# Deploy server-side services. The iOS app ships through Xcode/App Store tooling.
+# Deploy everything
 .PHONY: deploy
-deploy: deploy-cloud
+deploy: deploy-web deploy-cloud

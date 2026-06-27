@@ -190,7 +190,7 @@ Fields: STARID, DATE, MAGNITUDE, MAGERR, FILTER, TRANSFORMED, MTYPE,
 
 ### Page: The App
 
-The mobile app (native SwiftUI for iOS) is the primary member experience.
+The mobile app (Flutter, iOS + Android + PWA) is the primary member experience.
 It is designed from the ground up to run unattended overnight — no expertise, no dark-field trips, just
 scratch around the question: how do disabled people experience astronomy and what do
 they need?
@@ -225,7 +225,7 @@ links to ATels and papers that used the member's data, achievements system
 
 **Accessibility feature checklist:**
 
-*Visual:* Full VoiceOver support; dynamic text sizing;
+*Visual:* Full VoiceOver (iOS) and TalkBack (Android) support; dynamic text sizing;
 high contrast mode; reduced motion mode; color-blind safe palette; alt text on all
 images; text/table alternatives for all charts; dark mode; OpenDyslexic font option.
 
@@ -248,10 +248,9 @@ all video; vibration alternatives for audio alerts.
 - Patience mode (no rushing, ever)
 - Proxy observation support (caregiver setup, member receives results)
 
-**Tech stack:** SwiftUI; Charts (light curves); AVFoundation (audio descriptions);
-CoreHaptics and UIKit feedback generators (haptic patterns); CoreMotion
-(accelerometer for sky map); UserNotifications/APNs (push notifications);
-URLSession (cloud API client).
+**Tech stack:** Flutter/Dart; fl_chart (light curves); flutter_tts (audio descriptions);
+vibration package (haptic patterns); sensors_plus (accelerometer for sky map);
+firebase_messaging (push notifications); http (cloud API client).
 
 ---
 
@@ -512,11 +511,11 @@ Grant-oriented funding model with individual donation option.
 
 ### Mobile App
 
-**Framework:** SwiftUI / Swift  
-**Platforms:** iOS  
+**Framework:** Flutter / Dart  
+**Platforms:** iOS, Android, PWA  
 
-**Key frameworks:** `SwiftUI`, `Charts`, `AVFoundation`, `CoreHaptics`,
-`CoreMotion`, `UserNotifications`
+**Key packages:** `fl_chart`, `flutter_tts`, `vibration`, `sensors_plus`,
+`firebase_messaging`, `shared_preferences`, `http`
 
 **Status:** Not yet started. Phase 1 milestone.
 
@@ -577,7 +576,7 @@ Goal: Build the real multi-node system.
 - [ ] Service management (Windows Service / launchd / systemd)
 - [ ] Member account system (user table, login, node association)
 - [ ] Night summary generation and push notification dispatch
-- [ ] First native SwiftUI iOS app (basic dashboard, accessibility-first)
+- [ ] First Flutter app (basic dashboard, accessibility-first)
 - [ ] 3–5 beta nodes running
 - [ ] First multi-node coordinated observation
 - [ ] Public read API endpoints live
@@ -588,7 +587,7 @@ Goal: Build the real multi-node system.
 
 Goal: Public launch, grow to 50 nodes.
 
-- [ ] App on the iOS App Store
+- [ ] App on iOS and Android App Stores
 - [ ] 25 → 50 active nodes
 - [ ] Nonprofit status obtained
 - [ ] First grant received

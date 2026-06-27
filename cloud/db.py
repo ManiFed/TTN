@@ -2,7 +2,7 @@
 """
 PostgreSQL persistence for the The Telescope Net cloud.
 
-Reads DATABASE_URL from the environment.
+Reads DATABASE_URL from the environment (set by Railway / Fly.io).
 The public API (init, connect, query, query_one, execute, executemany, loads)
 is identical to the old SQLite version so callers don't need to change.
 

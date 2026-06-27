@@ -39,7 +39,7 @@ import string
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, make_response, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
 from src.shared_models import science_program_for_type
@@ -54,6 +54,7 @@ _config: dict = {}   # set by create_app()
 
 _WEBSITE_DIR = os.path.join(os.path.dirname(__file__), "..", "website")
 _DASHBOARD_DIR = os.path.join(_WEBSITE_DIR, "dashboard")
+_APP_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "build", "web")
 
 
 def create_app(config: dict) -> Flask:
@@ -81,6 +82,31 @@ def serve_dashboard_asset(filename):
     return send_from_directory(_DASHBOARD_DIR, "index.html")
 
 
+@app.route("/app")
+@app.route("/app/")
+def serve_app():
+    return _serve_app_index()
+
+
+@app.route("/app/<path:filename>")
+def serve_app_asset(filename):
+    full = os.path.join(_APP_DIR, filename)
+    if os.path.isfile(full):
+        return send_from_directory(_APP_DIR, filename)
+    return _serve_app_index()
+
+
+def _serve_app_index():
+    """Serve the Flutter shell under /app/ without rebuilding the standalone app."""
+    index_path = os.path.join(_APP_DIR, "index.html")
+    with open(index_path, encoding="utf-8") as fh:
+        html = fh.read().replace('<base href="/">', '<base href="/app/">')
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.route("/<path:filename>")
 def serve_website(filename):
     # Never let the website catch-all swallow API requests — return 404 so Flask
@@ -90,6 +116,9 @@ def serve_website(filename):
     full = os.path.join(_WEBSITE_DIR, filename)
     if os.path.isfile(full):
         return send_from_directory(_WEBSITE_DIR, filename)
+    app_asset = os.path.join(_APP_DIR, filename)
+    if os.path.isfile(app_asset):
+        return send_from_directory(_APP_DIR, filename)
     return send_from_directory(_WEBSITE_DIR, "tour.html")
 
 
