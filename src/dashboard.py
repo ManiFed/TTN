@@ -112,6 +112,7 @@ _state: dict[str, Any] = {
         "last_export": None,   # path to most recent exported FITS file
         "running":     False,
         "queued":      0,      # FITS paths waiting in the photometry queue
+        "history":     [],     # rolling last 20 measurements this session
     },
     "aavso": {
         "last_submission": None,   # most recent submit() result dict
@@ -663,6 +664,17 @@ def _run_photometry_bg(fits_path: str) -> None:
         result = _run_photometry(fits_path, cfg)
         with _state_lock:
             _state["photometry"]["last_result"] = result
+            if result:
+                hist = _state["photometry"]["history"]
+                hist.append({
+                    "target_name":  result["target_name"],
+                    "bjd":          result["bjd"],
+                    "magnitude":    result["magnitude"],
+                    "uncertainty":  result["uncertainty"],
+                    "quality_flag": result["quality_flag"],
+                })
+                if len(hist) > 20:
+                    del hist[:-20]
         if result:
             logger.info(
                 "Photometry: %s  mag=%.3f±%.3f  SNR=%.1f  quality=%s",
@@ -4666,6 +4678,20 @@ html[data-night] img, html[data-night] video { filter: none; }
       </div>
     </div>
 
+    <!-- Now Observing card (shown once photometry history exists this session) -->
+    <div id="nowObsCard" style="display:none;background:linear-gradient(135deg,rgba(60,120,255,0.08),rgba(120,60,255,0.06));border:1px solid rgba(100,140,255,0.18);border-radius:10px;padding:10px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="sched-live-pulse pulse" style="width:8px;height:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;font-weight:600;letter-spacing:1px;color:var(--dim);text-transform:uppercase;">Now Observing</span>
+        <span style="font-size:14px;font-weight:700;color:var(--text);" id="nowObsTarget">—</span>
+        <span style="font-size:11px;color:var(--dim);" id="nowObsMag"></span>
+      </div>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:14px;">
+        <svg id="nowObsSparkline" width="140" height="28" style="flex-shrink:0;overflow:visible;"></svg>
+        <div style="font-size:10px;color:var(--dim);line-height:1.6;" id="nowObsStats"></div>
+      </div>
+    </div>
+
     <!-- Live execution status (hidden when idle) -->
     <div class="sched-live" id="schedLive" style="display:none;">
       <div class="sched-live-pulse pulse"></div>
@@ -5321,6 +5347,53 @@ function render(s) {
   renderSafety(s.safety || {});
   renderImage(s);
   renderPierCam(s.pier_cam || {});
+  renderNowObserving(s);
+}
+
+// ── Now Observing widget ─────────────────────────────────────────────────────
+
+function renderNowObserving(s) {
+  const card     = document.getElementById("nowObsCard");
+  const targetEl = document.getElementById("nowObsTarget");
+  const magEl    = document.getElementById("nowObsMag");
+  const statsEl  = document.getElementById("nowObsStats");
+  const spark    = document.getElementById("nowObsSparkline");
+  if (!card) return;
+
+  const history = (s.photometry || {}).history || [];
+  if (!history.length) { card.style.display = "none"; return; }
+  card.style.display = "";
+
+  const last = history[history.length - 1];
+  targetEl.textContent = last.target_name || "—";
+
+  const qualColor = { good: "#4caf50", acceptable: "#ff9800", poor: "#e05252" };
+  const col = qualColor[last.quality_flag] || "var(--dim)";
+  magEl.innerHTML =
+    `<span style="font-size:18px;font-weight:700;color:${col};">${last.magnitude.toFixed(3)}</span>` +
+    `<span style="font-size:11px;color:var(--dim);margin-left:3px;">±${last.uncertainty.toFixed(3)} mag</span>`;
+
+  if (history.length > 1) {
+    const mags = history.map(h => h.magnitude);
+    statsEl.textContent =
+      `${history.length} measurements  ·  range ${Math.min(...mags).toFixed(3)}–${Math.max(...mags).toFixed(3)}`;
+  } else {
+    statsEl.textContent = "First measurement this session";
+  }
+
+  if (history.length < 2) { spark.innerHTML = ""; return; }
+  const mags = history.map(h => h.magnitude);
+  const minM = Math.min(...mags), maxM = Math.max(...mags);
+  const W = 140, H = 28, pad = 2, range = maxM - minM || 0.5;
+  const pts = mags.map((m, i) => {
+    const x = pad + (i / (mags.length - 1)) * (W - pad * 2);
+    const y = pad + ((m - minM) / range) * (H - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const lastPt = pts.split(" ").pop().split(",");
+  spark.innerHTML =
+    `<polyline points="${pts}" fill="none" stroke="rgba(100,160,255,0.9)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<circle cx="${lastPt[0]}" cy="${lastPt[1]}" r="2.5" fill="#4caf50"/>`;
 }
 
 // ── Connection dropdown ──────────────────────────────────────────────────────
