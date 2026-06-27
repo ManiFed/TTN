@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/aladin_sky.dart';
@@ -271,8 +272,8 @@ class _HomeScreenState extends State<HomeScreen> {
 class _SetupWall extends StatelessWidget {
   const _SetupWall();
 
-  static const _downloadUrl =
-      'https://boundlessskies.org/download/node-agent';
+  static String get _downloadUrl =>
+      '${AppConfig.apiBase}/download/node-agent';
 
   static const _steps = [
     (
