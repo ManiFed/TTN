@@ -3161,7 +3161,7 @@ def api_geocode():
         resp = _req.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": q, "format": "json", "limit": 1},
-            headers={"User-Agent": "BoundlessSkiesNode/1.0"},
+            headers={"User-Agent": "TTNNode/1.0"},
             timeout=8,
         )
         results = resp.json()
@@ -4648,10 +4648,10 @@ html[data-night] img, html[data-night] video { filter: none; }
 <div class="modal hidden" id="welcomeModal">
   <div class="modal-content" style="max-width:420px;width:90%;padding:36px 32px 28px;text-align:center;">
     <div style="font-size:48px;margin-bottom:12px;">🌌</div>
-    <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;margin-bottom:8px;">Connect to Boundless Skies</div>
+    <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;margin-bottom:8px;">Connect to The Telescope Net</div>
     <div style="font-size:13px;color:var(--dim);margin-bottom:28px;line-height:1.5;">
-      Paste the activation code from the Boundless Skies app to link this telescope to the network.
-      <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
+      Paste the activation code from the TTN app to link this telescope to the network.
+      <br><span style="font-size:11px;opacity:0.6;">app.thetelescope.net → Connect telescope</span>
     </div>
     <input id="welcomeCodeInput" class="inp" type="text"
       placeholder="BS-2024-XXXXXXXX"
@@ -4787,7 +4787,7 @@ html[data-night] img, html[data-night] video { filter: none; }
         </label>
         <div class="cfg-field-grid">
           <div class="inp-group">
-            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in the Boundless Skies network. Used to label your data contributions. Example: node_001.">?</span></div>
+            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in the TTN network. Used to label your data contributions. Example: node_001.">?</span></div>
             <input class="inp" type="text" id="cfgPhotNodeId" placeholder="node_001">
           </div>
           <div class="inp-group">
@@ -5046,12 +5046,12 @@ html[data-night] img, html[data-night] video { filter: none; }
         <div class="cfg-field-grid" style="grid-template-columns:1fr;">
           <div class="inp-group">
             <div class="inp-label">Cloud URL <span class="help-tip" data-tip="The URL of The Telescope Net cloud server. Leave as the default unless you are running a private instance.">?</span></div>
-            <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://node.boundlessskies.org">
+            <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://api.thetelescope.net">
           </div>
           <div class="inp-group" id="cfgCloudCodeGroup">
-            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from the Boundless Skies mobile app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
+            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from the TTN app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
             <input class="inp" type="text" id="cfgCloudCode" placeholder="BS-2024-XXXXXXXX" style="text-transform:uppercase;letter-spacing:1px;">
-            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from the Boundless Skies app → Telescopes → Connect telescope. After saving and restarting, this field will clear once registered.</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from app.thetelescope.net → Connect telescope. After saving and restarting, this field will clear once registered.</div>
           </div>
         </div>
         <div class="cfg-section-hdr">Behavior</div>
@@ -8707,7 +8707,7 @@ async function submitActivationCode() {
     if (!cfg.cloud) cfg.cloud = {};
     cfg.cloud.activation_code = code;
     cfg.cloud.enabled = true;
-    if (!cfg.cloud.url) cfg.cloud.url = 'https://node.boundlessskies.org';
+    if (!cfg.cloud.url) cfg.cloud.url = 'https://api.thetelescope.net';
     const r = await fetch('/api/config/parsed', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

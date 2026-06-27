@@ -1988,17 +1988,33 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
   }
 
+  Future<void> _checkConnected() async {
+    setState(() { _pushing = true; _error = null; });
+    try {
+      final nodes = await context.read<AppState>().api.nodes();
+      if (!mounted) return;
+      if (nodes.isNotEmpty) {
+        setState(() { _pushed = true; _pushing = false; });
+      } else {
+        setState(() {
+          _pushing = false;
+          _error = 'Not linked yet. Paste the code at localhost:5173, wait a moment, then try again.';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() { _pushing = false; _error = '$e'; });
+    }
+  }
+
   List<Widget> _buildCodeSection(TextTheme tt, BuildContext context) {
     if (_pushed) {
       return [
-        const Icon(Icons.check_circle_outline,
-            color: Colors.green, size: 48),
+        const Icon(Icons.check_circle_outline, color: Colors.green, size: 48),
         const SizedBox(height: 16),
         Text('Telescope connected!', style: tt.titleLarge),
         const SizedBox(height: 8),
         Text(
-          'The node software will register within 30 seconds. '
-          'Pull to refresh the telescope list.',
+          'Your telescope is now linked to your TTN account.',
           style: tt.bodyMedium,
           textAlign: TextAlign.center,
         ),
@@ -2011,38 +2027,60 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
 
     return [
-      Text('Enter the pairing token', style: tt.titleMedium),
+      Text('Your activation code', style: tt.titleMedium),
       const SizedBox(height: 8),
       Text(
-        'Look at the terminal window where the node software is running. '
-        "You'll see a pairing token like NOVA-4827.",
+        'Open http://localhost:5173 on your telescope\'s Mac. '
+        'A setup prompt will appear — paste this code there.',
         style: tt.bodyMedium,
       ),
       const SizedBox(height: 20),
-      TextField(
-        controller: _pairCtrl,
-        autofocus: true,
-        textCapitalization: TextCapitalization.characters,
-        decoration: const InputDecoration(
-          labelText: 'Pairing token',
-          hintText: 'e.g. NOVA-4827',
-          border: OutlineInputBorder(),
-          prefixIcon: Icon(Icons.link_outlined),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: BSTheme.glassBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: BSTheme.glassBorder),
         ),
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _pushToTelescope(),
-        onChanged: (_) => setState(() {}),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _code!,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: BSTheme.accent,
+                  letterSpacing: 3,
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: _code!));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copied to clipboard')),
+                );
+              },
+              icon: const Icon(Icons.copy_outlined, size: 18),
+              tooltip: 'Copy',
+            ),
+          ],
+        ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 6),
+      Text(
+        'Valid for 30 days. Keep it private.',
+        style: tt.bodySmall?.copyWith(color: BSTheme.ink3),
+      ),
+      const SizedBox(height: 20),
       if (_pushing)
         const Center(child: CircularProgressIndicator())
       else
         FilledButton.icon(
-          onPressed: _pairCtrl.text.trim().isEmpty
-              ? null
-              : _pushToTelescope,
-          icon: const Icon(Icons.send_outlined, size: 18),
-          label: const Text('Connect telescope'),
+          onPressed: _checkConnected,
+          icon: const Icon(Icons.refresh_outlined, size: 18),
+          label: const Text('I\'ve pasted it — check connection'),
         ),
       const SizedBox(height: 16),
       OutlinedButton.icon(

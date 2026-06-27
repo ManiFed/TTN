@@ -282,16 +282,16 @@ class _SetupWall extends StatelessWidget {
       detail: 'Run the installer on the Mac connected to your telescope.',
     ),
     (
-      icon: Icons.tag_outlined,
-      label: 'Note your pairing token',
+      icon: Icons.open_in_browser_outlined,
+      label: 'Open the dashboard',
       detail:
-          'When the Node Agent starts, it shows a short token like NOVA-4827. You\'ll need it in the next step.',
+          'The installer opens localhost:5173 in your browser. A setup prompt will ask for an activation code.',
     ),
     (
       icon: Icons.link_outlined,
       label: 'Connect your telescope',
       detail:
-          'Tap "Connect telescope" below, pick your scope and location, then enter the pairing token. The app does the rest.',
+          'Tap "Connect telescope" below, choose your scope and location, then copy the code and paste it into the dashboard prompt.',
     ),
   ];
 
