@@ -272,7 +272,6 @@ a = Analysis(
         "pandas",
         "sympy",
         "test",
-        "distutils",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

@@ -127,10 +127,10 @@ def serve_website(filename):
 
 from flask import redirect as _redirect
 
-_GITHUB_RELEASE_BASE = "https://github.com/skyrobot804/node_v1/releases/download"
+_GITHUB_RELEASE_BASE = "https://github.com/ManiFed/TTN/releases/download"
 
 _DOWNLOAD_URLS = {
-    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.0/BoundlessSkiesNode-1.0.0-macOS.pkg",
+    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-macOS.pkg",
     "windows": None,  # not yet released
     "linux":   None,  # not yet released
 }
