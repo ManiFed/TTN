@@ -4,7 +4,7 @@
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 from cloud import db
 
@@ -124,3 +124,107 @@ def log(
         )
     except Exception as exc:
         logger.warning("Could not record reliability incident for %s: %s", node_id, exc)
+
+
+# ── Structured incident lifecycle ──────────────────────────────────────────────
+
+def open_incident(node_id: str, title: str, root_cause: str = "unknown",
+                  severity: str = "warning", trigger_event: str = "") -> Optional[int]:
+    """
+    Open a new structured incident for a node.
+
+    Returns the incident id, or None if a non-resolved incident already exists
+    for this node (prevents duplicate floods).
+    """
+    if not node_id:
+        return None
+    try:
+        existing = db.query_one(
+            "SELECT id FROM incidents WHERE node_id = %s AND status IN ('open','investigating')",
+            (node_id,),
+        )
+        if existing:
+            return existing["id"]
+
+        cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        raw = db.query_one(
+            "SELECT COUNT(*) AS n FROM reliability_incidents WHERE node_id=%s AND occurred_at>%s",
+            (node_id, cutoff_24h),
+        ) or {}
+        n_raw = int((raw or {}).get("n", 0) or 0)
+
+        now = _now()
+        return db.execute(
+            """INSERT INTO incidents
+                   (node_id, status, title, root_cause, severity,
+                    opened_at, updated_at, trigger_event, n_raw_events)
+               VALUES (%s,'open',%s,%s,%s,%s,%s,%s,%s)""",
+            (node_id, title[:200], root_cause[:40], severity[:24],
+             now, now, trigger_event[:80], n_raw),
+            returning_id=True,
+        )
+    except Exception as exc:
+        logger.warning("Could not open incident for %s: %s", node_id, exc)
+        return None
+
+
+def resolve_incident(incident_id: int, resolver: str = "",
+                     note: str = "") -> None:
+    """Mark a structured incident as resolved."""
+    try:
+        now = _now()
+        db.execute(
+            """UPDATE incidents SET status='resolved', resolved_at=%s, updated_at=%s,
+                    resolver=%s, resolution_note=%s
+               WHERE id=%s""",
+            (now, now, resolver[:120], note[:500], incident_id),
+        )
+    except Exception as exc:
+        logger.warning("Could not resolve incident %s: %s", incident_id, exc)
+
+
+def auto_triage(node_id: str, stats: dict[str, Any]) -> None:
+    """
+    Auto-open a structured incident based on freshly computed performance stats.
+
+    Called by registry.refresh_node_performance() after every nightly update.
+    Conditions that trigger an incident (only one open incident per node):
+      - outlier_rate > 0.40  →  cross-validation quality degradation
+      - reliability_score < 0.30  →  composite reliability collapse
+      - ≥3 error/critical raw events in the last 24 h  →  operational errors
+    """
+    if not node_id:
+        return
+
+    outlier_rate      = float(stats.get("outlier_rate", 0) or 0)
+    reliability       = float(stats.get("reliability_score", 1) or 1)
+    incident_penalty  = float(stats.get("incident_penalty", 0) or 0)
+
+    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    raw_errors = db.query_one(
+        """SELECT COUNT(*) AS n FROM reliability_incidents
+           WHERE node_id=%s AND severity IN ('error','critical') AND occurred_at>%s""",
+        (node_id, cutoff_24h),
+    ) or {}
+    n_errors = int((raw_errors or {}).get("n", 0) or 0)
+
+    title, root_cause, severity = None, "unknown", "warning"
+
+    if n_errors >= 3:
+        title      = f"Repeated operational errors on {node_id} (last 24 h)"
+        root_cause = "software"
+        severity   = "error"
+    elif outlier_rate > 0.40:
+        title      = f"High cross-validation outlier rate on {node_id} ({outlier_rate:.0%})"
+        root_cause = "optics"
+        severity   = "warning"
+    elif reliability < 0.30:
+        title      = f"Low reliability score on {node_id} ({reliability:.2f})"
+        root_cause = "unknown"
+        severity   = "warning"
+
+    if title:
+        iid = open_incident(node_id, title, root_cause, severity,
+                            trigger_event="auto_triage")
+        if iid:
+            logger.warning("Incident #%d opened for %s: %s", iid, node_id, title)

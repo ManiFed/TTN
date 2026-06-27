@@ -895,6 +895,61 @@ def api_admin_patrol():
     return jsonify({"n": len(rows), "hours": hours, "detections": rows})
 
 
+@app.route("/api/v1/admin/incidents", methods=["GET"])
+@require_admin
+def api_admin_incidents():
+    """List structured incidents. ?status=open|investigating|resolved|all (default: open+investigating)."""
+    from cloud import incidents as _inc
+    status_filter = request.args.get("status", "active")
+    if status_filter == "all":
+        rows = db.query(
+            "SELECT * FROM incidents ORDER BY opened_at DESC LIMIT 200"
+        )
+    elif status_filter == "resolved":
+        rows = db.query(
+            "SELECT * FROM incidents WHERE status='resolved' ORDER BY resolved_at DESC LIMIT 200"
+        )
+    else:
+        rows = db.query(
+            "SELECT * FROM incidents WHERE status IN ('open','investigating') ORDER BY opened_at DESC"
+        )
+    return jsonify({"incidents": rows, "count": len(rows)})
+
+
+@app.route("/api/v1/admin/incidents/<int:incident_id>", methods=["PATCH"])
+@require_admin
+def api_admin_incident_update(incident_id: int):
+    """
+    Update a structured incident.
+
+    Body fields (all optional):
+        status          open | investigating | resolved
+        root_cause      weather | hardware | software | optics | unknown
+        resolution_note free text
+        resolver        name/email of person resolving
+    """
+    from cloud import incidents as _inc
+    body = request.get_json(force=True, silent=True) or {}
+    allowed = {"status", "root_cause", "resolution_note", "resolver"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        return jsonify({"error": "no valid fields to update"}), 400
+
+    now = _now()
+    set_clauses = ", ".join(f"{k} = %s" for k in updates)
+    values = list(updates.values()) + [now, incident_id]
+    db.execute(
+        f"UPDATE incidents SET {set_clauses}, updated_at = %s WHERE id = %s",
+        values,
+    )
+    if updates.get("status") == "resolved" and "resolved_at" not in updates:
+        db.execute("UPDATE incidents SET resolved_at = %s WHERE id = %s AND resolved_at IS NULL",
+                   (now, incident_id))
+
+    row = db.query_one("SELECT * FROM incidents WHERE id = %s", (incident_id,))
+    return jsonify({"incident": row})
+
+
 @app.route("/api/v1/health", methods=["GET"])
 def api_health():
     try:

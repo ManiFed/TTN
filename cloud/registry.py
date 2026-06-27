@@ -322,19 +322,21 @@ def refresh_node_performance(node_id: str) -> dict:
         "clear_30d=%d, reliability=%.3f, trust=%.3f",
         node_id, total, accepted, outlier_rate, clear_nights, reliability, scheduler_trust,
     )
-    return {
-        "node_id":           node_id,
-        "total_observations": total,
-        "aavso_accepted":    accepted,
-        "aavso_rejected":    rejected,
-        "mean_uncertainty":  mean_unc,
-        "mean_fwhm":         mean_fwhm,
-        "clear_nights_30d":  clear_nights,
-        "outlier_rate":      outlier_rate,
-        "reliability_score": reliability,
+    perf = {
+        "node_id":               node_id,
+        "total_observations":    total,
+        "aavso_accepted":        accepted,
+        "aavso_rejected":        rejected,
+        "mean_uncertainty":      mean_unc,
+        "mean_fwhm":             mean_fwhm,
+        "clear_nights_30d":      clear_nights,
+        "outlier_rate":          outlier_rate,
+        "reliability_score":     reliability,
         "scheduler_trust_score": scheduler_trust,
-        "incident_penalty": incident_penalty,
+        "incident_penalty":      incident_penalty,
     }
+    incidents.auto_triage(node_id, perf)
+    return perf
 
 
 def refresh_all_performance() -> int:
