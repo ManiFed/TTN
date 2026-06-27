@@ -1,0 +1,21 @@
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/**'
+      - 'Dockerfile.cloud'
+      - 'railway.toml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      - name: Redeploy API service
+        run: railway deployment redeploy --service api --yes
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
