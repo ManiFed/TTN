@@ -43,7 +43,9 @@ flutter create .
 # 3. Fetch dependencies
 flutter pub get
 
-# 4. Run against a local cloud (python -m cloud.main on :8800)
+# 4. Run against a local cloud (python -m cloud.main on :8800).
+#    cloud/config.yaml expects PostgreSQL at:
+#    postgresql://boundless@/boundless?host=/tmp
 flutter run --dart-define=BS_API_BASE=http://localhost:8800
 ```
 

@@ -39,6 +39,7 @@ if [ ! -f "${CONFIG}" ]; then
         sed -i '' "s/ACTIVATION_CODE_PLACEHOLDER/${ACTIVATION_CODE}/g" "${CONFIG}"
         echo "Activation code written to config.yaml"
     else
+        sed -i '' "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}"
         echo "WARNING: No activation code provided — edit config.yaml to add it later"
     fi
     chmod 600 "${CONFIG}"

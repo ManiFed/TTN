@@ -38,6 +38,10 @@
   <!-- Aladin Lite v3 — loaded eagerly so it's ready when the login screen renders -->
   <link rel="preconnect" href="https://aladin.cds.unistra.fr" crossorigin />
   <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8" async></script>
+  <script>
+    window.BS_API_BASE = window.BS_API_BASE ||
+      (window.location.hostname === 'app.thetelescope.net' ? 'https://api.thetelescope.net' : '');
+  </script>
 
   <style>
     body { background: #02030A; margin: 0; }

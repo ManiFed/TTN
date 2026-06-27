@@ -303,7 +303,7 @@ python3 scripts/manage.py generate-code --count 5 --expires-days 90
 python3 scripts/manage.py generate-code --count 1 --user u_abc123
 
 # Member self-service via the API
-curl -X POST https://cloud.telescopenet.org/api/v1/me/activation-code \
+curl -X POST https://api.thetelescope.net/api/v1/me/activation-code \
      -H "Authorization: Bearer <your_token>"
 # → {"code": "BS-2026-ABCD1234", "expires_at": "2026-09-08T..."}
 ```
@@ -541,7 +541,7 @@ scoring:
 ```bash
 # Check current live weights
 curl -H "X-Admin-Key: your-admin-key" \
-     https://cloud.telescopenet.org/api/v1/admin/tuning
+     https://api.thetelescope.net/api/v1/admin/tuning
 
 # Response:
 # {
@@ -555,7 +555,7 @@ curl -H "X-Admin-Key: your-admin-key" \
 curl -X POST -H "X-Admin-Key: your-admin-key" \
      -H "Content-Type: application/json" \
      -d '{"rollback_to_id": 5}' \
-     https://cloud.telescopenet.org/api/v1/admin/tuning/rollback
+     https://api.thetelescope.net/api/v1/admin/tuning/rollback
 ```
 
 ---
@@ -784,7 +784,7 @@ cloud/ (Flask, port 8800)
 ```yaml
 cloud:
   enabled: true
-  url: https://cloud.telescopenet.org
+  url: https://api.thetelescope.net
   activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
   auto_run_plans: true     # automatically execute observation plans from the cloud
 ```
@@ -866,7 +866,7 @@ observatory:
 ```yaml
 cloud:
   enabled: true
-  url: https://cloud.telescopenet.org
+  url: https://api.thetelescope.net
   activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
   auto_run_plans: true
 ```

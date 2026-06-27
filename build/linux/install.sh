@@ -16,7 +16,7 @@ DATA_DIR="/var/lib/telescopenet/nodeagent"
 LOG_DIR="/var/log/telescopenet"
 SERVICE_USER="telescopenet"
 SERVICE_FILE="/etc/systemd/system/telescopenet-node.service"
-RELEASE_URL="https://telescopenet.org/releases/latest/TelescopeNetNode-linux-x86_64"
+RELEASE_URL="https://api.thetelescope.net/download/node-agent/linux"
 ACTIVATION_CODE=""
 
 # Parse arguments
@@ -86,7 +86,7 @@ if [ ! -f "${CONFIG}" ]; then
         cat > "${CONFIG}" <<'YAML'
 cloud:
   enabled: true
-  url: 'https://cloud.telescopenet.org'
+  url: 'https://api.thetelescope.net'
   activation_code: 'ACTIVATION_CODE_PLACEHOLDER'
   node_id: ''
   api_key: ''
@@ -111,6 +111,8 @@ YAML
     if [ -n "${ACTIVATION_CODE}" ]; then
         sed -i "s/ACTIVATION_CODE_PLACEHOLDER/${ACTIVATION_CODE}/g" "${CONFIG}"
         echo "Activation code written to config.yaml"
+    else
+        sed -i "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}"
     fi
 
     chmod 600 "${CONFIG}"

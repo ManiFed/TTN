@@ -39,7 +39,7 @@ import string
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, make_response, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
@@ -84,7 +84,7 @@ def serve_dashboard_asset(filename):
 @app.route("/app")
 @app.route("/app/")
 def serve_app():
-    return send_from_directory(_APP_DIR, "index.html")
+    return _serve_app_index()
 
 
 @app.route("/app/<path:filename>")
@@ -92,7 +92,18 @@ def serve_app_asset(filename):
     full = os.path.join(_APP_DIR, filename)
     if os.path.isfile(full):
         return send_from_directory(_APP_DIR, filename)
-    return send_from_directory(_APP_DIR, "index.html")
+    return _serve_app_index()
+
+
+def _serve_app_index():
+    """Serve the Flutter shell under /app/ without rebuilding the standalone app."""
+    index_path = os.path.join(_APP_DIR, "index.html")
+    with open(index_path, encoding="utf-8") as fh:
+        html = fh.read().replace('<base href="/">', '<base href="/app/">')
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @app.route("/<path:filename>")
@@ -104,6 +115,9 @@ def serve_website(filename):
     full = os.path.join(_WEBSITE_DIR, filename)
     if os.path.isfile(full):
         return send_from_directory(_WEBSITE_DIR, filename)
+    app_asset = os.path.join(_APP_DIR, filename)
+    if os.path.isfile(app_asset):
+        return send_from_directory(_APP_DIR, filename)
     return send_from_directory(_WEBSITE_DIR, "tour.html")
 
 

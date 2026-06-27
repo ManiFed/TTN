@@ -72,7 +72,7 @@ cat > "${CONTENTS}/Info.plist" <<EOF
 </plist>
 EOF
 
-cp "${BUILD_DIR}/com.telescopenet.nodeagent.plist" "${RESOURCES_DIR}/"
+cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/com.telescopenet.nodeagent.plist"
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
