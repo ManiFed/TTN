@@ -2967,74 +2967,6 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             _pier_cam_pause.clear()
 
 
-def _sched_auto_horizon_scan() -> bool:
-    """Run a horizon scan synchronously at the start of a session.
-
-    Reads scan parameters from the safety config (same defaults as the manual
-    UI).  Applies the result as the horizon mask on success.  Returns True if
-    the schedule should continue, False if a cloud abort means it should stop.
-    """
-    if _tel is None or _cam is None:
-        logger.info("Schedule: skipping auto horizon scan — telescope or camera not connected")
-        return True
-
-    with _scan_lock:
-        if _scan_state["running"]:
-            logger.info("Schedule: horizon scan already in progress — skipping auto scan")
-            return True
-
-    cfg      = _load_config()
-    scan_cfg = cfg.get("safety", {}).get("horizon_scan", {})
-
-    floor_alt    = max(5.0,  min(45.0, float(scan_cfg.get("floor_alt",      25.0))))
-    start_alt    = max(30.0, min(85.0, float(scan_cfg.get("start_alt",      60.0))))
-    step_deg     = max(2.0,  min(15.0, float(scan_cfg.get("step",            5.0))))
-    exposure_s   = max(1.0,  min(60.0, float(scan_cfg.get("exposure",        5.0))))
-    star_thresh  = max(1,    min(100,  int(  scan_cfg.get("star_threshold",   5))))
-    settle_s     = max(0.0,  min(15.0, float(scan_cfg.get("settle",           2.0))))
-
-    if start_alt <= floor_alt:
-        logger.warning("Schedule: auto horizon scan config invalid (start_alt <= floor_alt) — skipping")
-        return True
-
-    logger.info(
-        "Schedule: starting auto horizon scan "
-        "(floor=%.1f start=%.1f step=%.1f exp=%.1fs thresh=%d settle=%.1fs)",
-        floor_alt, start_alt, step_deg, exposure_s, star_thresh, settle_s,
-    )
-    with _sched_lock:
-        _sched_state["current_phase"] = "horizon_scan"
-
-    # Run synchronously in this thread so observations don't start until it finishes.
-    _run_horizon_scan(floor_alt, start_alt, step_deg, exposure_s, star_thresh, settle_s)
-
-    with _scan_lock:
-        aborted = _scan_state.get("cloud_abort", False)
-        error   = _scan_state.get("error")
-        result  = _scan_state.get("result")
-
-    if aborted:
-        logger.error("Schedule: auto horizon scan aborted due to cloud cover — halting session. %s", error)
-        return False
-
-    if result:
-        # Auto-apply the mask so tonight's observations benefit immediately.
-        cfg = _load_config()
-        cfg.setdefault("safety", {})["horizon_mask"] = result
-        try:
-            with open("config.yaml", "w") as fh:
-                yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        except OSError as exc:
-            logger.warning("Schedule: could not persist horizon mask to config.yaml: %s", exc)
-        if _safety_mgr is not None:
-            _safety_mgr._horizon_mask = [(float(p[0]), float(p[1])) for p in result]
-        logger.info("Schedule: horizon mask updated from auto scan")
-    else:
-        logger.warning("Schedule: auto horizon scan produced no result (%s) — continuing without mask update", error)
-
-    return True
-
-
 def _run_schedule_bg(items: list) -> None:
     """Background thread: slew + expose for each scheduled observation."""
     with _sched_lock:
@@ -3048,13 +2980,6 @@ def _run_schedule_bg(items: list) -> None:
     logger.info("Schedule started: %d observations", len(items))
 
     _sched_prepare_mount()
-
-    if not _sched_auto_horizon_scan():
-        with _sched_lock:
-            _sched_state["running"] = False
-            _sched_state["current_phase"] = "done"
-            _sched_state["error"] = "Horizon scan aborted due to cloud cover — session cancelled"
-        return
 
     try:
         for idx, item in enumerate(items):
@@ -3218,7 +3143,7 @@ def api_geocode():
         resp = _req.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": q, "format": "json", "limit": 1},
-            headers={"User-Agent": "TTNNode/1.0"},
+            headers={"User-Agent": "TheTelescopeNode/1.0"},
             timeout=8,
         )
         results = resp.json()
@@ -4725,8 +4650,8 @@ html[data-night] img, html[data-night] video { filter: none; }
     <div style="font-size:48px;margin-bottom:12px;">🌌</div>
     <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;margin-bottom:8px;">Connect to The Telescope Net</div>
     <div style="font-size:13px;color:var(--dim);margin-bottom:28px;line-height:1.5;">
-      Paste the activation code from the TTN app to link this telescope to the network.
-      <br><span style="font-size:11px;opacity:0.6;">app.thetelescope.net → Connect telescope</span>
+      Paste the activation code from The Telescope Net app to link this telescope to the network.
+      <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
     </div>
     <input id="welcomeCodeInput" class="inp" type="text"
       placeholder="BS-2024-XXXXXXXX"
@@ -4862,7 +4787,7 @@ html[data-night] img, html[data-night] video { filter: none; }
         </label>
         <div class="cfg-field-grid">
           <div class="inp-group">
-            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in the TTN network. Used to label your data contributions. Example: node_001.">?</span></div>
+            <div class="inp-label">Node ID <span class="help-tip" data-tip="Unique name for this observing node in The Telescope Net network. Used to label your data contributions. Example: node_001.">?</span></div>
             <input class="inp" type="text" id="cfgPhotNodeId" placeholder="node_001">
           </div>
           <div class="inp-group">
@@ -5124,9 +5049,9 @@ html[data-night] img, html[data-night] video { filter: none; }
             <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://api.thetelescope.net">
           </div>
           <div class="inp-group" id="cfgCloudCodeGroup">
-            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from the TTN app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
+            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from The Telescope Net app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
             <input class="inp" type="text" id="cfgCloudCode" placeholder="BS-2024-XXXXXXXX" style="text-transform:uppercase;letter-spacing:1px;">
-            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from app.thetelescope.net → Connect telescope. After saving and restarting, this field will clear once registered.</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from The Telescope Net app → Telescopes → Connect telescope. After saving and restarting, this field will clear once registered.</div>
           </div>
         </div>
         <div class="cfg-section-hdr">Behavior</div>
@@ -7237,9 +7162,14 @@ async function _loadCloudRegistrationStatus() {
   const codeGroup = document.getElementById('cfgCloudCodeGroup');
   if (!bar) return;
   try {
-    const r = await fetch('/api/cloud');
-    if (!r.ok) { bar.style.display = 'none'; return; }
-    const d = await r.json();
+    const [cloudResp, cfgResp] = await Promise.all([
+      fetch('/api/cloud'),
+      fetch('/api/config/parsed').catch(() => null),
+    ]);
+    if (!cloudResp.ok) { bar.style.display = 'none'; return; }
+    const d = await cloudResp.json();
+    const cfg = cfgResp && cfgResp.ok ? await cfgResp.json() : {};
+    const savedCode = !_isPlaceholderCode(((cfg.cloud || {}).activation_code || '').trim());
     bar.style.display = '';
     if (d.registered) {
       bar.style.borderColor = 'var(--green)';
@@ -7247,10 +7177,20 @@ async function _loadCloudRegistrationStatus() {
         + ' &mdash; Node ID: <code style="font-size:11px">' + (d.node_id || '') + '</code>'
         + (d.last_heartbeat_ok ? ' &mdash; <span style="color:var(--green-hi)">heartbeat OK</span>' : '');
       if (codeGroup) codeGroup.style.display = 'none';
+    } else if (d.error) {
+      bar.style.borderColor = 'var(--red)';
+      bar.innerHTML = '<span style="color:var(--red)">&#9679; Registration failed</span>'
+        + ' &mdash; <span style="color:var(--dim)">' + String(d.error).replace(/[<>&]/g, '') + '</span>';
+      if (codeGroup) codeGroup.style.display = '';
+    } else if (savedCode) {
+      bar.style.borderColor = 'var(--warn, #f5a623)';
+      bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Activation code saved</span>'
+        + ' &mdash; restart the node software to complete registration.';
+      if (codeGroup) codeGroup.style.display = '';
     } else {
       bar.style.borderColor = 'var(--warn, #f5a623)';
       bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Not registered</span>'
-        + ' &mdash; paste your activation code below, save, then restart the node software.';
+        + ' &mdash; paste your activation code from The Telescope Net app below.';
       if (codeGroup) codeGroup.style.display = '';
     }
   } catch (_) { bar.style.display = 'none'; }

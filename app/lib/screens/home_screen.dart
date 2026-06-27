@@ -316,7 +316,7 @@ class _SetupWallState extends State<_SetupWall> {
       icon: Icons.link_outlined,
       label: 'Come back here and tap Connect',
       detail:
-          'Tap "Connect telescope" below, enter your activation code, and your telescope links automatically.',
+          'Tap "Connect telescope" below, then paste the activation code into the Node Agent dashboard.',
     ),
   ];
 
@@ -334,7 +334,6 @@ class _SetupWallState extends State<_SetupWall> {
       context.read<AppState>().refreshNodes();
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -521,7 +520,7 @@ class _SetupWallState extends State<_SetupWall> {
                         child: OutlinedButton.icon(
                           onPressed: _onConnect,
                           icon: const Icon(Icons.link_outlined, size: 18),
-                          label: const Text('Already installed — connect telescope'),
+                          label: const Text('Already installed - connect telescope'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: BSTheme.accent,
                             side: BorderSide(color: BSTheme.accent.withValues(alpha: 0.4)),
@@ -577,6 +576,7 @@ class _SetupWallState extends State<_SetupWall> {
 
                     const SizedBox(height: 4),
 
+                    // Already installed? Re-check.
                     TextButton(
                       onPressed: () => context.read<AppState>().refreshNodes(),
                       child: const Text(

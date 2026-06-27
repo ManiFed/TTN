@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>The Telescope Net — The Founding Network</title>
-<meta name="description" content="Join a worldwide network of self-driving telescopes and contribute to real space science from home. No expertise needed." />
+<title>The Telescope Net — Automated Home Telescopes for Real Astronomy</title>
+<meta name="description" content="Join The Telescope Net: a worldwide network of automated home telescopes that collect real variable-star data for astronomy. Use your telescope, get a smart telescope, or ask for funding help." />
 <meta property="og:title" content="The Telescope Net — The Founding Network" />
-<meta property="og:description" content="Your backyard telescope, running itself every night, helping catch stars as they flare and fade. Join the first hundred." />
+<meta property="og:description" content="Your home telescope, running itself every clear night, helping catch stars as they flare and fade. Join the first hundred founding nodes." />
 <meta property="og:type" content="website" />
 <meta name="theme-color" content="#02030A" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -108,6 +108,16 @@
   .steps .tx b{color:var(--ink); font-weight:500}
   .cost{margin-top:22px; font-size:13.5px; color:var(--ink-3); padding:12px 16px; border-radius:12px; background:rgba(143,217,255,.05); border:1px solid rgba(143,217,255,.10)}
   .cost b{color:var(--accent); font-weight:500}
+  .proof-strip{display:flex; gap:9px; flex-wrap:wrap; margin-top:22px}
+  .proof-pill{display:inline-flex; align-items:center; gap:8px; padding:9px 12px; border-radius:999px;
+    color:var(--ink-2); font-size:12.5px; line-height:1.25; background:rgba(170,195,245,.075);
+    border:1px solid rgba(215,228,255,.16); backdrop-filter:blur(10px)}
+  .proof-pill b{color:var(--ink); font-weight:500}
+  .proof-pill .dot{width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px rgba(143,217,255,.75); flex:0 0 auto}
+  .trust-list{margin-top:20px; display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+  .trust-item{padding:14px 14px; border-radius:14px; background:rgba(143,217,255,.055); border:1px solid rgba(143,217,255,.13)}
+  .trust-item b{display:block; color:var(--ink); font-size:13.5px; font-weight:550; margin-bottom:5px}
+  .trust-item span{display:block; color:var(--ink-2); font-size:12.5px; line-height:1.38}
   .stop .sticky{position:sticky; top:0; height:100vh; display:flex; align-items:center}
   .hero .sticky{padding-top:80px; align-items:flex-start}
   .stop .wrap.split{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,420px); gap:40px; align-items:center}
@@ -190,6 +200,9 @@
     .stat-mini-grid{ grid-template-columns:repeat(2,1fr) !important; }
     .fund-chips{ flex-direction:column; }
     .fund-chip span{ text-align:left; }
+    .proof-strip{ margin-top:18px; }
+    .proof-pill{ flex:1 1 100%; }
+    .trust-list{ grid-template-columns:1fr; }
     #node-tip{ display:none; }
   }
 
@@ -245,14 +258,19 @@
 
   <main>
     <!-- 0 — what it is (over the desert) -->
-    <section class="stop hero" id="top" data-ra="305.5" data-dec="40.5" data-fov="7" data-side="0" data-time="" aria-label="What is Boundless Skies">
+    <section class="stop hero" id="top" data-ra="305.5" data-dec="40.5" data-fov="7" data-side="0" data-time="" aria-label="What is The Telescope Net">
       <div class="sticky"><div class="wrap split">
         <div>
           <span class="kicker">A worldwide network of home telescopes</span>
           <h1 style="margin-top:20px">Each member watches a patch of sky. <span class="a">Together we cover what no observatory can.</span></h1>
           <p class="sub">The Telescope Net connects self-driving telescopes in members' homes across the planet. Each one runs automatically every clear night — picking targets, photographing them, and uploading data to a scientific database used by professional astronomers. <em>No experience. No nights outside. Just a balcony or yard.</em></p>
+          <div class="proof-strip" aria-label="Network proof points">
+            <span class="proof-pill"><span class="dot"></span><b>Works with smart telescopes</b></span>
+            <span class="proof-pill"><span class="dot"></span><b>AAVSO-ready science data</b></span>
+            <span class="proof-pill"><span class="dot"></span><b>No subscription fee</b></span>
+          </div>
           <div class="cta-row">
-            <a class="btn btn-p" href="#join">Join the founding network</a>
+            <a class="btn btn-p" href="https://app.thetelescope.net">Open the member app</a>
             <a class="btn btn-g" href="#why">Watch the sky lift off ↓</a>
           </div>
           <p style="margin-top:16px; font-size:12.5px; color:var(--ink-3)">A handful of people are already on watch · join them at the very start</p>
@@ -326,11 +344,11 @@
           <span class="kicker">How you join</span>
           <h2>Three steps, then you're done.</h2>
           <ol class="steps">
-            <li><span class="nm">1</span><span class="tx"><b>Get a smart telescope.</b> A Seestar — about the size of a water bottle, around $500. No telescope budget? We help members get one funded.</span></li>
-            <li><span class="nm">2</span><span class="tx"><b>Set it outside and plug it in.</b> A balcony, a yard, a windowsill. Connect power and wi-fi, install our free app once, and you're on the grid.</span></li>
-            <li><span class="nm">3</span><span class="tx"><b>Go to sleep.</b> Every clear night it picks targets, photographs them, and uploads the results on its own. You wake up to what it caught.</span></li>
+            <li><span class="nm">1</span><span class="tx"><b>Use the telescope you have, or get a small smart telescope.</b> Seestar, Vespera, Dwarf, Unistellar, Celestron Origin, and many ALPACA/ASCOM setups can join. No telescope budget? We help members look for funding.</span></li>
+            <li><span class="nm">2</span><span class="tx"><b>Install the node software once.</b> The dashboard helps you enter your activation code, choose your telescope, and download the star catalog for plate solving.</span></li>
+            <li><span class="nm">3</span><span class="tx"><b>Let it run.</b> Every clear night it picks targets, photographs them, checks the measurements, and uploads the results automatically.</span></li>
           </ol>
-          <div class="cost">Roughly <b>$500 one-time</b>, or funded for you · no subscription, no fees to us.</div>
+          <div class="cost">Use existing gear, start with a small smart telescope, or ask for help getting one funded · <b>no subscription fee.</b></div>
         </div>
       </div></div>
     </section>
@@ -359,6 +377,11 @@
           <p class="lead">Every measurement your telescope makes is checked and filed into a 100-year-old scientific database that professional astronomers — and even NASA missions — actually use. Your name is attached to each one.</p>
           <p>This isn't a game or clicking on photos. It's real data that real research is built on. This galaxy, for instance, is a place supernovae keep appearing — exactly what a network like ours catches first.</p>
           <p style="margin-top:14px; font-size:14px; color:var(--ink-3); line-height:1.5">We submit every observation to the <b style="color:var(--ink-2); font-weight:500">American Association of Variable Star Observers</b> (AAVSO) — the 100-year-old archive that NASA, ESA, and professional observatories depend on.</p>
+          <div class="trust-list" aria-label="Science trust points">
+            <div class="trust-item"><b>Checked</b><span>Measurements are validated before they become science output.</span></div>
+            <div class="trust-item"><b>Credited</b><span>Your telescope and member account stay attached to the work.</span></div>
+            <div class="trust-item"><b>Useful</b><span>Variable-star timing helps professionals decide where to point scarce large telescopes.</span></div>
+          </div>
           <div class="readout" style="margin-top:18px"><span class="live cy"></span> AAVSO · <span id="aavso-count" style="font-feature-settings:'tnum' 1">52,847,203</span> observations in archive · growing</div>
         </div>
       </div></div>
@@ -402,15 +425,16 @@
       <div class="sticky"><div class="wrap">
         <span class="kicker">Ready to start?</span>
         <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Take your founding spot.</h1>
-        <p class="sub" style="margin:24px auto 0; max-width:42ch; font-size:19px; color:var(--ink-2)">Tell us you're in and we'll walk you through it — whether you already have a telescope, want to buy one, or need help getting one funded. No payment to hold your spot.</p>
+        <p class="sub" style="margin:24px auto 0; max-width:46ch; font-size:19px; color:var(--ink-2)">Create a member account, get your activation code, and connect your first telescope. If you need gear or funding help, tell us — the founding network is meant to include people who were left out of astronomy before.</p>
         <div class="cta-row" style="justify-content:center; margin-top:34px">
-          <a class="btn btn-p" href="/download/node-agent" id="dlBtn">Download Node Agent <span id="dlPlatform">· macOS</span></a>
-          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=I%20want%20to%20join%20the%20founding%20network">I'm in — claim spot #008</a>
+          <a class="btn btn-p" href="https://app.thetelescope.net">Create member account</a>
+          <a class="btn btn-g" href="/download/node-agent" id="dlBtn">Download Node Agent <span id="dlPlatform">· macOS</span></a>
         </div>
         <div class="cta-row" style="justify-content:center; margin-top:12px">
-          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=Help%20me%20get%20a%20telescope%20funded">Help me get a telescope</a>
+          <a class="btn btn-g" href="mailto:info@thetelescope.net?subject=I%20want%20to%20join%20the%20founding%20network">Talk to us before joining</a>
+          <a class="btn btn-g" href="mailto:info@thetelescope.net?subject=Help%20me%20get%20a%20telescope%20funded">Help me get a telescope</a>
         </div>
-        <p style="margin-top:18px; font-size:13px; color:var(--ink-3)">macOS installer · 51 MB · Windows and Linux coming soon · you'll need an activation code — <a href="mailto:info@boundlessskies.org?subject=Activation%20code%20request" style="color:var(--ink-2); text-decoration:underline; text-underline-offset:3px">email us</a> to get one</p>
+        <p style="margin-top:18px; font-size:13px; color:var(--ink-3)">macOS installer · 51 MB · Windows and Linux coming soon · activation codes come from the member app</p>
         <p style="margin-top:46px; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:500">The Telescope Net · registered charity · the night sky belongs to everyone</p>
       </div></div>
     </section>
@@ -971,7 +995,7 @@
             if(reason==='ok'){
               form.outerHTML='<p class="join-success">'+successMsg+'</p>';
             } else {
-              window.location.href='mailto:info@boundlessskies.org?subject='+encodeURIComponent(fallbackSubject)+'&body=My%20email%3A%20'+encodeURIComponent(email);
+              window.location.href='mailto:info@thetelescope.net?subject='+encodeURIComponent(fallbackSubject)+'&body=My%20email%3A%20'+encodeURIComponent(email);
             }
           });
       });
@@ -992,8 +1016,8 @@
           if(reason==='ok'){
             fundForm.outerHTML='<p class="join-success">✓ Got it — we\'ll be in touch about next steps.</p>';
           } else {
-            var sub=equipment==='fund'?'Help me get a telescope funded':'Getting started with Boundless Skies';
-            window.location.href='mailto:info@boundlessskies.org?subject='+encodeURIComponent(sub)+'&body=My%20email%3A%20'+encodeURIComponent(email)+'%0AEquipment%3A%20'+encodeURIComponent(equipment);
+            var sub=equipment==='fund'?'Help me get a telescope funded':'Getting started with The Telescope Net';
+            window.location.href='mailto:info@thetelescope.net?subject='+encodeURIComponent(sub)+'&body=My%20email%3A%20'+encodeURIComponent(email)+'%0AEquipment%3A%20'+encodeURIComponent(equipment);
           }
         });
     });
@@ -1230,13 +1254,13 @@
   /* ---------- console easter egg ---------- */
   (function(){
     var s='color:#8FD9FF;font-size:13px;font-weight:500';
-    console.log('%c⬤ Boundless Skies — live telescope network\n%cYou found the console. The sky is always on.\nhttps://boundlessskies.org — join the founding network.',s,'color:#aaa;font-size:11px');
+    console.log('%c⬤ The Telescope Net — live telescope network\n%cYou found the console. The sky is always on.\nhttps://thetelescope.net — join the founding network.',s,'color:#aaa;font-size:11px');
   })();
 
   /* ---------- animated tab title ---------- */
   (function(){
-    var titles=['⬤ Boundless Skies — live now','○ Boundless Skies — join the network'];
-    var base='Boundless Skies — The Founding Network';
+    var titles=['⬤ The Telescope Net — live now','○ The Telescope Net — join the network'];
+    var base='The Telescope Net — The Founding Network';
     var i=0, hidden=false;
     document.addEventListener('visibilitychange',function(){hidden=document.hidden;});
     setInterval(function(){

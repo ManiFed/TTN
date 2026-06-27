@@ -193,7 +193,7 @@ def _geocode_location(name: str) -> tuple[float | None, float | None]:
         resp = _req.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": name, "format": "json", "limit": 1},
-            headers={"User-Agent": "BoundlessSkiesCloud/1.0"},
+            headers={"User-Agent": "TheTelescopeCloud/1.0"},
             timeout=8,
         )
         results = resp.json()
@@ -284,6 +284,7 @@ def api_pair_claim(token):
 def api_register():
     info = request.get_json(force=True, silent=True) or {}
     activation_code = str(info.pop("activation_code", "") or "").strip().upper()
+    code_row = None
 
     # If the node hasn't set its own location/telescope, pull them from the
     # activation code the member created in the app.
@@ -291,32 +292,37 @@ def api_register():
     node_lon = float(info.get("longitude") or 0.0)
     if activation_code:
         code_row = db.query_one(
-            "SELECT latitude, longitude, observatory_name, telescope_model,"
-            "       telescope_specs, portable"
+            "SELECT *"
             " FROM activation_codes WHERE code = %s",
             (activation_code,),
         )
-        if code_row:
-            if (node_lat == 0.0 and node_lon == 0.0
-                    and code_row.get("latitude") and code_row.get("longitude")):
-                info["latitude"] = code_row["latitude"]
-                info["longitude"] = code_row["longitude"]
-                if not info.get("owner_name") and code_row.get("observatory_name"):
-                    info["owner_name"] = code_row["observatory_name"]
-            # Backfill telescope specs only where the node left them unset, so a
-            # node that autodetected real ALPACA hardware always wins.
-            if code_row.get("telescope_model") and not info.get("telescope_model"):
-                info["telescope_model"] = code_row["telescope_model"]
-            if code_row.get("portable") and "portable" not in info:
-                info["portable"] = True
-            try:
-                specs = json.loads(code_row.get("telescope_specs") or "{}")
-            except (TypeError, ValueError):
-                specs = {}
-            for key, val in specs.items():
-                if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
-                    continue
-                info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
+        if code_row is None:
+            return jsonify({"error": f"activation code not found: {activation_code}"}), 404
+        if code_row.get("used_at"):
+            return jsonify({"error": "activation code already used"}), 409
+        if code_row.get("expires_at") and code_row["expires_at"] < _now():
+            return jsonify({"error": "activation code expired"}), 410
+
+        if (node_lat == 0.0 and node_lon == 0.0
+                and code_row.get("latitude") and code_row.get("longitude")):
+            info["latitude"] = code_row["latitude"]
+            info["longitude"] = code_row["longitude"]
+            if not info.get("owner_name") and code_row.get("observatory_name"):
+                info["owner_name"] = code_row["observatory_name"]
+        # Backfill telescope specs only where the node left them unset, so a
+        # node that autodetected real ALPACA hardware always wins.
+        if code_row.get("telescope_model") and not info.get("telescope_model"):
+            info["telescope_model"] = code_row["telescope_model"]
+        if code_row.get("portable") and "portable" not in info:
+            info["portable"] = True
+        try:
+            specs = json.loads(code_row.get("telescope_specs") or "{}")
+        except (TypeError, ValueError):
+            specs = {}
+        for key, val in specs.items():
+            if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
+                continue
+            info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
 
     try:
         creds = registry.register_node(
@@ -342,22 +348,19 @@ def api_register():
         try:
             user_id = _validate_and_consume_code(activation_code, creds["node_id"])
         except ValueError as exc:
-            logger.warning("Activation code error for %s: %s", creds["node_id"], exc)
-            # Registration still succeeds — the node works, just isn't linked
-            creds["activation_warning"] = str(exc)
-        else:
-            if user_id:
-                if not db.query_one(
-                    "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
-                    (creds["node_id"], user_id),
-                ):
-                    db.execute(
-                        "INSERT INTO node_members (node_id, user_id, claimed_at)"
-                        " VALUES (%s,%s,%s)",
-                        (creds["node_id"], user_id, _now()),
-                    )
-            logger.info("Activation code %s consumed — node %s linked to user %s",
-                        activation_code, creds["node_id"], user_id or "(generic)")
+            logger.warning("Activation code race for %s: %s", creds["node_id"], exc)
+            return jsonify({"error": str(exc)}), 409
+        if user_id and not db.query_one(
+            "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+            (creds["node_id"], user_id),
+        ):
+            db.execute(
+                "INSERT INTO node_members (node_id, user_id, claimed_at)"
+                " VALUES (%s,%s,%s)",
+                (creds["node_id"], user_id, _now()),
+            )
+        logger.info("Activation code %s consumed — node %s linked to user %s",
+                    activation_code, creds["node_id"], user_id or "(generic)")
 
     return jsonify(creds)
 

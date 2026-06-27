@@ -115,6 +115,29 @@ pier_cam:
   jpeg_quality: 75
   sdk_lib: ''
   target_fps: 10
+aavso:
+  observer_code: 'EGBA'
+  # Secrets are read from the environment — never commit them here.
+  username: '${AAVSO_USERNAME}'
+  password: '${AAVSO_PASSWORD}'
+  audit_dir: aavso_submissions
+  # When the cloud is enabled it owns AAVSO submission (network batch under one
+  # OBSCODE). The node then only formats + saves the file for audit and uploads
+  # it to the cloud — it does NOT POST to WebObs, so observations aren't sent
+  # twice. Set submit_from_node: true only for a standalone node with no cloud.
+  submit_from_node: false
+  submit_poor_quality: false
+  chart_id: ''
+cloud:
+  enabled: true
+  url: 'https://api.thetelescope.net'
+  activation_code: ''          # BS-YYYY-XXXXXXXX from your account page; used once on first boot
+  node_id: ''
+  api_key: ''
+  heartbeat_interval: 60       # seconds between heartbeats (with conditions)
+  plan_poll_interval: 300      # seconds between observation-plan polls
+  auto_run_plans: false        # execute cloud plans automatically when idle
+  upload_images: false         # also upload raw FITS after each measurement
 safety:
   dawn_type: astronomical
   disconnect_timeout: 600

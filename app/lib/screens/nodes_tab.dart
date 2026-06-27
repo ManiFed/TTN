@@ -1067,7 +1067,10 @@ class _StartTonightSheetState extends State<_StartTonightSheet> {
       final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
         'q': q, 'format': 'json', 'limit': '5', 'addressdetails': '1',
       });
-      final resp = await http.get(uri, headers: {'User-Agent': 'TTNApp/1.0'});
+      final resp = await http.get(
+        uri,
+        headers: {'User-Agent': 'TheTelescopeNetApp/1.0'},
+      );
       if (!mounted) return;
       if (resp.statusCode == 200) {
         final data = (jsonDecode(resp.body) as List).cast<Map<String, dynamic>>();
@@ -1779,7 +1782,6 @@ enum _ScopeStep { idle, confirming, confirmed }
 class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
   final _scopeCtrl = TextEditingController();
-  final _pairCtrl = TextEditingController();
   String? _code;
   bool _busy = false;
   bool _locating = false;
@@ -1834,7 +1836,6 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   void dispose() {
     _locationCtrl.dispose();
     _scopeCtrl.dispose();
-    _pairCtrl.dispose();
     super.dispose();
   }
 
@@ -1939,7 +1940,9 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         'q': query, 'format': 'json', 'limit': '5', 'addressdetails': '1',
       });
       final resp = await http.get(
-          uri, headers: {'User-Agent': 'TTNApp/1.0'});
+        uri,
+        headers: {'User-Agent': 'TheTelescopeNetApp/1.0'},
+      );
       if (!mounted) return;
       if (resp.statusCode == 200) {
         final data = (jsonDecode(resp.body) as List)
@@ -2533,24 +2536,6 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
   }
 
-  Future<void> _pushToTelescope() async {
-    final token = _pairCtrl.text.trim().toUpperCase();
-    if (token.isEmpty) {
-      setState(() =>
-          _error = 'Enter the pairing token shown in the terminal.');
-      return;
-    }
-    setState(() { _pushing = true; _error = null; });
-    try {
-      await context.read<AppState>().api.pushActivationCode(
-          token, _code!);
-      if (mounted) setState(() { _pushed = true; _pushing = false; });
-    } catch (e) {
-      if (mounted)
-        setState(() { _pushing = false; _error = '$e'; });
-    }
-  }
-
   Future<void> _checkConnected() async {
     setState(() { _pushing = true; _error = null; });
     try {
@@ -2577,7 +2562,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         Text('Telescope connected!', style: tt.titleLarge),
         const SizedBox(height: 8),
         Text(
-          'Your telescope is now linked to your TTN account.',
+          'Your telescope is now linked to your account.',
           style: tt.bodyMedium,
           textAlign: TextAlign.center,
         ),
@@ -2593,8 +2578,8 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       Text('Your activation code', style: tt.titleMedium),
       const SizedBox(height: 8),
       Text(
-        'Enter this code in the node software on your telescope\'s Mac. '
-        'It will link your telescope to your account automatically.',
+        'Open http://localhost:5173 on the computer running the Node Agent. '
+        'The setup prompt will appear there; paste this code to link the telescope.',
         style: tt.bodyMedium,
       ),
       const SizedBox(height: 20),

@@ -872,8 +872,8 @@
         var total = (owned[s.scope.id] ? 0 : s.scope.price) + (owned[s.comp.id] ? 0 : s.comp.price);
         s.adds.forEach(function (a) { total += owned[a.id] ? 0 : a.price; });
         lines.push(""); lines.push("Estimated total: $" + total.toLocaleString());
-        lines.push(""); lines.push("Join the network: https://telescopenet.org/#builder");
-        window.location.href = "mailto:?subject=My%20Boundless%20Skies%20Node%20Build&body=" + encodeURIComponent(lines.join("\n"));
+        lines.push(""); lines.push("Join the network: https://thetelescope.net/#builder");
+        window.location.href = "mailto:?subject=My%20The%20Telescope%20Net%20Node%20Build&body=" + encodeURIComponent(lines.join("\n"));
       });
     }
   }

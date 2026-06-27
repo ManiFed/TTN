@@ -129,12 +129,11 @@ class CloudCommunicator:
         if not (self._node_id and self._api_key) and self._pair_token:
             print(
                 f"\n  ┌─────────────────────────────────────────────┐\n"
-                f"  │  Telescope not yet linked to your TTN       │\n"
-                f"  │  account. Open the app and enter:           │\n"
+                f"  │  Not yet linked to The Telescope Net.       │\n"
+                f"  │  Open the app, create an activation         │\n"
+                f"  │  code, then paste it into the dashboard:    │\n"
                 f"  │                                             │\n"
-                f"  │      Pairing token:  {self._pair_token:<8}            │\n"
-                f"  │                                             │\n"
-                f"  │  app.thetelescope.net → Connect telescope   │\n"
+                f"  │      http://localhost:5173                  │\n"
                 f"  └─────────────────────────────────────────────┘\n",
                 flush=True,
             )

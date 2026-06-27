@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telescope spec catalog — the single source of truth for telescope hardware,
-shared by both the Node Agent and the Boundless Skies cloud.
+shared by both the Node Agent and The Telescope Net cloud.
 
 Like ``shared_models``, this module imports nothing heavy (no astropy, no
 Flask) so both sides can import it for free.  It does three jobs:
@@ -108,7 +108,7 @@ CATALOG: dict[str, TelescopeSpec] = {
     "vespera_ii": TelescopeSpec(
         display_name="Vaonis Vespera II",
         aliases=["vaonis vespera ii", "vespera 2", "vespera2"],
-        aperture_mm=50.0, focal_length_mm=200.0, mount_type="alt_az",
+        aperture_mm=50.0, focal_length_mm=250.0, mount_type="alt_az",
         pixel_size_um=2.9, sensor_w_px=3840, sensor_h_px=2160,
         sensor_name="IMX585", camera_model="Vaonis Vespera II IMX585",
         max_exposure_s=30.0, default_filters=["CV"], tier=1,
@@ -202,12 +202,12 @@ CATALOG: dict[str, TelescopeSpec] = {
         max_exposure_s=30.0, default_filters=["CV"], tier=1,
     ),
     "dwarf_s": TelescopeSpec(
-        display_name="DwarfLab Dwarf S",
-        aliases=["dwarf s", "dwarfs", "dwarflab dwarf s"],
-        aperture_mm=65.0, focal_length_mm=300.0, mount_type="alt_az",
-        pixel_size_um=2.0, sensor_w_px=3840, sensor_h_px=2160,
-        sensor_name="IMX678", camera_model="Dwarf S IMX678",
-        max_exposure_s=15.0, default_filters=["CV"], tier=1,
+        display_name="DwarfLab Dwarf Mini",
+        aliases=["dwarf mini", "dwarflab dwarf mini", "dwarf s", "dwarfs", "dwarflab dwarf s"],
+        aperture_mm=30.0, focal_length_mm=150.0, mount_type="alt_az",
+        pixel_size_um=2.9, sensor_w_px=1920, sensor_h_px=1080,
+        sensor_name="IMX662", camera_model="Dwarf Mini IMX662",
+        max_exposure_s=90.0, default_filters=["CV"], tier=1,
     ),
     "nexstar_evolution_8": TelescopeSpec(
         display_name="Celestron NexStar Evolution 8",
