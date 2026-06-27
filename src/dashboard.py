@@ -715,6 +715,7 @@ def _run_photometry_bg(fits_path: str) -> None:
 # ── Cloud communicator ─────────────────────────────────────────────────────────
 
 _cloud: Optional[CloudCommunicator] = None
+_interrupt_queue: queue.Queue = queue.Queue()
 
 
 def _cloud_conditions() -> dict:
@@ -828,6 +829,80 @@ def _on_cloud_plan(items: list) -> None:
         daemon=True, name="sched-runner-cloud",
     ).start()
     logger.info("Cloud plan started: %d observations", len(valid))
+
+
+def _choose_interrupt_exposure(mag: Optional[float]) -> tuple:
+    """Pick (expDur, expCount) for an interrupt target sized to its magnitude."""
+    max_exp = 30.0
+    if mag is None:
+        mag = 13.0
+    if mag < 9.0:
+        dur, total_min = 5.0, 5.0
+    elif mag < 11.0:
+        dur, total_min = 10.0, 8.0
+    elif mag < 13.0:
+        dur, total_min = 15.0, 12.0
+    else:
+        dur, total_min = 30.0, 20.0
+    dur = min(dur, max_exp)
+    count = max(5, int(round(total_min * 60.0 / dur)))
+    return dur, count
+
+
+def _on_cloud_interrupt(item: dict) -> None:
+    """Handle a cloud interrupt: build a schedule item and queue it."""
+    name = item.get("name", "Unknown")
+    ra   = item.get("ra")   # decimal hours (cloud sends this alongside ra_deg)
+    dec  = item.get("dec")  # degrees
+    mag  = item.get("mag")
+    time_critical = bool(item.get("time_critical", True))
+
+    if ra is None or dec is None:
+        logger.warning("Interrupt %s missing ra/dec — skipping", name)
+        return
+
+    exp_dur, exp_count = _choose_interrupt_exposure(mag)
+    sched_item = {
+        "target":   name,
+        "ra":       float(ra),
+        "dec":      float(dec),
+        "expDur":   exp_dur,
+        "expCount": exp_count,
+        "binning":  1,
+        "notes":    f"interrupt: {item.get('reason', '')}",
+    }
+
+    logger.warning("Interrupt queued: %s (%.1fs × %d, time_critical=%s)",
+                   name, exp_dur, exp_count, time_critical)
+    _interrupt_queue.put_nowait(sched_item)
+
+    if time_critical:
+        with _sched_lock:
+            if _sched_state["running"]:
+                logger.warning("Pre-empting running schedule for %s", name)
+                _sched_state["cancelled"] = True
+
+
+def _interrupt_dispatcher_loop() -> None:
+    """Daemon thread: wait for queued interrupt observations and run them."""
+    while True:
+        item = _interrupt_queue.get()          # block until one arrives
+        items = [item]
+        while not _interrupt_queue.empty():    # drain any that piled up
+            try:
+                items.append(_interrupt_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        # Wait for any running schedule to finish before starting ours.
+        while True:
+            with _sched_lock:
+                if not _sched_state["running"]:
+                    break
+            time.sleep(1)
+
+        logger.info("Interrupt dispatcher: running %d interrupt observation(s)", len(items))
+        _run_schedule_bg(items)
 
 
 # ── Safety manager ─────────────────────────────────────────────────────────────
@@ -2916,6 +2991,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
     exp_count = int(item.get("expCount", 1))
     binning   = max(1, int(item.get("binning", 1)))
     start_str = item.get("startTime", "")
+    obs_mode  = item.get("observation_mode", "single_epoch")
+    duration_minutes = float(item.get("duration_minutes", 0.0))
 
     with _sched_lock:
         _sched_state.update({
@@ -2986,27 +3063,29 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
         return
 
     # ── Expose ────────────────────────────────────────────────────────────────
-    for frame in range(1, exp_count + 1):
+    def _take_frame(frame: int, total: int) -> bool:
+        """Take one exposure. Returns False if cancelled, True otherwise."""
         if _sched_cancelled():
-            return
+            return False
         with _sched_lock:
             _sched_state["current_phase"] = "exposing"
             _sched_state["current_frame"] = frame
+            _sched_state["total_frames"]  = total
 
         logger.info("Schedule: %s frame %d/%d (%.1fs bin%d)",
-                    target, frame, exp_count, exp_dur, binning)
+                    target, frame, total, exp_dur, binning)
 
         if _cam is None:
             logger.warning("Schedule: camera not connected — skipping exposure for %s", target)
-            return
+            return False
 
-        # Build FITS path when photometry is enabled so the pipeline has a
-        # science-grade file to work with instead of a display PNG.
         fits_save_path: Optional[str] = None
         with _state_lock:
             phot_enabled = _state["photometry"]["enabled"]
         if phot_enabled:
-            safe_tgt = "".join(c if c.isalnum() or c in "-_ " else "_" for c in target).strip()
+            safe_tgt = "".join(
+                c if c.isalnum() or c in "-_ " else "_" for c in target
+            ).strip()
             fits_save_path = str(
                 pathlib.Path("data") / "fits" /
                 f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"
@@ -3024,19 +3103,40 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 )
                 b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur)
             if b64:
-                _store_history_image(target, exp_dur, binning, frame, exp_count, b64)
-            # Trigger photometry on the freshly saved FITS
+                _store_history_image(target, exp_dur, binning, frame, total, b64)
             if fits_save_path and pathlib.Path(fits_save_path).exists():
                 _enqueue_photometry(fits_save_path)
         except ExposureCancelled:
             logger.warning("Schedule: frame %d of %s aborted", frame, target)
             if _sched_cancelled():
-                return
-            # Single-frame abort — move on to the next frame.
+                return False
         except Exception as exc:
             logger.error("Schedule: exposure failed %s frame %d: %s", target, frame, exc)
         finally:
             _pier_cam_pause.clear()
+        return True
+
+    if obs_mode == "time_series" and duration_minutes > 0:
+        # Continuous monitoring for the full transit/time-series window.
+        deadline = time.monotonic() + duration_minutes * 60.0
+        estimated_total = max(exp_count, int(duration_minutes * 60.0 / max(exp_dur, 1)))
+        frame = 0
+        logger.info("Schedule: time-series on %s for %.0f min (~%d frames)",
+                    target, duration_minutes, estimated_total)
+        with _sched_lock:
+            _sched_state["current_phase"] = "exposing"
+            _sched_state["total_frames"]  = estimated_total
+        while time.monotonic() < deadline and not _sched_cancelled():
+            frame += 1
+            remaining_s = deadline - time.monotonic()
+            if remaining_s < exp_dur * 0.5:
+                break  # not enough time for a useful frame
+            if not _take_frame(frame, estimated_total):
+                return
+    else:
+        for frame in range(1, exp_count + 1):
+            if not _take_frame(frame, exp_count):
+                return
 
 
 def _run_schedule_bg(items: list) -> None:
@@ -8970,9 +9070,15 @@ def launch(port: int = 5173) -> None:
             cfg,
             get_conditions=_cloud_conditions,
             on_plan=_on_cloud_plan,
+            on_interrupt=_on_cloud_interrupt,
             get_telescope_specs=_cloud_telescope_specs,
         )
         _cloud.start()
+        threading.Thread(
+            target=_interrupt_dispatcher_loop,
+            daemon=True,
+            name="interrupt-dispatcher",
+        ).start()
         threading.Thread(
             target=_cloud_disconnect_monitor_loop,
             daemon=True,

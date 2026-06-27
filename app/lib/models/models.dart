@@ -289,6 +289,7 @@ class Target {
   final String targetId;
   final String name;
   final String targetType;
+  final String scienceProgram;
   final double? mag;
   final String magBand;
   final double priority;
@@ -300,6 +301,7 @@ class Target {
     required this.targetId,
     required this.name,
     required this.targetType,
+    this.scienceProgram = '',
     required this.mag,
     required this.magBand,
     required this.priority,
@@ -312,6 +314,7 @@ class Target {
         targetId: _asStr(j['target_id']),
         name: _asStr(j['name']),
         targetType: _asStr(j['target_type']),
+        scienceProgram: _asStr(j['science_program']),
         mag: j['mag'] == null ? null : _asDouble(j['mag']),
         magBand: _asStr(j['mag_band']),
         priority: _asDouble(j['priority']),

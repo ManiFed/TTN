@@ -113,7 +113,7 @@ class _DashboardTabState extends State<DashboardTab> {
         return _DashboardView(
           data: snap.data!,
           onRefresh: _refresh,
-          onOpenAlerts: () => context.read<AppState>().setPendingTab(3),
+          onNavigateToTab: widget.onNavigateToTab,
         );
       },
     );
@@ -126,11 +126,11 @@ class _DashboardView extends StatefulWidget {
   const _DashboardView({
     required this.data,
     required this.onRefresh,
-    required this.onOpenAlerts,
+    this.onNavigateToTab,
   });
   final _DashboardData data;
   final Future<void> Function() onRefresh;
-  final VoidCallback onOpenAlerts;
+  final void Function(int)? onNavigateToTab;
 
   @override
   State<_DashboardView> createState() => _DashboardViewState();
@@ -200,7 +200,7 @@ class _DashboardViewState extends State<_DashboardView> {
                     topTarget: priorityTargets.isEmpty
                         ? null
                         : priorityTargets.first,
-                    onAlertsTap: widget.onOpenAlerts,
+                    onAlertsTap: () => widget.onNavigateToTab?.call(3),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -212,7 +212,7 @@ class _DashboardViewState extends State<_DashboardView> {
                       _ReadinessPanel(
                         nodes: widget.data.nodes,
                         alerts: widget.data.alerts,
-                        onOpenAlerts: widget.onOpenAlerts,
+                        onOpenAlerts: () => widget.onNavigateToTab?.call(3),
                       ),
                     );
                     final plan = _fadeUp(
@@ -936,7 +936,7 @@ class _Hero extends StatelessWidget {
     required this.obs24h,
     required this.targets,
     required this.unread,
-    required this.onAlertsTap,
+    this.onAlertsTap,
   });
 
   final String name;
@@ -945,7 +945,7 @@ class _Hero extends StatelessWidget {
   final int obs24h;
   final int targets;
   final int unread;
-  final VoidCallback onAlertsTap;
+  final VoidCallback? onAlertsTap;
 
   String get _greeting {
     final h = DateTime.now().hour;
@@ -1390,11 +1390,11 @@ class _TargetRow extends StatelessWidget {
 class _AlertsPanel extends StatelessWidget {
   const _AlertsPanel({
     required this.alerts,
-    required this.onOpenAlerts,
+    this.onOpenAlerts,
     this.centered = false,
   });
   final List<AppNotification> alerts;
-  final VoidCallback onOpenAlerts;
+  final VoidCallback? onOpenAlerts;
   final bool centered;
 
   @override
@@ -1571,14 +1571,37 @@ class _EmptyLine extends StatelessWidget {
 
 // ── Full targets list screen ──────────────────────────────────────────────────
 
-class _TargetsListScreen extends StatelessWidget {
+class _TargetsListScreen extends StatefulWidget {
   const _TargetsListScreen({required this.targets});
   final List<Target> targets;
 
   @override
+  State<_TargetsListScreen> createState() => _TargetsListScreenState();
+}
+
+class _TargetsListScreenState extends State<_TargetsListScreen> {
+  static const _programs = [
+    ('All', ''),
+    ('Variable Stars', 'variable_stars'),
+    ('Exoplanets', 'exoplanet_transits'),
+    ('Transients', 'transient_follow_up'),
+  ];
+
+  String _selectedProgram = '';
+
+  static Color _programColor(String program) => switch (program) {
+        'exoplanet_transits'  => BSTheme.accent,
+        'transient_follow_up' => BSTheme.danger,
+        _                     => BSTheme.warm,
+      };
+
+  @override
   Widget build(BuildContext context) {
-    final sorted = [...targets]
+    final sorted = [...widget.targets]
       ..sort((a, b) => b.priority.compareTo(a.priority));
+    final filtered = _selectedProgram.isEmpty
+        ? sorted
+        : sorted.where((t) => t.scienceProgram == _selectedProgram).toList();
 
     return Scaffold(
       backgroundColor: BSTheme.night,
@@ -1599,88 +1622,149 @@ class _TargetsListScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: BSTheme.ink2),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: _programs.map((entry) {
+                final (label, program) = entry;
+                final selected = _selectedProgram == program;
+                final color = program.isEmpty
+                    ? BSTheme.ink2
+                    : _programColor(program);
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedProgram = program),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(100),
+                        color: selected
+                            ? color.withValues(alpha: 0.18)
+                            : Colors.transparent,
+                        border: Border.all(
+                          color: selected
+                              ? color.withValues(alpha: 0.6)
+                              : BSTheme.glassBorder,
+                        ),
+                      ),
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          fontFamily: 'Geist',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: selected ? color : BSTheme.ink3,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
       ),
-      body: sorted.isEmpty
-          ? const Center(
+      body: filtered.isEmpty
+          ? Center(
               child: Text(
-                'No active targets.',
-                style: TextStyle(fontFamily: 'Geist', color: BSTheme.ink3),
+                _selectedProgram.isEmpty
+                    ? 'No active targets.'
+                    : 'No targets in this program yet.',
+                style:
+                    const TextStyle(fontFamily: 'Geist', color: BSTheme.ink3),
               ),
             )
           : ListView.separated(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              itemCount: sorted.length,
+              itemCount: filtered.length,
               separatorBuilder: (_, __) =>
                   const Divider(color: BSTheme.glassBorder, height: 1),
               itemBuilder: (context, i) {
-                final t = sorted[i];
+                final t = filtered[i];
                 final p = t.priority.clamp(0.0, 1.0);
-                final barColor = p > 0.7
-                    ? BSTheme.accent
-                    : p > 0.4
-                        ? BSTheme.warm
-                        : BSTheme.ink3;
+                final barColor = t.scienceProgram.isNotEmpty
+                    ? _programColor(t.scienceProgram)
+                    : (p > 0.7
+                        ? BSTheme.accent
+                        : p > 0.4
+                            ? BSTheme.warm
+                            : BSTheme.ink3);
                 final typeLabel = t.targetType.isEmpty
                     ? '—'
                     : t.targetType.toUpperCase();
 
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              t.name,
-                              style: const TextStyle(
-                                fontFamily: 'Geist',
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: BSTheme.ink,
+                return GestureDetector(
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          TargetDetailScreen(targetName: t.name),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                t.name,
+                                style: const TextStyle(
+                                  fontFamily: 'Geist',
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: BSTheme.ink,
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          GlowChip(typeLabel, color: barColor),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${t.nMeasurements} obs',
-                            style: TextStyle(
-                              fontFamily: 'Geist',
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: barColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: Stack(
-                          children: [
-                            Container(height: 3, color: BSTheme.glassBorder),
-                            FractionallySizedBox(
-                              widthFactor: p,
-                              child: Container(
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(2),
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      barColor.withValues(alpha: 0.5),
-                                      barColor,
-                                    ],
-                                  ),
-                                ),
+                            const SizedBox(width: 8),
+                            GlowChip(typeLabel, color: barColor),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${t.nMeasurements} obs',
+                              style: TextStyle(
+                                fontFamily: 'Geist',
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: barColor,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: Stack(
+                            children: [
+                              Container(height: 3, color: BSTheme.glassBorder),
+                              FractionallySizedBox(
+                                widthFactor: p,
+                                child: Container(
+                                  height: 3,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(2),
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        barColor.withValues(alpha: 0.5),
+                                        barColor,
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },

@@ -42,6 +42,7 @@ from functools import wraps
 from flask import Flask, jsonify, make_response, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, nights, registry, scheduler, scoring, tuning
+from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
 logger = logging.getLogger("cloud.server")
@@ -620,6 +621,7 @@ def api_targets():
            GROUP BY t.target_id ORDER BY best_score DESC LIMIT 200""")
     for r in rows:
         r["sources"] = db.loads(r["sources"], [])
+        r["science_program"] = science_program_for_type(r.get("target_type") or "")
         best = db.query_one(
             """SELECT node_id, components FROM scores
                WHERE target_id = %s ORDER BY total DESC LIMIT 1""",

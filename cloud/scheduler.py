@@ -169,6 +169,8 @@ def generate_plan(
                    f"depth={tw.depth_ppt:.1f}ppt "
                    f"dur={tw.duration_hours:.2f}h "
                    f"mid={tw.t_mid_utc.strftime('%H:%M')}UTC"),
+            observation_mode="time_series",
+            duration_minutes=round(obs_min, 1),
         ))
         logger.info("Transit locked: %s  mid=%s  window=%.0f min",
                     tw.name, tw.t_mid_utc.strftime("%H:%M"), obs_min)

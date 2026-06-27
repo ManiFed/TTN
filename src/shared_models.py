@@ -152,6 +152,25 @@ class NodeInfo:
 
 # ── Targets ────────────────────────────────────────────────────────────────────
 
+_SCIENCE_PROGRAM_MAP: dict = {
+    "SN":        "transient_follow_up",
+    "TDE":       "transient_follow_up",
+    "GRB":       "transient_follow_up",
+    "NOVA":      "transient_follow_up",
+    "CV":        "variable_stars",
+    "VAR":       "variable_stars",
+    "EB":        "variable_stars",
+    "AGN":       "variable_stars",
+    "YSO":       "variable_stars",
+    "EXOPLANET": "exoplanet_transits",
+}
+
+
+def science_program_for_type(target_type: str) -> str:
+    """Map a target_type string to its science program name."""
+    return _SCIENCE_PROGRAM_MAP.get((target_type or "").upper(), "other")
+
+
 @dataclass
 class TargetInfo:
     """A deduplicated, cross-matched science target."""
@@ -169,8 +188,14 @@ class TargetInfo:
     discovered_at: str = ""          # ISO timestamp of first alert
     active: bool = True
 
+    @property
+    def science_program(self) -> str:
+        return science_program_for_type(self.target_type)
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["science_program"] = self.science_program
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "TargetInfo":
@@ -202,6 +227,9 @@ class PlanItem:
     filter: str = "CV"
     notes: str = ""
     explanation: dict = field(default_factory=dict)
+    # Observation strategy
+    observation_mode: str = "single_epoch"  # "single_epoch" | "time_series"
+    duration_minutes: float = 0.0           # for time_series: how long to stay on target
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -213,13 +241,15 @@ class PlanItem:
     def to_node_item(self) -> dict:
         """Strip down to the exact dict the node schedule runner consumes."""
         return {
-            "target":    self.target,
-            "ra":        self.ra,
-            "dec":       self.dec,
-            "expDur":    self.expDur,
-            "expCount":  self.expCount,
-            "binning":   self.binning,
-            "startTime": self.startTime,
+            "target":           self.target,
+            "ra":               self.ra,
+            "dec":              self.dec,
+            "expDur":           self.expDur,
+            "expCount":         self.expCount,
+            "binning":          self.binning,
+            "startTime":        self.startTime,
+            "observation_mode": self.observation_mode,
+            "duration_minutes": self.duration_minutes,
         }
 
 
