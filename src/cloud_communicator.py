@@ -225,8 +225,33 @@ class CloudCommunicator:
         self.status["registered"] = True
         self.status["node_id"] = self._node_id
         self.status["error"] = None
+        if activation_code:
+            self._clear_activation_code()
         logger.info("Registered with cloud as %s", self._node_id)
         return True
+
+    def _clear_activation_code(self) -> None:
+        """Remove the one-time activation code after successful registration."""
+        import yaml
+        cfg_path = Path("config.yaml")
+        try:
+            cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        except Exception as exc:
+            logger.warning("Could not read config to clear activation code: %s", exc)
+            return
+        cloud_cfg = cfg.get("cloud")
+        if not isinstance(cloud_cfg, dict) or not cloud_cfg.get("activation_code"):
+            return
+        cloud_cfg["activation_code"] = ""
+        try:
+            cfg_path.write_text(
+                yaml.dump(cfg, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            )
+        except Exception as exc:
+            logger.warning("Could not clear activation code from config: %s", exc)
+            return
+        self._config.setdefault("cloud", {})["activation_code"] = ""
+        logger.info("Activation code cleared from config after successful registration")
 
     def _load_state(self) -> None:
         """Credentials persisted from a previous auto-registration win over
