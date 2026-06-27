@@ -2225,6 +2225,25 @@ def api_cloud():
     return jsonify({"enabled": True, **_cloud.status})
 
 
+@app.route("/api/cloud/connect", methods=["POST"])
+def api_cloud_connect():
+    """Re-read config and attempt registration immediately (no restart needed)."""
+    if _cloud is None:
+        return jsonify({"ok": False, "error": "cloud communicator not running"}), 503
+    import yaml
+    try:
+        cfg = yaml.safe_load(open("config.yaml").read()) or {}
+        _cloud._config = cfg
+        _cloud._url = (cfg.get("cloud") or {}).get("url", _cloud._url) or _cloud._url
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"config reload failed: {exc}"}), 500
+    ok = _cloud._ensure_registered()
+    if ok:
+        return jsonify({"ok": True, "registered": True, "node_id": _cloud._node_id})
+    return jsonify({"ok": False, "registered": False,
+                    "error": _cloud.status.get("error", "registration failed")}), 400
+
+
 @app.route("/api/safety")
 def api_safety():
     if _safety_mgr is None:
@@ -8747,16 +8766,27 @@ async function submitActivationCode() {
       btn.disabled = false; btn.textContent = 'Connect';
       return;
     }
-    // Success
-    const content = document.querySelector('#welcomeModal .modal-content');
-    content.innerHTML = `
-      <div style="font-size:48px;margin-bottom:16px;">✅</div>
-      <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Activation code saved!</div>
-      <div style="font-size:13px;color:var(--dim);line-height:1.6;">
-        Restart the node software to complete the connection.<br>
-        <span style="font-size:11px;opacity:0.6;">The telescope will register automatically on next startup.</span>
-      </div>
-      <button class="btn btn-dim" onclick="closeWelcomeModal()" style="margin-top:24px;width:100%;">Close</button>`;
+    // Trigger immediate registration — no restart needed
+    btn.textContent = 'Registering…';
+    try {
+      const reg = await fetch('/api/cloud/connect', { method: 'POST' });
+      const rd  = await reg.json().catch(() => ({}));
+      if (reg.ok && rd.ok) {
+        const content = document.querySelector('#welcomeModal .modal-content');
+        content.innerHTML = `
+          <div style="font-size:56px;margin-bottom:12px;">✅</div>
+          <div style="font-size:18px;font-weight:700;margin-bottom:8px;color:#fff;">Connected!</div>
+          <div style="font-size:13px;color:var(--dim);line-height:1.6;">
+            Your node is registered with The Telescope Net.
+          </div>`;
+        setTimeout(() => window.close(), 1800);
+        return;
+      }
+      errEl.textContent = rd.error || 'Registration failed — check your code and try again.';
+    } catch (_) {
+      errEl.textContent = 'Could not reach cloud — check your internet connection.';
+    }
+    btn.disabled = false; btn.textContent = 'Connect';
   } catch (e) {
     errEl.textContent = 'Request failed: ' + e.message;
     btn.disabled = false; btn.textContent = 'Connect';

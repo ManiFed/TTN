@@ -1333,6 +1333,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   List<Map<String, dynamic>> _locationResults = [];
   bool _pushed = false;
   bool _pushing = false;
+  bool _codeCopied = false;
   _LocStep _step = _LocStep.idle;
 
   // Telescope
@@ -2160,15 +2161,21 @@ class _ClaimSheetState extends State<_ClaimSheet> {
                 ),
               ),
             ),
-            IconButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _code!));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Copied to clipboard')),
-                );
-              },
-              icon: const Icon(Icons.copy_outlined, size: 18),
-              tooltip: 'Copy',
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: IconButton(
+                key: ValueKey(_codeCopied),
+                onPressed: _codeCopied ? null : () {
+                  Clipboard.setData(ClipboardData(text: _code!));
+                  setState(() => _codeCopied = true);
+                },
+                icon: Icon(
+                  _codeCopied ? Icons.check_circle : Icons.copy_outlined,
+                  size: 18,
+                  color: _codeCopied ? Colors.greenAccent : null,
+                ),
+                tooltip: _codeCopied ? 'Copied!' : 'Copy',
+              ),
             ),
           ],
         ),

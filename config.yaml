@@ -1,144 +1,136 @@
+aavso:
+  audit_dir: aavso_submissions
+  chart_id: ''
+  observer_code: EGBA
+  password: ${AAVSO_PASSWORD}
+  submit_from_node: false
+  submit_poor_quality: false
+  username: ${AAVSO_USERNAME}
 alpaca:
-  discovery_port: 32227
-  discovery_timeout: 5
   api_version: 1
   default_server:
     address: 172.22.6.32
     port: 32323
-devices:
-  telescope:
-    enabled: true
-    device_number: 0
-  camera:
-    enabled: true
-    device_number: 0
-  focuser:
-    enabled: false
-    device_number: 0
-  filterwheel:
-    enabled: false
-    device_number: 0
-  covercalibrator:
-    enabled: true
-    device_number: 0
-telescope:
-  slew_ra: 23.6833
-  slew_dec: 80.2692
-  tracking_rate: 0
-camera:
-  exposure_duration: 30.0
-  binning: 1
+  discovery_port: 32227
+  discovery_timeout: 5
 autofocus:
-  exposure_s: 2.0          # short exposure per focus sample
-  step_size: 50            # focuser steps between samples
-  steps_per_side: 5        # sweep visits 2*steps_per_side + 1 positions
-  settle_s: 1.0            # vibration settle after each move
-  samples_per_point: 1     # frames median-combined per position (>1 fights noise)
-  min_position: null       # hard focuser travel floor (null = none)
-  max_position: null       # hard focuser travel ceiling (null = none)
+  exposure_s: 2
+  max_position: null
+  min_position: null
+  samples_per_point: 1
+  settle_s: 1
+  step_size: 50
+  steps_per_side: 5
+camera:
+  binning: 1
+  exposure_duration: 30
 centering:
-  exposure_s: 3.0          # exposure per plate-solve frame
-  tolerance_arcmin: 3.0    # stop once target is within this of frame centre
-  max_iterations: 4        # give up after this many solve attempts
-  settle_s: 2.0            # vibration settle after each slew
-stacking:
-  frames: 20               # number of sub-frames to capture and stack
-  exposure_s: 10.0         # per sub-frame exposure
-  preview_every: 1         # re-render the live preview every N stacked frames
-logging:
-  level: INFO
-  format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-pier_cam:
-  enabled: false
-  device_index: 0
-  sdk_lib: ''
-  exposure_ms: 80
-  gain: 200
-  bin: 2
-  target_fps: 10
-  jpeg_quality: 75
+  exposure_s: 3
+  max_iterations: 4
+  settle_s: 2
+  tolerance_arcmin: 3
+cloud:
+  activation_code: BS-2026-6268F8R2
+  api_key: ''
+  auto_run_plans: false
+  enabled: true
+  heartbeat_interval: 60
+  node_id: ''
+  plan_poll_interval: 300
+  upload_images: false
+  url: https://api.thetelescope.net
+devices:
+  camera:
+    device_number: 0
+    enabled: true
+  covercalibrator:
+    device_number: 0
+    enabled: true
+  filterwheel:
+    device_number: 0
+    enabled: false
+  focuser:
+    device_number: 0
+    enabled: false
+  telescope:
+    device_number: 0
+    enabled: true
 image_watcher:
+  debounce_delay: 2
   enabled: false
   watch_path: /mnt/seestar
-  debounce_delay: 2.0
+logging:
+  format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+  level: INFO
 observatory:
-  name: 'Starfront Observatories, Rockwood TX'
+  elevation: 525
+  instrument: ZWO Seestar S50 IMX462
   latitude: 31.3614
   longitude: -99.4431
-  elevation: 525.0
-  telescope: ZWO Seestar S50
-  instrument: ZWO Seestar S50 IMX462
+  name: Starfront Observatories, Rockwood TX
   observer: ''
+  telescope: ZWO Seestar S50
 photometry:
-  enabled: true
-  node_id: seestar-live-001
-  filter_name: CV
-  gain: 1.0
-  read_noise: 5.0
-  target:
-    name: 'T CrB'
-    ra_deg: 239.87567
-    dec_deg: 25.92019
-  # Plate solving. solver: "astap" or "astrometry" (Astrometry.net solve-field).
-  # force_plate_solve re-solves every stack from scratch, discarding the Seestar's
-  # onboard WCS so its alt-az pointing error can't leak into the cross-match.
-  solver: astrometry
-  astap_path: astap
-  solve_field_path: /opt/homebrew/bin/solve-field
-  force_plate_solve: true
-  # pixel_scale is also required for the pointing-WCS fallback (_inject_pointing_wcs)
-  # used when ASTAP is unavailable. Alt-az mounts (e.g. Seestar S50) must set this
-  # or the pipeline will abort with "cannot construct fallback WCS".
-  pixel_scale: 2.4          # arcsec/px — Seestar S50 IMX462 at 250mm focal length
-  astap_search_radius: 10
+  annulus_inner: 4
+  annulus_outer: 6
   aperture_factor: 1.5
-  annulus_inner: 4.0
-  annulus_outer: 6.0
-  field_radius: 0.5
-  mag_min: 10.0             # skip stars brighter than this — likely saturated on 30s Seestar frames
-  mag_limit: 15.0
-  # Comparison-star catalogs, queried in order until comparison_target_count is
-  # reached. APASS gives Johnson V directly; ATLAS reaches fainter; Gaia backstops.
-  comparison_catalogs: [aavso, apass, gaia]
+  astap_path: astap
+  astap_search_radius: 10
+  comparison_catalogs:
+  - aavso
+  - apass
+  - gaia
   comparison_target_count: 8
-  min_comparison_stars: 3
-  snr_threshold: 20
-  max_uncertainty: 0.3
-  max_airmass: 3.0
+  enabled: true
+  field_radius: 0.5
+  filter_name: CV
   fits_export:
     enabled: true
     export_dir: fits_export
-aavso:
-  observer_code: 'EGBA'
-  # Secrets are read from the environment — never commit them here.
-  username: '${AAVSO_USERNAME}'
-  password: '${AAVSO_PASSWORD}'
-  audit_dir: aavso_submissions
-  # When the cloud is enabled it owns AAVSO submission (network batch under one
-  # OBSCODE). The node then only formats + saves the file for audit and uploads
-  # it to the cloud — it does NOT POST to WebObs, so observations aren't sent
-  # twice. Set submit_from_node: true only for a standalone node with no cloud.
-  submit_from_node: false
-  submit_poor_quality: false
-  chart_id: ''
-cloud:
-  enabled: true
-  url: 'https://network.boundlessskies.org'
-  activation_code: ''          # BS-YYYY-XXXXXXXX from your account page; used once on first boot
-  node_id: ''
-  api_key: ''
-  heartbeat_interval: 60       # seconds between heartbeats (with conditions)
-  plan_poll_interval: 300      # seconds between observation-plan polls
-  auto_run_plans: false        # execute cloud plans automatically when idle
-  upload_images: false         # also upload raw FITS after each measurement
+  force_plate_solve: true
+  fwhm_fallback_px: 4.01
+  gain: 1
+  mag_limit: 15
+  mag_min: 10
+  max_airmass: 3
+  max_exposure_s: 30
+  max_uncertainty: 0.3
+  min_comparison_stars: 3
+  node_id: seestar-live-001
+  pixel_scale: 2.4
+  read_noise: 5
+  snr_threshold: 20
+  solve_field_path: /opt/homebrew/bin/solve-field
+  solver: astrometry
+  target:
+    dec_deg: 25.92019
+    name: T CrB
+    ra_deg: 239.87567
+pier_cam:
+  bin: 2
+  device_index: 0
+  enabled: false
+  exposure_ms: 80
+  gain: 200
+  jpeg_quality: 75
+  sdk_lib: ''
+  target_fps: 10
 safety:
-  enabled: true
-  disconnect_timeout: 600
-  heartbeat_interval: 30
-  reconnect_attempts: 3
-  reconnect_delay: 10
-  park_at_dawn: true
   dawn_type: astronomical
+  disconnect_timeout: 600
+  enabled: true
+  heartbeat_interval: 30
   observer:
     latitude: 31.3614
     longitude: -99.4431
+  park_at_dawn: true
+  reconnect_attempts: 3
+  reconnect_delay: 10
+stacking:
+  exposure_s: 10
+  frames: 20
+  preview_every: 1
+telescope:
+  slew_dec: 80.2692
+  slew_ra: 23.6833
+  tracking_rate: 0
