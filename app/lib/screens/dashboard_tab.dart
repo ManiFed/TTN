@@ -1202,6 +1202,26 @@ class _AlertSummary extends StatelessWidget {
   }
 }
 
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontFamily: 'Geist',
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.0,
+        color: BSTheme.ink3,
+      ),
+    );
+  }
+}
+
 String _nodeStatus(Node? node) {
   if (node == null) return 'Not connected';
   if (!node.online) return 'Offline';
