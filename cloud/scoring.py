@@ -55,6 +55,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _live_composite_weights(config: dict) -> dict:
+    """Live (auto-tuned) composite weights, seeded from config. Falls back to
+    config + defaults if the tuning state can't be read (e.g. no DB in tests),
+    preserving the pre-tuning contract."""
+    try:
+        return {**DEFAULT_WEIGHTS, **tuning.active_composite_weights(config)}
+    except Exception:
+        return {**DEFAULT_WEIGHTS, **(config.get("scoring", {}).get("weights", {}) or {})}
+
+
 # ── Component scores ───────────────────────────────────────────────────────────
 
 def brightness_match(target_mag: Optional[float], node: dict) -> float:
@@ -356,14 +366,17 @@ def observability(target: dict, node: dict, night: Optional[tuple],
 
 def score_target_for_node(target: dict, node: dict, night: Optional[tuple],
                           weather: float, config: dict,
-                          obs_weights: Optional[dict] = None) -> dict:
+                          obs_weights: Optional[dict] = None,
+                          weights: Optional[dict] = None) -> dict:
     """Full composite score with component breakdown.
 
-    obs_weights, when provided, are the live observability sub-weights; score_all
-    fetches them once per run to avoid a DB read per (target, node) pair.  When
-    omitted (ad-hoc callers) they are read from the DB-backed tuning state.
+    obs_weights and weights, when provided, are the live (auto-tuned)
+    observability sub-weights and composite weights; score_all fetches each once
+    per run to avoid a DB read per (target, node) pair.  When omitted (ad-hoc
+    callers) they are read from the DB-backed tuning state.
     """
-    weights = {**DEFAULT_WEIGHTS, **config.get("scoring", {}).get("weights", {})}
+    if weights is None:
+        weights = _live_composite_weights(config)
     if obs_weights is None:
         obs_weights = tuning.active_obs_weights(config)
 
@@ -467,8 +480,9 @@ def score_all(config: dict) -> int:
         logger.info("Scoring skipped — %d targets, %d nodes", len(targets), len(nodes))
         return 0
 
-    # Read the live (auto-tuned) observability weights once for the whole run.
+    # Read the live (auto-tuned) weights once for the whole run.
     obs_weights = tuning.active_obs_weights(config)
+    weights = _live_composite_weights(config)
 
     count = 0
     for node in nodes:
@@ -477,7 +491,7 @@ def score_all(config: dict) -> int:
         for target in targets:
             try:
                 comp = score_target_for_node(
-                    target, node, night, weather, config, obs_weights)
+                    target, node, night, weather, config, obs_weights, weights)
             except Exception as exc:
                 logger.warning("Scoring failed %s @ %s: %s",
                                target["name"], node["node_id"], exc)

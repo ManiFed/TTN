@@ -396,6 +396,9 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "previous_locations",   "TEXT DEFAULT '[]'"),
     ("activation_codes", "portable",  "INTEGER DEFAULT 0"),
     ("measurements",     "sky_mag",   "DOUBLE PRECISION"),
+    # Network optimizer: all AI-tuned parameter groups live in one JSON blob,
+    # superseding the observability-only tuning_state.obs_weights column.
+    ("tuning_state",     "params",    "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 # Tables added after initial schema — created idempotently in init().
@@ -436,6 +439,21 @@ _LATE_TABLES: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_incidents_node ON incidents(node_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents(status, opened_at)",
+    """
+    CREATE TABLE IF NOT EXISTS plan_runs (
+        run_id           TEXT PRIMARY KEY,
+        ran_at           TEXT NOT NULL,
+        n_nodes          INTEGER DEFAULT 0,
+        n_targets        INTEGER DEFAULT 0,
+        n_assignments    INTEGER DEFAULT 0,
+        objective_value  DOUBLE PRECISION DEFAULT 0,
+        greedy_objective DOUBLE PRECISION DEFAULT 0,
+        redundancy_rate  DOUBLE PRECISION DEFAULT 0,
+        cadence_fill     DOUBLE PRECISION DEFAULT 0,
+        stats            TEXT DEFAULT '{}'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_plan_runs_time ON plan_runs(ran_at)",
 ]
 
 

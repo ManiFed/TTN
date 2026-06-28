@@ -34,7 +34,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from cloud import db
+from cloud import db, objective
 
 logger = logging.getLogger("cloud.tuning")
 
@@ -52,6 +52,51 @@ DEFAULT_OBS_WEIGHTS = {
 
 OBS_KEYS = tuple(DEFAULT_OBS_WEIGHTS.keys())
 
+# Composite (top-level) score weights — previously fixed in scoring.DEFAULT_WEIGHTS.
+DEFAULT_COMPOSITE_WEIGHTS = {
+    "brightness": 0.20,
+    "science":    0.25,
+    "time":       0.15,
+    "coverage":   0.15,
+    "observe":    0.25,
+    "roi":        0.10,
+}
+COMPOSITE_KEYS = tuple(DEFAULT_COMPOSITE_WEIGHTS.keys())
+
+# Slot-quality and coordination defaults are owned by cloud.objective (the hot
+# path that consumes them); tuning re-exports them so all params share one source.
+DEFAULT_SLOT_WEIGHTS = objective.DEFAULT_SLOT_WEIGHTS
+SLOT_KEYS = tuple(DEFAULT_SLOT_WEIGHTS.keys())
+DEFAULT_COORD_PARAMS = objective.DEFAULT_COORD_PARAMS
+COORD_KEYS = tuple(DEFAULT_COORD_PARAMS.keys())
+
+# The three weight groups are normalized (sum to 1, trust-region step). The
+# coordination group is free scalars, clamped per-key within max_delta_coord and
+# the bounds below.
+WEIGHT_GROUPS = {
+    "composite":     (DEFAULT_COMPOSITE_WEIGHTS, COMPOSITE_KEYS),
+    "observability": (DEFAULT_OBS_WEIGHTS, OBS_KEYS),
+    "slot_quality":  (DEFAULT_SLOT_WEIGHTS, SLOT_KEYS),
+}
+SCALAR_GROUP = "coordination"
+
+COORD_BOUNDS = {
+    "redundancy_decay":            (0.10, 0.95),
+    "redundancy_diversity_sep":    (10.0, 180.0),
+    "cadence_bonus_strength":      (0.0, 1.0),
+    "slew_cost_weight":            (0.0, 5.0),
+    "slew_deg_per_s":              (0.5, 10.0),
+    "slew_settle_s":               (0.0, 120.0),
+    "filter_change_cost_s":        (0.0, 600.0),
+    "meridian_flip_cost_s":        (0.0, 600.0),
+    "preferred_target_boost":      (0.0, 0.5),
+    "robustness_cloud_relax":      (0.0, 0.5),
+    "slot_quality_floor":          (0.0, 0.95),
+    "local_search_aggressiveness": (0.0, 4.0),
+}
+
+_MAX_DELTA_COORD_DEFAULT = 0.15
+
 _MODEL_DEFAULT = "claude-opus-4-8"
 _LOOKBACK_DEFAULT = 14
 _MAX_DELTA_DEFAULT = 0.05
@@ -66,46 +111,93 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── Active weight source-of-truth (read path — keep dependency-free) ─────────────
+# ── Active param source-of-truth (read path — keep dependency-free) ──────────────
 
-def _load_state_weights() -> dict | None:
-    """Return the active obs-weights dict from tuning_state, or None if unseeded."""
-    row = db.query_one("SELECT obs_weights FROM tuning_state WHERE id = 1")
+def _default_params(config: dict) -> dict:
+    """All parameter groups seeded from config.yaml layered over the canonical
+    defaults — the state the system runs with before the monitor changes
+    anything (behavior identical to the pre-tuning system)."""
+    sc = config.get("scoring", {})
+    sch = config.get("scheduler", {})
+    raw = {
+        "composite":     {**DEFAULT_COMPOSITE_WEIGHTS, **(sc.get("weights") or {})},
+        "observability": {**DEFAULT_OBS_WEIGHTS, **(sc.get("observability_weights") or {})},
+        "slot_quality":  {**DEFAULT_SLOT_WEIGHTS, **(sc.get("slot_quality_weights") or {})},
+        "coordination":  {**DEFAULT_COORD_PARAMS, **(sch.get("coordination") or {})},
+    }
+    return _canonical(raw)
+
+
+def _canonical(params: dict) -> dict:
+    """Keep only the known keys per group, coerced to float, filling any gap
+    from the defaults."""
+    out: dict = {}
+    for group, (defaults, keys) in WEIGHT_GROUPS.items():
+        src = params.get(group, {}) or {}
+        out[group] = {k: float(src.get(k, defaults[k])) for k in keys}
+    coord_src = params.get(SCALAR_GROUP, {}) or {}
+    out[SCALAR_GROUP] = {k: float(coord_src.get(k, DEFAULT_COORD_PARAMS[k]))
+                         for k in COORD_KEYS}
+    return out
+
+
+def _load_params() -> dict | None:
+    row = db.query_one("SELECT params, obs_weights FROM tuning_state WHERE id = 1")
     if not row:
         return None
-    weights = db.loads(row.get("obs_weights"), {})
-    return weights or None
+    stored = db.loads(row.get("params"), None)
+    if stored:
+        return stored
+    # Continuity: an existing obs_weights-only row from the pre-network system.
+    legacy = db.loads(row.get("obs_weights"), None)
+    if legacy:
+        return {"observability": legacy}
+    return None
 
 
-def _write_state_weights(weights: dict) -> None:
+def _write_params(params: dict) -> None:
+    """Persist all groups; mirror observability into the legacy column so any
+    old reader still works."""
     db.execute(
-        """INSERT INTO tuning_state (id, obs_weights, updated_at)
-           VALUES (1, %s, %s)
+        """INSERT INTO tuning_state (id, params, obs_weights, updated_at)
+           VALUES (1, %s, %s, %s)
            ON CONFLICT(id) DO UPDATE SET
+               params      = excluded.params,
                obs_weights = excluded.obs_weights,
                updated_at  = excluded.updated_at""",
-        (json.dumps(weights), _now()),
+        (json.dumps(params), json.dumps(params.get("observability", {})), _now()),
     )
 
 
-def active_obs_weights(config: dict) -> dict:
+def active_params(config: dict) -> dict:
     """
-    The live observability sub-weights, read fresh from the DB.
+    The live tunable parameters (all groups), read fresh from the DB.
 
-    On first call the table is seeded from config.yaml
-    (scoring.observability_weights) layered over DEFAULT_OBS_WEIGHTS, so behavior
-    is identical to the pre-tuning system until the monitor changes anything.
+    On first call the row is seeded from config.yaml layered over the canonical
+    defaults, so behavior is identical to the pre-tuning system until the monitor
+    changes anything.  Stored values are merged over the seed so a newly-added
+    param key picks up its default without a manual migration.
     """
-    db_w = _load_state_weights()
-    if db_w is None:
-        seed = {**DEFAULT_OBS_WEIGHTS,
-                **(config.get("scoring", {}).get("observability_weights", {}) or {})}
-        # only keep the canonical keys
-        seed = {k: float(seed.get(k, DEFAULT_OBS_WEIGHTS[k])) for k in OBS_KEYS}
-        _write_state_weights(seed)
-        logger.info("Seeded tuning_state observability weights from config")
+    seed = _default_params(config)
+    stored = _load_params()
+    if stored is None:
+        _write_params(seed)
+        logger.info("Seeded tuning_state params from config")
         return seed
-    return {k: float(db_w.get(k, DEFAULT_OBS_WEIGHTS[k])) for k in OBS_KEYS}
+    # Merge stored over seed (per group/key), then canonicalize.
+    merged = {g: {**seed.get(g, {}), **(stored.get(g, {}) or {})}
+              for g in ("composite", "observability", "slot_quality", SCALAR_GROUP)}
+    return _canonical(merged)
+
+
+def active_obs_weights(config: dict) -> dict:
+    """The live observability sub-weights (one group of active_params)."""
+    return active_params(config)["observability"]
+
+
+def active_composite_weights(config: dict) -> dict:
+    """The live composite (top-level) score weights."""
+    return active_params(config)["composite"]
 
 
 # ── Evidence gathering (pure procedural, no LLM) ─────────────────────────────────
@@ -151,9 +243,10 @@ def gather_evidence(config: dict) -> dict:
         quality[q] = quality.get(q, 0) + 1
     n_outlier = sum(1 for m in meas if m.get("validation_status") == "outlier")
 
-    # Node tier lookup, for the telescope-match signal.
-    tiers = {n["node_id"]: int(n.get("tier", 1) or 1)
-             for n in db.query("SELECT node_id, tier FROM nodes")}
+    # Node tier + camera lookup, for the telescope-match and thermal signals.
+    node_rows = db.query("SELECT node_id, tier, cooled_camera FROM nodes")
+    tiers = {n["node_id"]: int(n.get("tier", 1) or 1) for n in node_rows}
+    cooled = {n["node_id"]: bool(n.get("cooled_camera")) for n in node_rows}
 
     # ── Split helpers: bucket measurements by the factor each weight governs ──
     def split_outlier(predicate):
@@ -217,6 +310,27 @@ def gather_evidence(config: dict) -> dict:
         if comp.get("observe") is not None:
             observe_scores.append(float(comp["observe"]))
 
+    # Good-data fraction by camera cooling — the thermal slot-quality signal.
+    cooled_good: dict[bool, list] = {}
+    for m in meas:
+        c = cooled.get(m.get("node_id"), False)
+        cooled_good.setdefault(c, []).append(1 if m.get("quality_flag") == "good" else 0)
+    cooled_good_fraction = {
+        ("cooled" if c else "uncooled"): {
+            "good_fraction": round(sum(v) / len(v), 4), "n": len(v)}
+        for c, v in cooled_good.items()}
+
+    # Network coordination outcomes from recent optimizer runs (plan_runs).
+    runs = db.query("SELECT * FROM plan_runs WHERE ran_at >= %s", (since,))
+    network = {
+        "n_runs": len(runs),
+        "mean_redundancy_rate": _mean([r.get("redundancy_rate") for r in runs]),
+        "mean_cadence_fill": _mean([r.get("cadence_fill") for r in runs]),
+        "mean_objective": _mean([r.get("objective_value") for r in runs]),
+        "mean_greedy_objective": _mean([r.get("greedy_objective") for r in runs]),
+        "mean_assignments": _mean([r.get("n_assignments") for r in runs]),
+    }
+
     return {
         "lookback_nights": lookback,
         "n_nights_with_data": len(nights),
@@ -255,52 +369,79 @@ def gather_evidence(config: dict) -> dict:
                 "plan_completion_rate": completion_rate},
             "telescope": {
                 "good_fraction_by_tier": tier_good_fraction},
+            "thermal": {
+                "good_fraction_by_cooling": cooled_good_fraction},
         },
+        # Fleet-level coordination outcomes, for the composite weights and the
+        # coordination knobs (redundancy / cadence / slew model).
+        "network": network,
     }
 
 
 # ── Claude proposal (the only LLM call in the cloud) ─────────────────────────────
 
 _SYSTEM_PROMPT = (
-    "You tune the six observability sub-weights of an autonomous-telescope "
-    "scheduler for a volunteer astronomy charity. These weights blend into the "
-    "'observe' component of each target's score; higher weight means that factor "
-    "matters more when choosing what to observe.\n\n"
-    "The weights are:\n"
-    "- light_pollution: penalty for faint targets under bright skies\n"
-    "- weather: forecast clear-sky fraction over the night\n"
-    "- moon: penalty for bright moon near the target\n"
-    "- airmass: preference for targets near the zenith\n"
-    "- window: preference for longer visibility windows\n"
-    "- telescope: aperture/FoV suitability for the target class\n\n"
-    "You are given the current weights and an evidence brief. Under "
-    "'per_factor' each weight has a directly relevant outcome signal with its "
-    "own sample count (n_*). Reason factor by factor:\n"
-    "- Raise a weight when its factor's outcomes are poor and well-sampled "
-    "(e.g. high outlier rate for faint targets -> light_pollution; low "
-    "plan_completion_rate -> weather; worse uncertainty under bright moon -> "
-    "moon; worse uncertainty at high airmass -> airmass).\n"
-    "- Discount any signal with a small sample (low n_*) — do not move a weight "
-    "on a handful of measurements.\n"
-    "- If the evidence is weak or mixed, return the current weights unchanged.\n"
-    "Make small, evidence-justified moves only. Each weight must stay within the "
-    "stated max_delta of its current value and remain non-negative. They need "
-    "not sum to 1 — the system renormalizes. Explain your reasoning in 2-3 "
-    "sentences, citing the specific signals you acted on."
+    "You tune the parameters of an autonomous-telescope network scheduler for a "
+    "volunteer astronomy charity. The hot path is procedural; you are an advisor "
+    "that, once a night, proposes small adjustments to four parameter groups:\n\n"
+    "composite — relative importance of each target's score components "
+    "(brightness, science, time, coverage, observe, roi).\n"
+    "observability — sub-weights blended into the 'observe' component "
+    "(light_pollution, weather, moon, airmass, window, telescope).\n"
+    "slot_quality — weights for the time-resolved within-night placement of an "
+    "observation (altitude, cloud, seeing, transparency, moon, sky_brightness, "
+    "thermal).\n"
+    "coordination — fleet-wide knobs: redundancy_decay (lower = punish redundant "
+    "double-coverage of a target harder), cadence_bonus_strength (higher = spread "
+    "samples in time more), slew/filter/meridian overhead costs, "
+    "preferred_target_boost, robustness_cloud_relax, slot_quality_floor, "
+    "local_search_aggressiveness, plus slew_deg_per_s and "
+    "redundancy_diversity_sep.\n\n"
+    "You are given the current params and an evidence brief. Under 'per_factor' "
+    "each observability/slot weight has a directly relevant outcome signal with "
+    "its own sample count (n_*); 'network' has fleet outcomes (redundancy_rate, "
+    "cadence_fill, objective vs greedy). Reason group by group, factor by factor:\n"
+    "- Raise a weight/knob only when its signal is poor AND well-sampled (e.g. "
+    "high faint-target outlier rate -> light_pollution; low plan_completion -> "
+    "weather; worse uncertainty under bright moon -> moon or slot_quality.moon; "
+    "worse good_fraction for uncooled cameras -> slot_quality.thermal; high "
+    "redundancy_rate with low cadence_fill -> lower redundancy_decay and/or raise "
+    "cadence_bonus_strength).\n"
+    "- Discount any signal with a small sample. If evidence is weak or mixed for a "
+    "group, return that group unchanged.\n"
+    "Make small, evidence-justified moves only. Weight groups need not sum to 1 — "
+    "the system renormalizes each and caps every per-run move at max_delta. "
+    "Coordination knobs are clamped to max_delta_coord (fractional) and to safe "
+    "bounds. Explain your reasoning in 2-4 sentences citing the signals you acted on."
 )
 
-_WEIGHTS_SCHEMA = {
+
+def _group_schema(keys) -> dict:
+    return {
+        "type": "object",
+        "properties": {k: {"type": "number"} for k in keys},
+        "required": list(keys),
+        "additionalProperties": False,
+    }
+
+
+_PARAMS_SCHEMA = {
     "type": "object",
     "properties": {
-        "weights": {
+        "params": {
             "type": "object",
-            "properties": {k: {"type": "number"} for k in OBS_KEYS},
-            "required": list(OBS_KEYS),
+            "properties": {
+                "composite":     _group_schema(COMPOSITE_KEYS),
+                "observability": _group_schema(OBS_KEYS),
+                "slot_quality":  _group_schema(SLOT_KEYS),
+                "coordination":  _group_schema(COORD_KEYS),
+            },
+            "required": ["composite", "observability", "slot_quality", "coordination"],
             "additionalProperties": False,
         },
         "rationale": {"type": "string"},
     },
-    "required": ["weights", "rationale"],
+    "required": ["params", "rationale"],
     "additionalProperties": False,
 }
 
@@ -309,11 +450,12 @@ def _resolve_api_key(cfg: dict) -> str:
     return str(cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", "")).strip()
 
 
-def propose_weights(evidence: dict, current_weights: dict, config: dict):
+def propose_weights(evidence: dict, current_params: dict, config: dict):
     """
-    Ask Claude for adjusted weights.  Returns (weights_dict, rationale) or None
-    if tuning can't run (no API key).  Raises on a genuine API failure so the
-    caller's guard logs it and leaves the weights unchanged.
+    Ask Claude for adjusted params (all four groups).  Returns
+    (proposed_params, rationale) or None if tuning can't run (no API key).
+    Raises on a genuine API failure so the caller's guard logs it and leaves the
+    params unchanged.
     """
     cfg = config.get("tuning", {})
     api_key = _resolve_api_key(cfg)
@@ -325,34 +467,39 @@ def propose_weights(evidence: dict, current_weights: dict, config: dict):
 
     model = str(cfg.get("model", _MODEL_DEFAULT))
     max_delta = float(cfg.get("max_delta", _MAX_DELTA_DEFAULT))
+    max_delta_coord = float(cfg.get("max_delta_coord", _MAX_DELTA_COORD_DEFAULT))
 
     brief = {
-        "current_weights": current_weights,
+        "current_params": current_params,
         "max_delta": max_delta,
+        "max_delta_coord": max_delta_coord,
+        "coord_bounds": COORD_BOUNDS,
         "evidence": evidence,
     }
     client = anthropic.Anthropic(api_key=api_key)
     resp = client.messages.create(
         model=model,
-        max_tokens=2000,
+        max_tokens=3000,
         thinking={"type": "adaptive"},
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": json.dumps(brief, indent=2)}],
-        output_config={"format": {"type": "json_schema", "schema": _WEIGHTS_SCHEMA}},
+        output_config={"format": {"type": "json_schema", "schema": _PARAMS_SCHEMA}},
     )
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = json.loads(text)
-    return data["weights"], data.get("rationale", "")
+    return data["params"], data.get("rationale", "")
 
 
 # ── Apply + audit + notify ───────────────────────────────────────────────────────
 
-def _clamp_and_normalize(current: dict, proposed: dict, max_delta: float) -> dict:
+def _clamp_and_normalize(current: dict, proposed: dict, keys, defaults: dict,
+                         max_delta: float) -> dict:
     """
-    Take a bounded step from `current` toward `proposed`, returning weights that
-    sum to 1.0 with **every** weight within max_delta of its current value.
+    Take a bounded step from `current` toward `proposed` for one weight group,
+    returning weights that sum to 1.0 with **every** weight within max_delta of
+    its current value.
 
-    This is a uniform trust-region step rather than per-key clamping:
+    Uniform trust-region step rather than per-key clamping:
       1. Normalize current and proposed to sum 1 (so an un-normalized model
          response like {weather: 40, ...} is read on the right scale).
       2. direction = proposed − current  (sums to 0).
@@ -365,73 +512,128 @@ def _clamp_and_normalize(current: dict, proposed: dict, max_delta: float) -> dic
     max_delta is therefore a true hard cap on the per-run change to any weight.
     """
     def _norm(d):
-        s = sum(max(0.0, float(d.get(k, 0.0))) for k in OBS_KEYS)
+        s = sum(max(0.0, float(d.get(k, 0.0))) for k in keys)
         if s <= 0:
             return None
-        return {k: max(0.0, float(d.get(k, 0.0))) / s for k in OBS_KEYS}
+        return {k: max(0.0, float(d.get(k, 0.0))) / s for k in keys}
 
-    cur = _norm({k: current.get(k, DEFAULT_OBS_WEIGHTS[k]) for k in OBS_KEYS})
+    cur = _norm({k: current.get(k, defaults[k]) for k in keys})
     prop = _norm(proposed)
     if cur is None:
-        cur = dict(DEFAULT_OBS_WEIGHTS)
+        cur = {k: float(defaults[k]) for k in keys}
+        s = sum(cur.values()) or 1.0
+        cur = {k: v / s for k, v in cur.items()}
     if prop is None:
-        return {k: round(cur[k], 4) for k in OBS_KEYS}
+        return {k: round(cur[k], 4) for k in keys}
 
-    direction = {k: prop[k] - cur[k] for k in OBS_KEYS}
+    direction = {k: prop[k] - cur[k] for k in keys}
     max_abs = max(abs(d) for d in direction.values())
     factor = min(1.0, max_delta / max_abs) if max_abs > 0 else 0.0
-    new = {k: round(cur[k] + factor * direction[k], 4) for k in OBS_KEYS}
+    new = {k: round(cur[k] + factor * direction[k], 4) for k in keys}
     # Absorb the 4-dp rounding residual into the largest weight so the applied
     # weights sum to exactly 1.0 (the residual is <= 6e-4, well under max_delta).
     residual = round(1.0 - sum(new.values()), 4)
     if residual:
-        kmax = max(OBS_KEYS, key=lambda k: new[k])
+        kmax = max(keys, key=lambda k: new[k])
         new[kmax] = round(new[kmax] + residual, 4)
     return new
 
 
-def _is_material(old: dict, new: dict, eps: float) -> bool:
-    """True if any weight moved more than eps — used to skip no-op churn."""
-    return any(abs(float(new[k]) - float(old.get(k, DEFAULT_OBS_WEIGHTS[k]))) > eps
-               for k in OBS_KEYS)
+def _clamp_scalars(current: dict, proposed: dict, max_delta_coord: float) -> dict:
+    """
+    Bounded per-key step for the coordination knobs (free scalars, not
+    normalized).  Each knob moves at most max_delta_coord × |current| (with a
+    small absolute floor so near-zero knobs can still move) toward the proposal,
+    then is clamped to its safe bound in COORD_BOUNDS.
+    """
+    out: dict = {}
+    for k in COORD_KEYS:
+        cur = float(current.get(k, DEFAULT_COORD_PARAMS[k]))
+        prop = float(proposed.get(k, cur))
+        lo, hi = COORD_BOUNDS[k]
+        span = (hi - lo)
+        step_cap = max(max_delta_coord * abs(cur), max_delta_coord * span * 0.1)
+        delta = max(-step_cap, min(step_cap, prop - cur))
+        out[k] = round(max(lo, min(hi, cur + delta)), 4)
+    return out
+
+
+def _clamp_params(current: dict, proposed: dict, max_delta: float,
+                  max_delta_coord: float) -> dict:
+    """Apply the trust-region step to every group → a full canonical params dict."""
+    new: dict = {}
+    for group, (defaults, keys) in WEIGHT_GROUPS.items():
+        new[group] = _clamp_and_normalize(
+            current.get(group, {}), proposed.get(group, {}), keys, defaults, max_delta)
+    new[SCALAR_GROUP] = _clamp_scalars(
+        current.get(SCALAR_GROUP, {}), proposed.get(SCALAR_GROUP, {}), max_delta_coord)
+    return new
+
+
+def _params_material(old: dict, new: dict, eps: float) -> bool:
+    """True if any weight (any group) moved more than eps. Coordination knobs use
+    a per-key relative epsilon so a tiny absolute move on a large knob still
+    counts only when proportionally meaningful."""
+    for group, (defaults, keys) in WEIGHT_GROUPS.items():
+        og, ng = old.get(group, {}), new.get(group, {})
+        if any(abs(float(ng.get(k, defaults[k])) - float(og.get(k, defaults[k]))) > eps
+               for k in keys):
+            return True
+    og, ng = old.get(SCALAR_GROUP, {}), new.get(SCALAR_GROUP, {})
+    for k in COORD_KEYS:
+        cur = float(og.get(k, DEFAULT_COORD_PARAMS[k]))
+        scale = max(abs(cur), 1e-6)
+        if abs(float(ng.get(k, cur)) - cur) / scale > eps:
+            return True
+    return False
 
 
 def apply_and_notify(current: dict, proposed: dict, rationale: str,
                      evidence: dict, config: dict) -> dict:
-    """Clamp/normalize, persist active weights, write an audit row, notify admins."""
+    """Clamp every group, persist active params, write an audit row, notify admins."""
     cfg = config.get("tuning", {})
     max_delta = float(cfg.get("max_delta", _MAX_DELTA_DEFAULT))
+    max_delta_coord = float(cfg.get("max_delta_coord", _MAX_DELTA_COORD_DEFAULT))
     min_change = float(cfg.get("min_change", _MIN_CHANGE_DEFAULT))
     model = str(cfg.get("model", _MODEL_DEFAULT))
 
-    new_weights = _clamp_and_normalize(current, proposed, max_delta)
+    new_params = _clamp_params(current, proposed, max_delta, max_delta_coord)
 
-    # No-churn guard: if the monitor effectively left the weights alone, don't
+    # No-churn guard: if the monitor effectively left the params alone, don't
     # write state, an audit row, or notifications every single night.
-    if not _is_material(current, new_weights, min_change):
-        logger.info("Tuning: no material weight change (<%.3f) — left unchanged", min_change)
+    if not _params_material(current, new_params, min_change):
+        logger.info("Tuning: no material param change (<%.3f) — left unchanged", min_change)
         return current
 
-    _write_state_weights(new_weights)
+    _write_params(new_params)
     db.execute(
         """INSERT INTO weight_history
                (changed_at, old_weights, new_weights, rationale,
                 evidence_digest, model, applied)
            VALUES (%s,%s,%s,%s,%s,%s,1)""",
-        (_now(), json.dumps(current), json.dumps(new_weights), rationale,
+        (_now(), json.dumps(current), json.dumps(new_params), rationale,
          json.dumps(evidence), model),
     )
-    _notify_admins(current, new_weights, rationale)
-    logger.info("Applied tuned observability weights: %s (%s)", new_weights, rationale)
-    return new_weights
+    _notify_admins(current, new_params, rationale)
+    logger.info("Applied tuned scheduler params (%s)", rationale)
+    return new_params
 
 
-def restore_weights(weights: dict, rationale: str, config: dict) -> dict:
-    """Set the active weights exactly (no clamping) — used by admin rollback."""
-    current = active_obs_weights(config)
-    restored = {k: float(weights.get(k, current.get(k, DEFAULT_OBS_WEIGHTS[k])))
-                for k in OBS_KEYS}
-    _write_state_weights(restored)
+def restore_weights(params: dict, rationale: str, config: dict) -> dict:
+    """Set the active params exactly (no clamping) — used by admin rollback.
+
+    Accepts either a full params dict (group → weights) or a legacy flat
+    observability-weights dict (wrapped automatically), so old audit rows still
+    roll back correctly.
+    """
+    current = active_params(config)
+    group_names = set(WEIGHT_GROUPS) | {SCALAR_GROUP}
+    if params and not (set(params) & group_names):
+        params = {"observability": params}      # legacy flat obs-weights row
+    merged = {g: {**current.get(g, {}), **(params.get(g, {}) or {})}
+              for g in ("composite", "observability", "slot_quality", SCALAR_GROUP)}
+    restored = _canonical(merged)
+    _write_params(restored)
     db.execute(
         """INSERT INTO weight_history
                (changed_at, old_weights, new_weights, rationale,
@@ -441,7 +643,7 @@ def restore_weights(weights: dict, rationale: str, config: dict) -> dict:
          "{}", "manual"),
     )
     _notify_admins(current, restored, rationale)
-    logger.info("Restored observability weights: %s (%s)", restored, rationale)
+    logger.info("Restored scheduler params (%s)", rationale)
     return restored
 
 
@@ -476,7 +678,7 @@ def run_nightly(config: dict) -> dict | None:
         return None
 
     try:
-        current = active_obs_weights(config)
+        current = active_params(config)
         evidence = gather_evidence(config)
 
         min_nights = int(cfg.get("min_nights_data", _MIN_NIGHTS_DEFAULT))

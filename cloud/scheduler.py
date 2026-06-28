@@ -94,6 +94,13 @@ def generate_plan(
     darkness at the node within 24 h.
     """
     sched_cfg = config.get("scheduler", {})
+    if sched_cfg.get("network_optimizer"):
+        # New path: coordinated network optimizer. For a single on-demand node
+        # this degenerates to a per-node optimize (no cross-node state), still
+        # richer than the legacy greedy packer below.
+        from cloud import network_planner
+        return network_planner.plan_single_node(node, config)
+
     min_score = float(sched_cfg.get("min_score", 0.25))
     max_targets = int(sched_cfg.get("max_targets_per_night", 12))
     sun_limit = float(sched_cfg.get("sun_altitude_limit", -12.0))
@@ -290,6 +297,10 @@ def current_plan(node_id: str) -> Optional[dict]:
 
 def generate_all_plans(config: dict) -> int:
     """Generate a fresh plan for every online node. Returns plan count."""
+    if config.get("scheduler", {}).get("network_optimizer"):
+        from cloud import network_planner
+        return network_planner.plan_network(config)
+
     count = 0
     reservations: dict[str, list[float]] = {}
     nodes = sorted(

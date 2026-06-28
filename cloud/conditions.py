@@ -511,3 +511,68 @@ def altitude_curve(ra_deg: float, dec_deg: float, lat: float, lon: float,
 
     return [(t_start + timedelta(minutes=i * step_min), float(alts[i]))
             for i in range(n)]
+
+
+def altaz_curve(ra_deg: float, dec_deg: float, lat: float, lon: float,
+                t_start: datetime, t_end: datetime,
+                step_min: int = 10) -> list:
+    """
+    Sample target altitude AND azimuth between two times.
+    Returns [(datetime_utc, alt_deg, az_deg), ...]. Vectorised.
+
+    The network scheduler needs azimuth (not just altitude) to test a target
+    against a node's local horizon-obstruction mask (`horizon_min_alt`).
+    """
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+    from astropy.time import Time, TimeDelta
+    import astropy.units as u
+    import numpy as np
+
+    n = max(2, int((t_end - t_start).total_seconds() / 60 / step_min) + 1)
+    loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
+    times = Time(t_start) + TimeDelta(np.arange(n) * step_min * 60, format="sec")
+    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+    altaz = coord.transform_to(AltAz(obstime=times, location=loc))
+    alts = altaz.alt.deg
+    azs = altaz.az.deg
+
+    return [(t_start + timedelta(minutes=i * step_min), float(alts[i]), float(azs[i]))
+            for i in range(n)]
+
+
+def horizon_min_alt(horizon_mask: list, az_deg: float) -> float:
+    """
+    Minimum clear altitude (deg) at a given azimuth, from a node's horizon mask.
+
+    `horizon_mask` is the parsed JSON polygon of local obstructions stored on the
+    node as ``[[alt_deg, az_deg], ...]`` (trees, buildings, terrain).  Returns the
+    obstruction altitude at `az_deg` by linear interpolation between the nearest
+    mask points (azimuth wraps at 360°); an empty mask means an unobstructed
+    horizon (0.0).  A target is observable only when its altitude exceeds both
+    this value and the node's global ``min_altitude_deg``.
+    """
+    if not horizon_mask:
+        return 0.0
+    try:
+        pts = sorted(
+            ((float(az) % 360.0, float(alt)) for alt, az in horizon_mask),
+            key=lambda p: p[0],
+        )
+    except (TypeError, ValueError):
+        return 0.0
+    if not pts:
+        return 0.0
+    if len(pts) == 1:
+        return pts[0][1]
+
+    az = az_deg % 360.0
+    # Find the bracketing mask points, wrapping around 360°.
+    for i in range(len(pts)):
+        a0, h0 = pts[i]
+        a1, h1 = pts[(i + 1) % len(pts)]
+        span = (a1 - a0) % 360.0
+        offset = (az - a0) % 360.0
+        if span > 0 and offset <= span:
+            frac = offset / span
+            return h0 + (h1 - h0) * frac
+    return pts[0][1]

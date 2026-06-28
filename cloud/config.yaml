@@ -62,26 +62,53 @@ scoring:
     airmass: 0.15
     window: 0.15
     telescope: 0.10
+  slot_quality_weights:    # time-resolved within-night placement (network optimizer)
+    altitude: 0.35         # airmass / how high the target rides at this slot
+    cloud: 0.20            # per-slot clear-sky fraction
+    seeing: 0.15           # per-slot atmospheric steadiness
+    transparency: 0.10     # per-slot extinction
+    moon: 0.10             # per-slot moon separation × illumination
+    sky_brightness: 0.05
+    thermal: 0.05          # uncooled-camera penalty on faint targets
 
 tuning:
-  # Nightly Claude monitor that reviews observing outcomes and adjusts the six
-  # observability_weights above. The hot path (ingestion, scoring, scheduling)
-  # stays 100% procedural; Claude is advisory only. Ships OFF — behavior is
-  # unchanged until an operator opts in. See cloud/tuning.py.
+  # Nightly Claude monitor that reviews observing outcomes and adjusts the
+  # scheduler's tunable parameter groups: composite weights, observability
+  # sub-weights, slot-quality weights, and network coordination knobs. The hot
+  # path (ingestion, scoring, scheduling) stays 100% procedural; Claude is
+  # advisory only. Ships OFF — behavior is unchanged until an operator opts in.
+  # See cloud/tuning.py.
   enabled: false
   api_key: ''                # blank → falls back to ANTHROPIC_API_KEY env var
   model: claude-opus-4-8     # latest Opus; set claude-sonnet-4-6 to cut cost
   lookback_nights: 14        # how many nights of outcomes to summarize
   max_delta: 0.05            # hard cap on per-run change to any single weight
+  max_delta_coord: 0.15      # hard cap on per-run fractional change to a coord knob
   min_nights_data: 7         # don't tune until this many nights of data exist
   min_measurements: 30       # ...and not until this many measurements exist
   min_change: 0.005          # skip apply/notify if no weight moves more than this
 
 scheduler:
+  network_optimizer: true  # fleet-wide optimizer; set false to fall back to the
+                           # legacy per-node greedy slot-packer (instant rollback)
+  local_search_ms: 1500    # annealing refinement budget per network run
   replan_interval_minutes: 120
   min_score: 0.25          # targets below this never get scheduled
   max_targets_per_night: 12
   sun_altitude_limit: -12  # nautical darkness
+  coordination:            # seed only — auto-tuned live values live in the DB
+    redundancy_decay: 0.55           # value retained per extra network obs of a target
+    redundancy_diversity_sep: 90.0   # longitude sep (deg) for full diversity credit
+    cadence_bonus_strength: 1.0      # 0 = ignore cadence, 1 = full cadence shaping
+    slew_cost_weight: 1.0
+    slew_deg_per_s: 3.0
+    slew_settle_s: 15.0
+    filter_change_cost_s: 60.0
+    meridian_flip_cost_s: 120.0
+    preferred_target_boost: 0.10
+    robustness_cloud_relax: 0.20     # cloud-cutoff relaxation for enclosure/dew nodes
+    slot_quality_floor: 0.50
+    local_search_aggressiveness: 1.0
 
 aavso:
   observer_code: 'EGBA'
