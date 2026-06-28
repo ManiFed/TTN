@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
+import '../widgets/aladin_sky.dart';
 import '../widgets/glass.dart';
 import 'target_detail_screen.dart';
 
@@ -440,141 +441,80 @@ class _MissionField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _MissionFieldPainter(
-        accent: accent,
-        alerts: alerts,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const AladinSky(),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  BSTheme.night.withValues(alpha: 0.18),
+                  BSTheme.night.withValues(alpha: 0.58),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: accent.withValues(alpha: 0.24)),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'NETWORK SKY PLOT',
-                  style: TextStyle(
-                    fontFamily: 'Geist',
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.8,
-                    color: BSTheme.ink3,
-                  ),
+                Row(
+                  children: [
+                    const Text(
+                      'ALADIN LIVE SKY',
+                      style: TextStyle(
+                        fontFamily: 'Geist',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.8,
+                        color: BSTheme.ink3,
+                      ),
+                    ),
+                    const Spacer(),
+                    _StatusPill(
+                      label: alerts > 0 ? '$alerts ALERTS' : 'CLEAR',
+                      color: alerts > 0 ? BSTheme.danger : accent,
+                    ),
+                  ],
                 ),
                 const Spacer(),
-                _StatusPill(
-                  label: alerts > 0 ? '$alerts ALERTS' : 'CLEAR',
-                  color: alerts > 0 ? BSTheme.danger : accent,
+                Row(
+                  children: [
+                    Expanded(
+                      child: _MiniDatum(label: 'online', value: '$online'),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _MiniDatum(label: 'targets', value: '$targets'),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _MiniDatum(
+                        label: 'state',
+                        value: alerts > 0 ? 'review' : 'ready',
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-            const Spacer(),
-            Row(
-              children: [
-                Expanded(
-                  child: _MiniDatum(label: 'online', value: '$online'),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _MiniDatum(label: 'targets', value: '$targets'),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _MiniDatum(
-                    label: 'state',
-                    value: alerts > 0 ? 'review' : 'ready',
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
-  }
-}
-
-class _MissionFieldPainter extends CustomPainter {
-  const _MissionFieldPainter({required this.accent, required this.alerts});
-
-  final Color accent;
-  final int alerts;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bgPaint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          accent.withValues(alpha: 0.20),
-          Colors.transparent,
-          BSTheme.night.withValues(alpha: 0.72),
-        ],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, bgPaint);
-
-    final ringPaint = Paint()
-      ..color = BSTheme.ink.withValues(alpha: 0.10)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    final center = Offset(size.width * 0.66, size.height * 0.46);
-    for (final scale in [0.34, 0.55, 0.78]) {
-      canvas.drawOval(
-        Rect.fromCenter(
-          center: center,
-          width: size.width * scale,
-          height: size.height * scale * 0.58,
-        ),
-        ringPaint,
-      );
-    }
-
-    final path = Path()
-      ..moveTo(size.width * 0.10, size.height * 0.72)
-      ..lineTo(size.width * 0.32, size.height * 0.38)
-      ..lineTo(size.width * 0.54, size.height * 0.52)
-      ..lineTo(size.width * 0.78, size.height * 0.26);
-    final pathPaint = Paint()
-      ..color = accent.withValues(alpha: 0.34)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    canvas.drawPath(path, pathPaint);
-
-    final points = <({double x, double y, double r, Color color})>[
-      (x: 0.16, y: 0.26, r: 2.2, color: BSTheme.sky),
-      (x: 0.30, y: 0.64, r: 3.6, color: BSTheme.accent),
-      (x: 0.47, y: 0.35, r: 2.4, color: BSTheme.ink),
-      (x: 0.62, y: 0.77, r: 2.8, color: BSTheme.sky),
-      (x: 0.78, y: 0.48, r: 4.0, color: BSTheme.warm),
-      (x: 0.88, y: 0.22, r: 2.0, color: BSTheme.ink),
-    ];
-    for (final p in points) {
-      final center = Offset(size.width * p.x, size.height * p.y);
-      canvas.drawCircle(
-        center,
-        p.r + 5,
-        Paint()..color = p.color.withValues(alpha: 0.18),
-      );
-      canvas.drawCircle(center, p.r, Paint()..color = p.color);
-    }
-
-    if (alerts > 0) {
-      canvas.drawCircle(
-        Offset(size.width * 0.78, size.height * 0.48),
-        22,
-        Paint()
-          ..color = BSTheme.danger
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MissionFieldPainter oldDelegate) {
-    return oldDelegate.accent != accent || oldDelegate.alerts != alerts;
   }
 }
 
