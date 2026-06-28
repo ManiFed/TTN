@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         // Dark veil — heavier than login so content stays readable.
         Positioned.fill(
-          child: Container(color: const Color(0xE607090C)),
+          child: Container(color: const Color(0xEE030404)),
         ),
         // Film grain — organic texture over everything.
         const Positioned.fill(child: GrainOverlay()),
@@ -106,9 +106,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                 child: Container(
                   decoration: const BoxDecoration(
-                    color: Color(0x1A060E1E),
+                    color: Color(0xD9030404),
                     border: Border(
-                      bottom: BorderSide(color: BSTheme.glassBorder, width: 0.5),
+                      bottom: BorderSide(color: BSTheme.glassBorder, width: 1),
                     ),
                   ),
                 ),
@@ -122,12 +122,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 const LiveDot(color: BSTheme.accent, size: 7),
                 const SizedBox(width: 10),
                 Text(
-                  _tabs[_index].title,
+                  'TELESCOPE // ${_tabs[_index].title.toUpperCase()}',
                   style: const TextStyle(
                     fontFamily: 'Geist',
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.2,
                     color: BSTheme.ink,
                   ),
                 ),
@@ -141,9 +141,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
+                      borderRadius: BorderRadius.circular(4),
                       border: Border.all(color: BSTheme.glassBorder),
-                      color: const Color(0x14A0B9FF),
+                      color: BSTheme.ink.withValues(alpha: 0.04),
                     ),
                     child: const Icon(
                       Icons.person_outline,
@@ -217,11 +217,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                   child: Container(
                     decoration: const BoxDecoration(
-                      color: Color(0xF20D1014),
+                      color: Color(0xF2030404),
                       border: Border(
                         top: BorderSide(
                           color: BSTheme.glassBorder,
-                          width: 0.5,
+                          width: 1,
                         ),
                       ),
                     ),
@@ -285,14 +285,14 @@ class _ReadinessRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 92,
+      width: 104,
       margin: EdgeInsets.only(
         top: MediaQuery.of(context).padding.top + kToolbarHeight,
       ),
       decoration: const BoxDecoration(
-        color: Color(0xD90D1014),
+        color: Color(0xF0030404),
         border: Border(
-          right: BorderSide(color: BSTheme.glassBorder, width: 0.5),
+          right: BorderSide(color: BSTheme.glassBorder, width: 1),
         ),
       ),
       child: SafeArea(
@@ -301,7 +301,7 @@ class _ReadinessRail extends StatelessWidget {
           children: [
             const SizedBox(height: 14),
             _RailStateBadge(
-              label: nodesReady ? 'READY' : 'SETUP',
+              label: nodesReady ? 'OPS READY' : 'SETUP',
               color: nodesReady ? BSTheme.success : BSTheme.warm,
             ),
             const SizedBox(height: 14),
@@ -334,9 +334,10 @@ class _RailStateBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      width: 78,
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 7),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(3),
         color: color.withValues(alpha: 0.10),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
@@ -345,7 +346,7 @@ class _RailStateBadge extends StatelessWidget {
         style: TextStyle(
           fontFamily: 'Geist',
           fontSize: 10,
-          fontWeight: FontWeight.w800,
+          fontWeight: FontWeight.w900,
           letterSpacing: 0.8,
           color: color,
         ),
@@ -374,22 +375,31 @@ class _RailItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: selected ? BSTheme.ink.withValues(alpha: 0.08) : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
+        color: selected ? BSTheme.ink.withValues(alpha: 0.07) : Colors.transparent,
+        borderRadius: BorderRadius.circular(3),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(3),
           child: Container(
-            height: 64,
+            height: 68,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(3),
               border: Border.all(
-                color: selected ? BSTheme.glassBorder : Colors.transparent,
+                color: selected
+                    ? BSTheme.accent.withValues(alpha: 0.34)
+                    : Colors.transparent,
               ),
             ),
             child: Stack(
               alignment: Alignment.center,
               children: [
+                if (selected)
+                  Positioned(
+                    left: 0,
+                    top: 10,
+                    bottom: 10,
+                    child: Container(width: 3, color: BSTheme.accent),
+                  ),
                 Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -454,45 +464,59 @@ class _BottomNavItem extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
-        margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+        margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 7),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(3),
           color: selected ? BSTheme.ink.withValues(alpha: 0.07) : Colors.transparent,
           border: Border.all(
-            color: selected ? BSTheme.glassBorder : Colors.transparent,
+            color: selected
+                ? BSTheme.accent.withValues(alpha: 0.34)
+                : Colors.transparent,
           ),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
+          alignment: Alignment.center,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  icon,
-                  color: selected ? BSTheme.accent : BSTheme.ink3,
-                  size: 20,
-                ),
-                if (showBadge)
-                  Positioned(
-                    right: -9,
-                    top: -7,
-                    child: _UnreadBadge(text: badgeText),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0,
-                color: selected ? BSTheme.ink : BSTheme.ink3,
+            if (selected)
+              Positioned(
+                top: 0,
+                left: 12,
+                right: 12,
+                child: Container(height: 3, color: BSTheme.accent),
               ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      icon,
+                      color: selected ? BSTheme.accent : BSTheme.ink3,
+                      size: 20,
+                    ),
+                    if (showBadge)
+                      Positioned(
+                        right: -9,
+                        top: -7,
+                        child: _UnreadBadge(text: badgeText),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0,
+                    color: selected ? BSTheme.ink : BSTheme.ink3,
+                  ),
+                ),
+              ],
             ),
           ],
         ),

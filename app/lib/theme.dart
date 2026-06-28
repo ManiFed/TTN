@@ -2,20 +2,20 @@ import 'package:flutter/material.dart';
 
 class BSTheme {
   // Operations-console tokens: restrained, legible, and status-led.
-  static const Color night = Color(0xFF07090C);
-  static const Color surface = Color(0xFF0D1014);
-  static const Color surface2 = Color(0xFF12161C);
-  static const Color ink = Color(0xFFF1F0E8);
-  static const Color ink2 = Color(0xA6F1F0E8); // 65% opacity
-  static const Color ink3 = Color(0x66F1F0E8); // 40% opacity
-  static const Color accent = Color(0xFF5BD6A6);
-  static const Color sky = Color(0xFF8FD9FF);
-  static const Color warm = Color(0xFFFFC07A);
+  static const Color night = Color(0xFF030404);
+  static const Color surface = Color(0xFF0B0D0D);
+  static const Color surface2 = Color(0xFF141616);
+  static const Color ink = Color(0xFFF4EFD9);
+  static const Color ink2 = Color(0xA6F4EFD9); // 65% opacity
+  static const Color ink3 = Color(0x66F4EFD9); // 40% opacity
+  static const Color accent = Color(0xFF25E8A0);
+  static const Color sky = Color(0xFF45B8FF);
+  static const Color warm = Color(0xFFFF8E38);
   static const Color success = Color(0xFF5BD6A6);
   static const Color warning = warm;
   static const Color danger = Color(0xFFFF6B6B);
-  static const Color glassBorder = Color(0x2EF1F0E8);
-  static const Color glassBg = Color(0x0AF1F0E8);
+  static const Color glassBorder = Color(0x33F4EFD9);
+  static const Color glassBg = Color(0x0AF4EFD9);
   static const Color btnPrimary = ink;
   static const Color btnPrimaryFg = night;
 

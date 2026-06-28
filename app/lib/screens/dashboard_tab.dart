@@ -315,83 +315,411 @@ class _TonightBriefHero extends StatelessWidget {
             : BSTheme.danger;
 
     return _OpsPanel(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      accent: readinessColor,
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
+          SizedBox(
+            height: 238,
+            child: _MissionField(
+              accent: readinessColor,
+              alerts: unread,
+              online: online,
+              targets: topTarget == null ? 0 : 1,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _firstName.isEmpty
-                          ? 'Tonight brief'
-                          : 'Tonight brief, $_firstName',
-                      style: const TextStyle(
-                        fontFamily: 'Geist',
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.1,
-                        color: BSTheme.ink3,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'LIVE SKY CONTROL',
+                            style: TextStyle(
+                              fontFamily: 'Geist',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 2.0,
+                              color: BSTheme.accent,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _headline.toUpperCase(),
+                            style: const TextStyle(
+                              fontFamily: 'Geist',
+                              fontSize: 34,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0,
+                              height: 1.02,
+                              color: BSTheme.ink,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            _summary,
+                            style: const TextStyle(
+                              fontFamily: 'Geist',
+                              fontSize: 14,
+                              height: 1.45,
+                              color: BSTheme.ink2,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _headline,
-                      style: const TextStyle(
-                        fontFamily: 'Geist',
-                        fontSize: 30,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0,
-                        height: 1.05,
-                        color: BSTheme.ink,
+                    const SizedBox(width: 12),
+                    _StatusPill(
+                      label: totalNodes == 0 ? 'SETUP' : '$online/$totalNodes LIVE',
+                      color: readinessColor,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ControlReadout(
+                        label: 'OBS',
+                        value: '$obs24h',
+                        color: BSTheme.sky,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _summary,
-                      style: const TextStyle(
-                        fontFamily: 'Geist',
-                        fontSize: 14,
-                        height: 1.45,
-                        color: BSTheme.ink2,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _ControlReadout(
+                        label: 'TARGET',
+                        value: topTarget == null ? '0' : 'LIVE',
+                        color: BSTheme.warm,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _ControlReadout(
+                        label: 'ALERTS',
+                        value: '$unread',
+                        color: unread > 0 ? BSTheme.danger : BSTheme.success,
+                        onTap: onAlertsTap,
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              _StatusPill(
-                label: totalNodes == 0 ? 'SETUP' : '$online/$totalNodes LIVE',
-                color: readinessColor,
-              ),
-            ],
+                if (topTarget != null) ...[
+                  const SizedBox(height: 14),
+                  _PriorityTrack(target: topTarget!),
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _BriefMetric(
-                label: 'Observations 24h',
-                value: '$obs24h',
-                color: BSTheme.sky,
+        ],
+      ),
+    );
+  }
+}
+
+class _MissionField extends StatelessWidget {
+  const _MissionField({
+    required this.accent,
+    required this.alerts,
+    required this.online,
+    required this.targets,
+  });
+
+  final Color accent;
+  final int alerts;
+  final int online;
+  final int targets;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _MissionFieldPainter(
+        accent: accent,
+        alerts: alerts,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Text(
+                  'NETWORK SKY PLOT',
+                  style: TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.8,
+                    color: BSTheme.ink3,
+                  ),
+                ),
+                const Spacer(),
+                _StatusPill(
+                  label: alerts > 0 ? '$alerts ALERTS' : 'CLEAR',
+                  color: alerts > 0 ? BSTheme.danger : accent,
+                ),
+              ],
+            ),
+            const Spacer(),
+            Row(
+              children: [
+                Expanded(
+                  child: _MiniDatum(label: 'online', value: '$online'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MiniDatum(label: 'targets', value: '$targets'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MiniDatum(
+                    label: 'state',
+                    value: alerts > 0 ? 'review' : 'ready',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MissionFieldPainter extends CustomPainter {
+  const _MissionFieldPainter({required this.accent, required this.alerts});
+
+  final Color accent;
+  final int alerts;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bgPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [
+          accent.withValues(alpha: 0.20),
+          Colors.transparent,
+          BSTheme.night.withValues(alpha: 0.72),
+        ],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, bgPaint);
+
+    final ringPaint = Paint()
+      ..color = BSTheme.ink.withValues(alpha: 0.10)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final center = Offset(size.width * 0.66, size.height * 0.46);
+    for (final scale in [0.34, 0.55, 0.78]) {
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: center,
+          width: size.width * scale,
+          height: size.height * scale * 0.58,
+        ),
+        ringPaint,
+      );
+    }
+
+    final path = Path()
+      ..moveTo(size.width * 0.10, size.height * 0.72)
+      ..lineTo(size.width * 0.32, size.height * 0.38)
+      ..lineTo(size.width * 0.54, size.height * 0.52)
+      ..lineTo(size.width * 0.78, size.height * 0.26);
+    final pathPaint = Paint()
+      ..color = accent.withValues(alpha: 0.34)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    canvas.drawPath(path, pathPaint);
+
+    final points = <({double x, double y, double r, Color color})>[
+      (x: 0.16, y: 0.26, r: 2.2, color: BSTheme.sky),
+      (x: 0.30, y: 0.64, r: 3.6, color: BSTheme.accent),
+      (x: 0.47, y: 0.35, r: 2.4, color: BSTheme.ink),
+      (x: 0.62, y: 0.77, r: 2.8, color: BSTheme.sky),
+      (x: 0.78, y: 0.48, r: 4.0, color: BSTheme.warm),
+      (x: 0.88, y: 0.22, r: 2.0, color: BSTheme.ink),
+    ];
+    for (final p in points) {
+      final center = Offset(size.width * p.x, size.height * p.y);
+      canvas.drawCircle(
+        center,
+        p.r + 5,
+        Paint()..color = p.color.withValues(alpha: 0.18),
+      );
+      canvas.drawCircle(center, p.r, Paint()..color = p.color);
+    }
+
+    if (alerts > 0) {
+      canvas.drawCircle(
+        Offset(size.width * 0.78, size.height * 0.48),
+        22,
+        Paint()
+          ..color = BSTheme.danger
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MissionFieldPainter oldDelegate) {
+    return oldDelegate.accent != accent || oldDelegate.alerts != alerts;
+  }
+}
+
+class _ControlReadout extends StatelessWidget {
+  const _ControlReadout({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final child = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: BSTheme.night.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.0,
+              color: BSTheme.ink3,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return child;
+    return GestureDetector(onTap: onTap, child: child);
+  }
+}
+
+class _MiniDatum extends StatelessWidget {
+  const _MiniDatum({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: BSTheme.night.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: BSTheme.ink.withValues(alpha: 0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 9,
+              color: BSTheme.ink3,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: BSTheme.ink2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PriorityTrack extends StatelessWidget {
+  const _PriorityTrack({required this.target});
+
+  final Target target;
+
+  @override
+  Widget build(BuildContext context) {
+    final priority = (target.priority * 100).clamp(0, 100).round();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: BSTheme.night.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: BSTheme.ink.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: BSTheme.warm,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              target.name,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: 'Geist',
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: BSTheme.ink,
               ),
-              _BriefMetric(
-                label: 'Active targets',
-                value: topTarget == null ? '0' : 'live',
-                color: BSTheme.warm,
-              ),
-              _BriefMetric(
-                label: 'Unread alerts',
-                value: '$unread',
-                color: unread > 0 ? BSTheme.danger : BSTheme.success,
-                onTap: onAlertsTap,
-              ),
-            ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$priority',
+            style: const TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: BSTheme.ink3,
+            ),
           ),
         ],
       ),
@@ -548,29 +876,85 @@ class _OpsPanel extends StatelessWidget {
   const _OpsPanel({
     required this.child,
     this.padding = const EdgeInsets.all(16),
+    this.accent = BSTheme.accent,
   });
 
   final Widget child;
   final EdgeInsets padding;
+  final Color accent;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: padding,
-      decoration: BoxDecoration(
-        color: BSTheme.surface.withValues(alpha: 0.86),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BSTheme.glassBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 24,
-            offset: Offset(0, 14),
+    return Stack(
+      children: [
+        Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: BSTheme.surface.withValues(alpha: 0.88),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: accent.withValues(alpha: 0.24)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x73000000),
+                blurRadius: 22,
+                offset: Offset(0, 13),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: child,
+          child: child,
+        ),
+        Positioned(
+          left: 0,
+          top: 0,
+          child: _CornerMark(color: accent),
+        ),
+        Positioned(
+          right: 0,
+          bottom: 0,
+          child: Transform.rotate(
+            angle: 3.14159,
+            child: _CornerMark(color: accent),
+          ),
+        ),
+      ],
     );
+  }
+}
+
+class _CornerMark extends StatelessWidget {
+  const _CornerMark({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: CustomPaint(
+        size: const Size(22, 22),
+        painter: _CornerMarkPainter(color: color),
+      ),
+    );
+  }
+}
+
+class _CornerMarkPainter extends CustomPainter {
+  const _CornerMarkPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.72)
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(Offset.zero, Offset(size.width, 0), paint);
+    canvas.drawLine(Offset.zero, Offset(0, size.height), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerMarkPainter oldDelegate) {
+    return oldDelegate.color != color;
   }
 }
 
@@ -595,8 +979,8 @@ class _PanelHeader extends StatelessWidget {
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            color: BSTheme.ink.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(3),
+            color: BSTheme.ink.withValues(alpha: 0.05),
             border: Border.all(color: BSTheme.glassBorder),
           ),
           child: Icon(icon, size: 17, color: BSTheme.ink2),
@@ -611,7 +995,7 @@ class _PanelHeader extends StatelessWidget {
                 style: const TextStyle(
                   fontFamily: 'Geist',
                   fontSize: 10,
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w900,
                   letterSpacing: 1.2,
                   color: BSTheme.ink3,
                 ),
@@ -622,7 +1006,7 @@ class _PanelHeader extends StatelessWidget {
                 style: const TextStyle(
                   fontFamily: 'Geist',
                   fontSize: 16,
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w900,
                   letterSpacing: 0,
                   color: BSTheme.ink,
                 ),
@@ -1614,7 +1998,7 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
             fontFamily: 'Geist',
             fontSize: 18,
             fontWeight: FontWeight.w700,
-            letterSpacing: -0.5,
+            letterSpacing: 0,
             color: BSTheme.ink,
           ),
         ),
