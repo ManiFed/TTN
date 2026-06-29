@@ -1,7 +1,13 @@
 # App service — app.thetelescope.net
+# In Railway: Settings → Config file path = /railway.app.toml
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile.app"
+watchPatterns = [
+  "app/**",
+  "Dockerfile.app",
+  "railway.app.toml",
+]
 
 [deploy]
 healthcheckPath = "/"

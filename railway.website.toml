@@ -1,7 +1,13 @@
 # Website service — thetelescope.net
+# In Railway: Settings → Config file path = /railway.website.toml
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile.website"
+watchPatterns = [
+  "website/**",
+  "Dockerfile.website",
+  "railway.website.toml",
+]
 
 [deploy]
 healthcheckPath = "/"

@@ -1,7 +1,17 @@
 # API service — api.thetelescope.net
+# In Railway: Settings → Config file path = /railway.toml
+# Connect this service to the GitHub repo (main branch) for auto-deploys.
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile.cloud"
+watchPatterns = [
+  "cloud/**",
+  "src/**",
+  "website/**",
+  "app/build/web/**",
+  "Dockerfile.cloud",
+  "railway.toml",
+]
 
 [deploy]
 startCommand = "sh -c 'gunicorn -w 1 --threads 8 --timeout 60 --bind 0.0.0.0:${PORT:-8800} cloud.wsgi:app'"
