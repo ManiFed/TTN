@@ -1403,7 +1403,7 @@ def api_sky_quality():
 def api_me_observations(user):
     """Observations from all nodes owned by this member."""
     days = min(int(request.args.get("days", 90)), 365)
-    limit = min(int(request.args.get("limit", 200)), 1000)
+    limit = min(int(request.args.get("limit", 200)), 100_000)
 
     node_ids = [r["node_id"] for r in db.query(
         "SELECT node_id FROM node_members WHERE user_id = %s", (user["user_id"],))]
@@ -1685,6 +1685,56 @@ def api_admin_generate_code():
     return jsonify({"codes": codes, "expires_at": expires})
 
 
+@app.route("/api/v1/me/science-program-suggestions", methods=["POST"])
+@auth.require_member
+def api_me_science_program_suggestion(user):
+    """Submit a science program idea from the member app."""
+    body = request.get_json(force=True, silent=True) or {}
+    title = str(body.get("title") or "").strip()
+    description = str(body.get("description") or "").strip()
+    if not title or not description:
+        return jsonify({"error": "title and description are required"}), 400
+    target_examples = str(body.get("target_examples") or "")[:2000]
+    notes = str(body.get("notes") or "")[:2000]
+    email = str(user.get("email") or "")[:200]
+    created_at = _now()
+    suggestion_id = db.execute(
+        """INSERT INTO science_program_suggestions
+               (user_id, email, title, description, target_examples, notes, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (user["user_id"], email, title[:200], description[:5000], target_examples, notes, created_at),
+        returning_id=True,
+    )
+    return jsonify({"ok": True, "id": suggestion_id, "created_at": created_at})
+
+
+@app.route("/api/v1/admin/science-program-suggestions", methods=["GET"])
+@require_admin
+def api_admin_science_program_suggestions():
+    """List member-submitted science program ideas (X-Admin-Key required)."""
+    rows = db.query(
+        """SELECT id, user_id, email, title, description, target_examples, notes,
+                  status, created_at
+           FROM science_program_suggestions
+           ORDER BY created_at DESC"""
+    )
+    return jsonify({"suggestions": rows, "total": len(rows)})
+
+
+@app.route("/api/v1/admin/science-program-suggestions/<int:suggestion_id>/status", methods=["PATCH"])
+@require_admin
+def api_admin_science_program_suggestion_status(suggestion_id: int):
+    body = request.get_json(force=True, silent=True) or {}
+    status = str(body.get("status") or "").strip()
+    if status not in ("pending", "reviewed", "accepted", "declined"):
+        return jsonify({"error": "status must be pending, reviewed, accepted, or declined"}), 400
+    db.execute(
+        "UPDATE science_program_suggestions SET status = %s WHERE id = %s",
+        (status, suggestion_id),
+    )
+    return jsonify({"ok": True})
+
+
 @app.route("/api/v1/me/help", methods=["GET"])
 @auth.require_member
 def api_me_help_session(user):
@@ -1765,6 +1815,7 @@ def api_me_delete(user):
     # Remove all member-owned data in dependency order.
     db.execute("DELETE FROM notifications WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM help_chat_messages WHERE user_id = %s", (uid,))
+    db.execute("DELETE FROM science_program_suggestions WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM node_config_patches WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM node_members WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM activation_codes WHERE user_id = %s", (uid,))

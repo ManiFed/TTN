@@ -9,11 +9,12 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/aladin_sky.dart';
 import '../widgets/glass.dart' show GrainOverlay, LiveDot;
-import 'help_tab.dart';
 import 'dashboard_tab.dart';
 import 'me_screen.dart';
+import 'more_tab.dart';
 import 'nodes_tab.dart';
 import 'notifications_tab.dart';
+import 'observations_tab.dart';
 
 /// The signed-in shell: operational workspace with alerts in the top bar.
 class HomeScreen extends StatefulWidget {
@@ -68,11 +69,16 @@ class _HomeScreenState extends State<HomeScreen> {
       sel: Icons.satellite_alt
     ),
     (
-      title: 'Help',
-      icon: Icons.support_agent_outlined,
-      sel: Icons.support_agent
+      title: 'History',
+      icon: Icons.history_outlined,
+      sel: Icons.history
     ),
     (title: 'Me', icon: Icons.person_outline, sel: Icons.person),
+    (
+      title: 'More',
+      icon: Icons.more_horiz,
+      sel: Icons.more_horiz
+    ),
   ];
 
   @override
@@ -98,8 +104,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final pages = [
       DashboardTab(onNavigateToTab: (_) => _showAlertsSheet()),
       const NodesTab(),
-      const HelpTab(),
+      const ObservationsTab(),
       const MeScreen(showAppBar: false),
+      const MoreTab(),
     ];
 
     return Stack(

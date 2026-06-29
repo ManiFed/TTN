@@ -481,6 +481,20 @@ _LATE_TABLES: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_config_patches_node ON node_config_patches(node_id, status)",
+    """
+    CREATE TABLE IF NOT EXISTS science_program_suggestions (
+        id               SERIAL PRIMARY KEY,
+        user_id          TEXT NOT NULL REFERENCES users(user_id),
+        email            TEXT NOT NULL DEFAULT '',
+        title            TEXT NOT NULL,
+        description      TEXT NOT NULL,
+        target_examples  TEXT DEFAULT '',
+        notes            TEXT DEFAULT '',
+        status           TEXT DEFAULT 'pending',
+        created_at       TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_science_suggestions_time ON science_program_suggestions(created_at)",
 ]
 
 

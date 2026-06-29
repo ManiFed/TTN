@@ -264,6 +264,21 @@ class ApiClient {
     return ObjectDetails.fromJson(await _get(path));
   }
 
+  /// Submit a science program suggestion (POST /me/science-program-suggestions).
+  Future<void> suggestScienceProgram({
+    required String title,
+    required String description,
+    String targetExamples = '',
+    String notes = '',
+  }) async {
+    await _post('/me/science-program-suggestions', {
+      'title': title,
+      'description': description,
+      if (targetExamples.isNotEmpty) 'target_examples': targetExamples,
+      if (notes.isNotEmpty) 'notes': notes,
+    });
+  }
+
   /// Help tab session: contact info, quota, chat history (GET /me/help).
   Future<HelpSession> helpSession() async =>
       HelpSession.fromJson(await _get('/me/help'));

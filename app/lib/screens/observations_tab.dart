@@ -34,8 +34,9 @@ class _ObservationsTabState extends State<ObservationsTab> {
   Future<_Data> _load() async {
     final state = context.read<AppState>();
     final nightsFuture =
-        state.api.nights(limit: 14).catchError((_) => <NightSummary>[]);
-    final obsFuture = state.api.observations().catchError((e) {
+        state.api.nights(limit: 30).catchError((_) => <NightSummary>[]);
+    final obsFuture =
+        state.api.observations(days: 365, limit: 100000).catchError((e) {
       state.handleAuthError(e);
       throw e;
     });
@@ -57,6 +58,35 @@ class _ObservationsTabState extends State<ObservationsTab> {
       builder: (context, data) => CustomScrollView(
         slivers: [
           SliverToBoxAdapter(child: SizedBox(height: top + 8)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'OBSERVATION HISTORY',
+                    style: TextStyle(
+                      fontFamily: 'Geist',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.0,
+                      color: BSTheme.ink3,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${data.observations.length} measurements · last 365 days',
+                    style: const TextStyle(
+                      fontFamily: 'Geist',
+                      fontSize: 13,
+                      color: BSTheme.ink2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           if (data.nights.isNotEmpty)
             SliverToBoxAdapter(child: _NightsStrip(nights: data.nights)),
           SliverPadding(
@@ -67,7 +97,7 @@ class _ObservationsTabState extends State<ObservationsTab> {
                       child: Padding(
                         padding: const EdgeInsets.only(top: 32),
                         child: Text(
-                          'No individual measurements in the last 90 days.',
+                          'No individual measurements in the last year.',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                               color: BSTheme.ink2, fontSize: 14),
