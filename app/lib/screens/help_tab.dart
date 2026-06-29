@@ -43,6 +43,7 @@ class _HelpTabState extends State<HelpTab> {
     if (mounted && (!_sessionHydrated || force)) {
       setState(() {
         _syncFromSession(data.session);
+        if (!data.chatAvailable) _diagExpanded = true;
         _sessionHydrated = true;
       });
     }
@@ -58,12 +59,38 @@ class _HelpTabState extends State<HelpTab> {
 
   Future<_HelpData> _load() async {
     final api = context.read<AppState>().api;
-    final session = await api.helpSession();
+    HelpSession session;
+    var chatAvailable = true;
+    try {
+      session = await api.helpSession();
+    } on ApiException catch (e) {
+      if (e.statusCode != 404) rethrow;
+      session = _fallbackSession();
+      chatAvailable = false;
+    }
     final nodes = await api.nodes().catchError((_) => <Node>[]);
     final timeline =
         await api.timeline().catchError((_) => <TimelineItem>[]);
-    return _HelpData(session: session, nodes: nodes, timeline: timeline);
+    return _HelpData(
+      session: session,
+      nodes: nodes,
+      timeline: timeline,
+      chatAvailable: chatAvailable,
+    );
   }
+
+  static HelpSession _fallbackSession() => const HelpSession(
+        contact: HelpContact(
+          email: 'info@thetelescope.net',
+          appUrl: 'https://app.thetelescope.net',
+          docsUrl: 'https://thetelescope.net',
+          github: 'https://github.com/telescopenet',
+        ),
+        weeklyLimit: 5,
+        messagesUsed: 0,
+        messagesRemaining: 0,
+        messages: [],
+      );
 
   Future<void> _refresh() async {
     setState(() => _future = _loadAndHydrate(force: true));
@@ -173,16 +200,21 @@ class _HelpTabState extends State<HelpTab> {
                     contact: data.session.contact,
                     onOpen: _openUrl,
                   ),
-                  const SizedBox(height: 14),
-                  _QuotaBar(
-                    remaining: _messagesRemaining,
-                    limit: _weeklyLimit,
-                  ),
-                  const SizedBox(height: 16),
-                  _ChatSection(
-                    messages: _messages,
-                    sending: _sending,
-                  ),
+                  if (!data.chatAvailable) ...[
+                    const SizedBox(height: 14),
+                    const _ChatUnavailableBanner(),
+                  ] else ...[
+                    const SizedBox(height: 14),
+                    _QuotaBar(
+                      remaining: _messagesRemaining,
+                      limit: _weeklyLimit,
+                    ),
+                    const SizedBox(height: 16),
+                    _ChatSection(
+                      messages: _messages,
+                      sending: _sending,
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   _DiagnosticsPanel(
                     expanded: _diagExpanded,
@@ -195,14 +227,15 @@ class _HelpTabState extends State<HelpTab> {
                 ],
               ),
             ),
-            _ChatComposer(
-              controller: _composer,
-              remaining: _messagesRemaining,
-              sending: _sending,
-              error: _sendError,
-              onSend: () => _send(data),
-              bottomPadding: bottom,
-            ),
+            if (data.chatAvailable)
+              _ChatComposer(
+                controller: _composer,
+                remaining: _messagesRemaining,
+                sending: _sending,
+                error: _sendError,
+                onSend: () => _send(data),
+                bottomPadding: bottom,
+              ),
           ],
         );
       },
@@ -215,11 +248,13 @@ class _HelpData {
     required this.session,
     required this.nodes,
     required this.timeline,
+    this.chatAvailable = true,
   });
 
   final HelpSession session;
   final List<Node> nodes;
   final List<TimelineItem> timeline;
+  final bool chatAvailable;
 }
 
 class _ContactCard extends StatelessWidget {
@@ -322,6 +357,44 @@ class _ContactLink extends StatelessWidget {
               const Icon(Icons.open_in_new, size: 14, color: BSTheme.ink3),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatUnavailableBanner extends StatelessWidget {
+  const _ChatUnavailableBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: BSTheme.warm.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: BSTheme.warm.withValues(alpha: 0.25)),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 18, color: BSTheme.warm),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'The assistant is not live on the server yet. '
+                'Contact links and node diagnostics still work — '
+                'email us if you need help right away.',
+                style: TextStyle(
+                  fontFamily: 'Geist',
+                  fontSize: 12,
+                  color: BSTheme.ink2,
+                  height: 1.45,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
