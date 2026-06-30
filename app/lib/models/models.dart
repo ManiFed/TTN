@@ -528,6 +528,7 @@ class TimelineItem {
   final String filter;
   final String notes;
   final Map<String, dynamic> explanation;
+  final String state;
 
   const TimelineItem({
     required this.nodeId,
@@ -542,6 +543,7 @@ class TimelineItem {
     required this.filter,
     required this.notes,
     required this.explanation,
+    this.state = '',
   });
 
   factory TimelineItem.fromJson(Map<String, dynamic> j) {
@@ -561,6 +563,7 @@ class TimelineItem {
       explanation: (j['explanation'] is Map)
           ? Map<String, dynamic>.from(j['explanation'] as Map)
           : <String, dynamic>{},
+      state: _asStr(j['state']),
     );
   }
 

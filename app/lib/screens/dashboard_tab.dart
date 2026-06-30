@@ -175,9 +175,30 @@ class _DashboardViewState extends State<_DashboardView> {
     final priorityTargets = [...widget.data.targets]
       ..sort((a, b) => b.priority.compareTo(a.priority));
     final hasPlan = widget.data.timeline.isNotEmpty;
-    final selectedPlan = hasPlan
+    TimelineItem? selectedPlan = hasPlan
         ? _selectedPlan(widget.data.timeline, _selectedTargetName)
         : null;
+    // Also match against live schedule reports from nodes (scheduleTarget).
+    // This ensures "In progress" reflects reality even if plan state is not yet set.
+    // Only auto-apply live match when user has not explicitly chosen a target by tapping.
+    final noUserSelection = _selectedTargetName == null || _selectedTargetName!.isEmpty;
+    if (noUserSelection &&
+        (selectedPlan == null || selectedPlan.state.toLowerCase() != 'observing') &&
+        widget.data.nodes.isNotEmpty &&
+        hasPlan) {
+      for (final node in widget.data.nodes) {
+        final liveTarget = node.conditions.scheduleTarget;
+        if (liveTarget.isEmpty) continue;
+        for (final item in widget.data.timeline) {
+          if (item.target.toLowerCase() == liveTarget.toLowerCase() ||
+              item.targetId.toLowerCase() == liveTarget.toLowerCase()) {
+            selectedPlan = item;
+            break;
+          }
+        }
+        if (selectedPlan != null) break;
+      }
+    }
     final selectedTarget = _selectedTargetForPlan(
       selectedPlan,
       priorityTargets,
@@ -330,9 +351,16 @@ TimelineItem? _selectedPlan(List<TimelineItem> timeline, String? selectedName) {
         return item;
       }
     }
-    return null;
+    // fallthrough to auto-pick below if explicit name not present
   }
-  return timeline.first;
+  // Prefer a server-reported in-progress item; do not blindly treat the first
+  // (often earliest or already complete) plan item as "in progress".
+  for (final item in timeline) {
+    if (item.state.toLowerCase() == 'observing') {
+      return item;
+    }
+  }
+  return null;
 }
 
 Target? _selectedTargetForPlan(
@@ -1193,14 +1221,25 @@ class _PlanTimelineRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final duration = item.estimatedMinutes;
-    final status = selected ? 'In progress' : 'Pending';
+    final st = item.state.toLowerCase();
+    String status;
+    if (st == 'observing') {
+      status = 'In progress';
+    } else if (st == 'complete') {
+      status = 'Complete';
+    } else if (selected) {
+      status = 'Selected';
+    } else {
+      status = 'Pending';
+    }
     final type = _timelineType(item);
+    final isActive = selected || st == 'observing';
     return Material(
-      color: selected ? BSTheme.sky.withValues(alpha: 0.08) : BSTheme.surface,
+      color: isActive ? BSTheme.sky.withValues(alpha: 0.08) : BSTheme.surface,
       child: InkWell(
         onTap: onTap,
         child: Container(
-          constraints: BoxConstraints(minHeight: selected ? 84 : 58),
+          constraints: BoxConstraints(minHeight: isActive ? 84 : 58),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: BSTheme.glassBorder)),
@@ -1210,8 +1249,8 @@ class _PlanTimelineRow extends StatelessWidget {
           SizedBox(
             width: 20,
             child: LiveDot(
-              color: selected ? BSTheme.sky : BSTheme.ink3,
-              size: selected ? 7 : 5,
+              color: isActive ? BSTheme.sky : BSTheme.ink3,
+              size: isActive ? 7 : 5,
             ),
           ),
           Expanded(
@@ -1282,7 +1321,7 @@ class _PlanTimelineRow extends StatelessWidget {
                 fontFamily: 'Geist',
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
-                color: selected ? BSTheme.sky : BSTheme.ink3,
+                color: isActive ? BSTheme.sky : BSTheme.ink3,
               ),
             ),
           ),

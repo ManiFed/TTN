@@ -134,14 +134,16 @@ _GITHUB_RELEASE_BASE = "https://github.com/ManiFed/TTN/releases/download"
 
 _DOWNLOAD_URLS = {
     "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-macOS.pkg",
-    "windows": None,  # not yet released
-    "linux":   None,  # not yet released
+    "windows": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-Setup.exe",
+    "linux":   f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
+    "raspberry-pi-os": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
+    "raspbian": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
 }
 
 @app.route("/download/node-agent")
 @app.route("/download/node-agent/<platform>")
 def download_node_agent(platform: str = "macos"):
-    url = _DOWNLOAD_URLS.get(platform)
+    url = _DOWNLOAD_URLS.get(platform.strip().lower())
     if url is None:
         return jsonify({"error": f"'{platform}' installer not yet available"}), 404
     return _redirect(url, code=302)
@@ -1505,13 +1507,15 @@ def api_me_timeline(user):
                 if hh < 12:
                     local_day += timedelta(days=1)
                 start_local = local_day.replace(hour=hh, minute=mm)
-                now_for_node = datetime.now(timezone.utc) + timedelta(
-                    hours=float(r.get("utc_offset_hours") or 0.0)
-                )
                 end_local = start_local + timedelta(minutes=max(exp_min, 5.0))
-                if start_local <= now_for_node <= end_local:
+                offset_h = float(r.get("utc_offset_hours") or 0.0)
+                # Compute node's current local wall time (as naive datetime) for window comparison.
+                # plan times are expressed in the node's local civil time.
+                utc_now = datetime.now(timezone.utc)
+                local_now = (utc_now + timedelta(hours=offset_h)).replace(tzinfo=None)
+                if start_local <= local_now <= end_local:
                     state = "observing"
-                elif now_for_node > end_local:
+                elif local_now > end_local:
                     state = "complete"
             except Exception:
                 state = "planned"
