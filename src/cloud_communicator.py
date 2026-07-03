@@ -10,7 +10,7 @@ Reads config["cloud"]:
       api_key: ''            # blank = auto-register on first start
       heartbeat_interval: 60
       plan_poll_interval: 300
-      auto_run_plans: false  # hand new plans to the schedule runner automatically
+      auto_run_plans: true   # hand new plans to the schedule runner automatically
       upload_images: false   # also upload raw FITS after photometry
 
 Behaviour:
@@ -107,6 +107,7 @@ class CloudCommunicator:
             "last_heartbeat_ok": None,
             "last_plan_id": None,
             "plan_items": 0,
+            "plan_pending_review": False,
             "queued_uploads": len(self._load_queue()),
             "error": None,
         }

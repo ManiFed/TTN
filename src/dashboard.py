@@ -844,10 +844,15 @@ def _on_cloud_plan(items: list) -> None:
         logger.warning("Cloud plan rejected by validator: %s", err)
         return
     cfg = _load_config()
-    if not cfg.get("cloud", {}).get("auto_run_plans", False):
-        logger.info("Cloud plan received (%d items) — auto_run_plans is off, "
-                    "review it in the dashboard scheduler", len(valid))
+    if not cfg.get("cloud", {}).get("auto_run_plans", True):
+        logger.warning("Cloud plan received (%d items) — auto_run_plans is off, "
+                        "node will NOT observe until this is enabled or the "
+                        "plan is started manually from the dashboard", len(valid))
+        if _cloud is not None:
+            _cloud.status["plan_pending_review"] = True
         return
+    if _cloud is not None:
+        _cloud.status["plan_pending_review"] = False
     with _sched_lock:
         if _sched_state["running"]:
             logger.info("Cloud plan received but a schedule is already "
@@ -7442,6 +7447,12 @@ async function _loadCloudRegistrationStatus() {
       bar.innerHTML = '<span style="color:var(--green-hi)">&#9679; Registered</span>'
         + ' &mdash; Node ID: <code style="font-size:11px">' + (d.node_id || '') + '</code>'
         + (d.last_heartbeat_ok ? ' &mdash; <span style="color:var(--green-hi)">heartbeat OK</span>' : '');
+      if (d.plan_pending_review) {
+        bar.style.borderColor = 'var(--warn, #f5a623)';
+        bar.innerHTML += '<br><span style="color:var(--warn, #f5a623)">&#9679; A plan (' + (d.plan_items || 0)
+          + ' targets) arrived from the cloud but "Auto-run plans" is OFF &mdash; '
+          + 'the node will NOT observe tonight unless you enable it or start the plan manually.</span>';
+      }
       if (codeGroup) codeGroup.style.display = 'none';
     } else if (d.error) {
       bar.style.borderColor = 'var(--red)';
@@ -9058,9 +9069,23 @@ def launch(port: int = 5173) -> None:
 
     cfg = _load_config()
     log_cfg = cfg.get("logging", {})
+    log_fmt = log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    handlers: list = [logging.StreamHandler()]
+    try:
+        from logging.handlers import RotatingFileHandler
+        import os
+        os.makedirs("logs", exist_ok=True)
+        file_handler = RotatingFileHandler(
+            "logs/node.log", maxBytes=10 * 1024 * 1024, backupCount=5,
+        )
+        file_handler.setFormatter(logging.Formatter(log_fmt))
+        handlers.append(file_handler)
+    except Exception as exc:
+        print(f"Could not set up file logging: {exc}")
     logging.basicConfig(
         level=log_cfg.get("level", "INFO"),
-        format=log_cfg.get("format", "%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
+        format=log_fmt,
+        handlers=handlers,
     )
     logger.info("NODE v1 starting on port %d", port)
 

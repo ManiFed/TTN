@@ -156,7 +156,55 @@ def generate_pending_summaries(config: dict) -> int:
         if summary:
             generated += 1
             _dispatch_notifications(nid, yesterday, summary, config)
+        else:
+            _dispatch_missed_night(nid, yesterday, config)
     return generated
+
+
+def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None) -> None:
+    """
+    A node had a plan for `night` but produced zero measurements. Alert the
+    member app so a stuck node (e.g. a plan sitting unrun, a dead ALPACA
+    connection) is visible without anyone having to open the local dashboard.
+    """
+    plan = db.query_one(
+        "SELECT plan_id FROM plans WHERE node_id = %s AND night = %s",
+        (node_id, night),
+    )
+    if not plan:
+        return  # no plan was ever generated for this night — nothing to flag
+
+    from cloud import push  # local import to avoid circular dependency
+
+    members = db.query(
+        """SELECT nm.user_id, m.push_token, m.notification_push
+           FROM node_members nm
+           JOIN members m ON m.user_id = nm.user_id
+           WHERE nm.node_id = %s""",
+        (node_id,),
+    )
+    payload = json.dumps({"node_id": node_id, "night": night})
+
+    for m in members:
+        db.execute(
+            "INSERT INTO notifications (user_id, type, payload, sent_at) VALUES (%s,%s,%s,%s)",
+            (m["user_id"], "node_missed_night", payload, _now()),
+        )
+        if config and m.get("notification_push") and m.get("push_token"):
+            push.send(
+                fcm_token=m["push_token"],
+                title="Your telescope didn't observe last night",
+                body="A plan was scheduled but no measurements came in. Check the node — "
+                     "it may need a restart or a setting re-enabled.",
+                data={"type": "node_missed_night", "node_id": node_id, "night": night},
+                config=config,
+            )
+
+    if members:
+        logger.warning(
+            "Node %s had a plan on %s but zero measurements — dispatched "
+            "node_missed_night to %d member(s)", node_id, night, len(members),
+        )
 
 
 def _dispatch_notifications(
