@@ -529,23 +529,14 @@
   function drawFrame(t){
     if(ec.width!==W*EDPR||ec.height!==H*EDPR){ec.width=W*EDPR;ec.height=H*EDPR;ex.setTransform(EDPR,0,0,EDPR,0,0);}
     ex.clearRect(0,0,W,H);
-    // SKY — true dark: near-black at zenith, subtle blue-grey, slight warmth toward horizon
-    var g=ex.createLinearGradient(0,0,0,hz);
-    g.addColorStop(0,'#010306'); g.addColorStop(.40,'#030810');
-    g.addColorStop(.75,'#070C1A'); g.addColorStop(.92,'#0E0C18'); g.addColorStop(1,'#180C12');
-    ex.fillStyle=g; ex.fillRect(0,0,W,hz);
-    // Milky Way — warm galactic core + cooler outer arms
-    ex.save();
-    var mw=ex.createLinearGradient(W*.06,hz*.04,W*.80,hz*.88);
-    mw.addColorStop(0,'rgba(160,165,210,0)'); mw.addColorStop(.18,'rgba(155,165,215,.06)');
-    mw.addColorStop(.40,'rgba(180,178,228,.19)'); mw.addColorStop(.50,'rgba(210,195,200,.22)');
-    mw.addColorStop(.60,'rgba(180,170,215,.17)'); mw.addColorStop(.80,'rgba(155,162,210,.05)');
-    mw.addColorStop(1,'rgba(150,160,205,0)');
-    ex.fillStyle=mw; ex.fillRect(0,0,W,hz);
-    // galactic core — warm yellow-orange glow slightly off-center
-    var core=ex.createRadialGradient(W*.48,hz*.72,0,W*.48,hz*.72,W*.22);
-    core.addColorStop(0,'rgba(220,200,150,.09)'); core.addColorStop(.5,'rgba(200,175,120,.05)'); core.addColorStop(1,'rgba(180,155,100,0)');
-    ex.fillStyle=core; ex.fillRect(0,0,W,hz);
+    if (!aladinSkyActive) {
+      // Fallback artistic sky (only when Aladin failed to load)
+      var g=ex.createLinearGradient(0,0,0,hz);
+      g.addColorStop(0,'#010306'); g.addColorStop(.40,'#030810');
+      g.addColorStop(.75,'#070C1A'); g.addColorStop(.92,'#0E0C18'); g.addColorStop(1,'#180C12');
+      ex.fillStyle=g; ex.fillRect(0,0,W,hz);
+    }
+    // When aladinSkyActive, we leave the upper transparent so the real Aladin sky shows and can be driven by scroll.
     // Hα emission — faint rosy red pockets along the galactic plane, breathing slowly
     (function(){
       var al=0.022+0.008*Math.sin(t*0.14+0.7);
@@ -559,92 +550,8 @@
       });
     })();
     ex.restore();
-    // Ring Nebula (M57) — tiny glowing ring, barely visible, in upper sky area
-    (function(){
-      var rx=W*0.46, ry=hz*0.36, rr=4, al=Math.min(0.55, 0.12+t*0.01);
-      var rg=ex.createRadialGradient(rx,ry,rr*0.3,rx,ry,rr*2.2);
-      rg.addColorStop(0,'rgba(0,2,8,0)');
-      rg.addColorStop(0.4,'rgba(100,230,200,'+(al*0.28).toFixed(3)+')');
-      rg.addColorStop(0.7,'rgba(120,240,210,'+(al*0.18).toFixed(3)+')');
-      rg.addColorStop(1,'rgba(100,200,180,0)');
-      ex.fillStyle=rg; ex.beginPath(); ex.arc(rx,ry,rr*2.2,0,6.28); ex.fill();
-    })();
-    // Orion nebula smudge — faint pinkish glow near horizon-right
-    (function(){
-      ex.save();
-      ex.translate(W*0.68, hz*0.72); ex.rotate(0.1);
-      var on=ex.createRadialGradient(0,0,0,0,0,1);
-      on.addColorStop(0,'rgba(255,200,200,0.045)'); on.addColorStop(0.6,'rgba(255,185,195,0.018)'); on.addColorStop(1,'rgba(255,180,190,0)');
-      ex.scale(W*0.035, hz*0.022);
-      ex.fillStyle=on; ex.beginPath(); ex.arc(0,0,1,0,6.28); ex.fill();
-      ex.restore();
-    })();
-    // faint galaxy smudge — like naked-eye Andromeda, a soft elongated glow
-    (function(){
-      ex.save();
-      ex.translate(W*0.22, hz*0.44); ex.rotate(-0.38);
-      var gg=ex.createRadialGradient(0,0,0,0,0,1);
-      gg.addColorStop(0,'rgba(200,210,240,0.068)'); gg.addColorStop(0.5,'rgba(190,200,235,0.032)'); gg.addColorStop(1,'rgba(180,195,230,0)');
-      ex.scale(W*0.052, hz*0.026);
-      ex.fillStyle=gg; ex.beginPath(); ex.arc(0,0,1,0,6.28); ex.fill();
-      ex.restore();
-    })();
-    // PLANET — Mars, reddish steady dot near horizon
-    (function(){
-      var mx2=W*0.62, my2=hz*0.52, mr2=1.6;
-      var mg2=ex.createRadialGradient(mx2,my2,0,mx2,my2,mr2*7);
-      mg2.addColorStop(0,'rgba(255,120,80,0.14)'); mg2.addColorStop(1,'rgba(255,100,60,0)');
-      ex.fillStyle=mg2; ex.beginPath(); ex.arc(mx2,my2,mr2*7,0,6.28); ex.fill();
-      ex.fillStyle='rgba(255,130,90,0.96)'; ex.beginPath(); ex.arc(mx2,my2,mr2,0,6.28); ex.fill();
-    })();
-    // PLANET — Saturn, bright steady disc with ring (planets don't twinkle — no ts/tw)
-    (function(){
-      var px=W*0.34, py=hz*0.28, pr=2.2;
-      var pg=ex.createRadialGradient(px,py,0,px,py,pr*8);
-      pg.addColorStop(0,'rgba(255,238,195,0.18)'); pg.addColorStop(1,'rgba(255,238,195,0)');
-      ex.fillStyle=pg; ex.beginPath(); ex.arc(px,py,pr*8,0,6.28); ex.fill();
-      // ring — drawn before disc so disc covers inner ring
-      ex.save(); ex.translate(px,py); ex.scale(1,0.32);
-      ex.strokeStyle='rgba(255,235,185,0.42)'; ex.lineWidth=1.4;
-      ex.beginPath(); ex.ellipse(0,0,pr*3.4,pr*3.4,0,0,6.28); ex.stroke();
-      ex.restore();
-      ex.fillStyle='rgba(255,242,205,0.97)'; ex.beginPath(); ex.arc(px,py,pr,0,6.28); ex.fill();
-    })();
-    // MOON — waxing crescent, upper-right quadrant
-    (function(){
-      var mr=W<600?16:22, mx=W*0.78, my=hz*0.17;
-      var mg=ex.createRadialGradient(mx,my,0,mx,my,mr*4.5);
-      mg.addColorStop(0,'rgba(255,248,210,0.07)'); mg.addColorStop(1,'rgba(255,248,210,0)');
-      ex.fillStyle=mg; ex.beginPath(); ex.arc(mx,my,mr*4.5,0,6.28); ex.fill();
-      ex.save();
-      ex.beginPath(); ex.arc(mx,my,mr,0,6.28); ex.clip();
-      ex.fillStyle='rgba(252,244,208,0.92)'; ex.fillRect(mx-mr,my-mr,mr*2,mr*2);
-      ex.fillStyle='#020609'; ex.beginPath(); ex.arc(mx+mr*0.53,my,mr*0.87,0,6.28); ex.fill();
-      ex.restore();
-    })();
-    // stars — spectral colors, bright ones with diffraction halos + spikes, all twinkling
-    starField.forEach(function(s){
-      var sx=s.x*W, yp=s.y*hz, tw=0.82+0.18*Math.sin(t*s.ts+s.tw), a=(1-yp/hz)*.82+.12;
-      a*=tw;
-      if(s.hero){
-        // atmospheric seeing — faint shimmer offset on bright stars
-        var see=Math.sin(t*1.8+s.tw)*0.7, seey=Math.cos(t*2.1+s.tw)*0.5;
-        var hl=ex.createRadialGradient(sx+see,yp+seey,0,sx+see,yp+seey,s.r*6);
-        hl.addColorStop(0,'rgba('+s.c+','+(a*.38).toFixed(2)+')'); hl.addColorStop(1,'rgba('+s.c+',0)');
-        ex.fillStyle=hl; ex.beginPath(); ex.arc(sx+see,yp+seey,s.r*6,0,6.28); ex.fill();
-        // diffraction spikes — 4 arms at 0°/90° and 45°/135°, slightly rotated with time
-        var spkLen=s.r*22, rot=t*0.04;
-        [[0,1],[1,0],[0.707,0.707],[-0.707,0.707]].forEach(function(dir){
-          var dx=Math.cos(rot)*dir[0]-Math.sin(rot)*dir[1], dy=Math.sin(rot)*dir[0]+Math.cos(rot)*dir[1];
-          var sg=ex.createLinearGradient(sx,yp,sx+dx*spkLen,yp+dy*spkLen);
-          sg.addColorStop(0,'rgba('+s.c+','+(a*.55).toFixed(2)+')');
-          sg.addColorStop(1,'rgba('+s.c+',0)');
-          ex.strokeStyle=sg; ex.lineWidth=0.9;
-          ex.beginPath(); ex.moveTo(sx-dx*spkLen*0.15,yp-dy*spkLen*0.15); ex.lineTo(sx+dx*spkLen,yp+dy*spkLen); ex.stroke();
-        });
-      }
-      ex.fillStyle='rgba('+s.c+','+a.toFixed(2)+')'; ex.beginPath(); ex.arc(sx,yp,s.r,0,6.28); ex.fill();
-    });
+    // (removed full-sky artistic painting — Aladin layer now provides the sky)
+    // We keep only low horizon/ground effects + the telescope nodes below.
     // aurora borealis — two slow wavy bands of green near the horizon, intensifies over time
     (function(){
       var auroraBoost=Math.min(1, Math.max(0,(t-45)/30)); // builds in after 45s, full by 75s
@@ -683,159 +590,8 @@
         return true;
       });
     })();
-    // comet — rare slow drifter with long blue-green coma tail
-    (function(){
-      var dt=Math.min(t-prevT,0.08);
-      cometClock+=dt*1000;
-      if(cometClock>nextCometIn) spawnComet();
-      if(comet){
-        comet.x+=comet.vx*dt; comet.y+=comet.vy*dt; comet.life-=dt/comet.maxLife;
-        if(comet.life<=0||comet.x>W+200) { comet=null; }
-        else {
-          var fade=Math.min(1,comet.life*6)*comet.life;
-          var tailLen=300+comet.x*0.2;
-          var gr2=ex.createLinearGradient(comet.x-tailLen,comet.y,comet.x,comet.y);
-          gr2.addColorStop(0,'rgba(180,230,255,0)');
-          gr2.addColorStop(0.6,'rgba(180,230,255,'+(fade*0.10).toFixed(3)+')');
-          gr2.addColorStop(0.85,'rgba(210,245,255,'+(fade*0.22).toFixed(3)+')');
-          gr2.addColorStop(1,'rgba(240,255,255,'+(fade*0.55).toFixed(3)+')');
-          ex.lineWidth=2.2; ex.lineCap='round'; ex.strokeStyle=gr2;
-          ex.beginPath(); ex.moveTo(comet.x-tailLen,comet.y); ex.lineTo(comet.x,comet.y); ex.stroke();
-          // coma — soft diffuse glow at head
-          var coma=ex.createRadialGradient(comet.x,comet.y,0,comet.x,comet.y,18);
-          coma.addColorStop(0,'rgba(240,255,255,'+(fade*0.75).toFixed(3)+')');
-          coma.addColorStop(0.4,'rgba(190,235,255,'+(fade*0.35).toFixed(3)+')');
-          coma.addColorStop(1,'rgba(150,210,255,0)');
-          ex.fillStyle=coma; ex.beginPath(); ex.arc(comet.x,comet.y,18,0,6.28); ex.fill();
-        }
-      }
-    })();
-    // shooting stars
-    (function(){
-      var dt=Math.min(t-prevT, 0.08); prevT=t;
-      meteorClock+=dt*1000;
-      if(meteorClock>nextMeteorIn) spawnMeteor();
-      // meteor shower burst
-      showerClock+=dt*1000;
-      if(showerClock>nextShowerIn){
-        for(var si=0;si<3+Math.floor(Math.random()*3);si++) spawnMeteor();
-        nextShowerIn=200000+Math.random()*280000; showerClock=0;
-      }
-      meteors=meteors.filter(function(m){
-        m.x+=m.vx*dt; m.y+=m.vy*dt; m.life-=dt/1.5;
-        if(m.life<=0||m.y>hz||m.x<-80) return false;
-        var len=m.trail*m.life, ang=Math.atan2(m.vy,m.vx);
-        var tx=m.x-Math.cos(ang)*len, ty=m.y-Math.sin(ang)*len;
-        var gr=ex.createLinearGradient(tx,ty,m.x,m.y);
-        gr.addColorStop(0,'rgba(255,255,255,0)');
-        gr.addColorStop(.7,'rgba(200,230,255,'+(m.life*.25).toFixed(2)+')');
-        gr.addColorStop(1,'rgba(255,255,255,'+(m.life*.7).toFixed(2)+')');
-        ex.strokeStyle=gr; ex.lineWidth=1.6; ex.lineCap='round';
-        ex.beginPath(); ex.moveTo(tx,ty); ex.lineTo(m.x,m.y); ex.stroke();
-        // ground flash — brief bluish-white illumination below each meteor
-        if(m.life>0.6&&m.y<hz*0.4){
-          var gfl=ex.createRadialGradient(m.x,hz,0,m.x,hz,W*0.15);
-          gfl.addColorStop(0,'rgba(200,225,255,'+(m.life*0.08).toFixed(3)+')'); gfl.addColorStop(1,'rgba(200,225,255,0)');
-          ex.fillStyle=gfl; ex.fillRect(0,hz-20,W,40);
-        }
-        return true;
-      });
-      // airplane — slower, lower, nav lights blink red/green
-      planeClock+=dt*1000;
-      if(planeClock>nextPlaneIn) spawnPlane();
-      if(plane){
-        plane.x+=plane.vx*dt; plane.y+=plane.vy*dt; plane.blink+=dt;
-        plane.life-=dt/(Math.abs(W/plane.vx)*1.2);
-        if(plane.life<=0||plane.x<-60||plane.x>W+60){plane=null;}
-        else{
-          var blinkOn=Math.sin(plane.blink*Math.PI*1.4)>0.5;
-          // white strobe
-          if(Math.sin(plane.blink*Math.PI*2.8)>0.85){
-            ex.fillStyle='rgba(255,255,255,0.85)'; ex.beginPath(); ex.arc(plane.x,plane.y,1.8,0,6.28); ex.fill();
-          }
-          // nav light (red left or green right depending on direction)
-          if(blinkOn){
-            var nc=plane.vx>0?'0,255,80':'255,40,40';
-            ex.fillStyle='rgba('+nc+',0.9)'; ex.beginPath(); ex.arc(plane.x+(plane.vx>0?-5:5),plane.y,1.3,0,6.28); ex.fill();
-          }
-        }
-      }
-      // ISS satellite pass — fast bright dot with short trail
-      satClock+=dt*1000;
-      if(satClock>nextSatIn) spawnSat();
-      if(sat){
-        sat.x+=sat.vx*dt; sat.y+=sat.vy*dt; sat.life-=dt/6;
-        if(sat.life<=0||sat.x<-20||sat.x>W+20){sat=null;}
-        else{
-          var slen=40, sang=Math.atan2(sat.vy,sat.vx);
-          var stx=sat.x-Math.cos(sang)*slen, sty=sat.y-Math.sin(sang)*slen;
-          var sgr=ex.createLinearGradient(stx,sty,sat.x,sat.y);
-          sgr.addColorStop(0,'rgba(255,255,240,0)');
-          sgr.addColorStop(0.5,'rgba(255,255,240,'+(sat.life*.18).toFixed(2)+')');
-          sgr.addColorStop(1,'rgba(255,255,250,'+(sat.life*.82).toFixed(2)+')');
-          ex.strokeStyle=sgr; ex.lineWidth=1.2; ex.lineCap='round';
-          ex.beginPath(); ex.moveTo(stx,sty); ex.lineTo(sat.x,sat.y); ex.stroke();
-          ex.fillStyle='rgba(255,255,245,'+(sat.life*0.92).toFixed(2)+')';
-          ex.beginPath(); ex.arc(sat.x,sat.y,1.4,0,6.28); ex.fill();
-        }
-      }
-    })();
-    // lens flare — brief burst from moon position on page load
-    if(t<lensFlareUntil){
-      var lf=Math.sin(t*Math.PI/lensFlareUntil)*0.35;
-      var mx=W*0.78, my=hz*0.17;
-      var lfg=ex.createRadialGradient(mx,my,0,mx,my,W*0.5);
-      lfg.addColorStop(0,'rgba(255,248,220,'+lf.toFixed(3)+')');
-      lfg.addColorStop(0.15,'rgba(220,235,255,'+(lf*0.4).toFixed(3)+')');
-      lfg.addColorStop(1,'rgba(200,220,255,0)');
-      ex.fillStyle=lfg; ex.fillRect(0,0,W,hz);
-    }
-    // pre-dawn glow — appears after 3 minutes, very subtle warm-up on eastern horizon
-    (function(){
-      var dawn=Math.max(0,Math.min(1,(t-180)/60));
-      if(dawn<=0) return;
-      var dg=ex.createLinearGradient(W*0.8,hz,W,0);
-      dg.addColorStop(0,'rgba(255,160,80,'+(dawn*0.12).toFixed(3)+')');
-      dg.addColorStop(0.4,'rgba(255,120,60,'+(dawn*0.06).toFixed(3)+')');
-      dg.addColorStop(1,'rgba(200,80,40,0)');
-      ex.fillStyle=dg; ex.fillRect(W*0.5,0,W*0.5,hz);
-    })();
-    // atmospheric limb vignette — very top of sky subtly darkens (scattering effect)
-    var lv=ex.createLinearGradient(0,0,0,hz*0.12);
-    lv.addColorStop(0,'rgba(0,0,4,0.28)'); lv.addColorStop(1,'rgba(0,0,4,0)');
-    ex.fillStyle=lv; ex.fillRect(0,0,W,hz*0.12);
-    // zodiacal light — faint triangular glow rising from horizon, astronomically authentic
-    (function(){
-      var al=0.038+0.012*Math.sin(t*0.08+1.4);
-      var zg=ex.createRadialGradient(W*0.42,hz,0,W*0.42,hz,hz*1.1);
-      zg.addColorStop(0,'rgba(230,220,180,'+al.toFixed(3)+')');
-      zg.addColorStop(0.25,'rgba(210,205,170,'+(al*0.7).toFixed(3)+')');
-      zg.addColorStop(0.6,'rgba(190,190,155,'+(al*0.28).toFixed(3)+')');
-      zg.addColorStop(1,'rgba(170,175,140,0)');
-      ex.save(); ex.beginPath(); ex.moveTo(W*0.42,hz); ex.lineTo(W*0.18,0); ex.lineTo(W*0.66,0); ex.closePath();
-      ex.fillStyle=zg; ex.fill(); ex.restore();
-    })();
-    // moonlight shaft — very faint cone from upper-left, slowly breathing
-    (function(){
-      var al=0.028+0.010*Math.sin(t*0.12);
-      var sg=ex.createLinearGradient(0,0,W*0.6,hz*0.8);
-      sg.addColorStop(0,'rgba(200,220,255,'+al.toFixed(3)+')');
-      sg.addColorStop(.5,'rgba(190,215,255,'+(al*0.5).toFixed(3)+')');
-      sg.addColorStop(1,'rgba(180,210,255,0)');
-      ex.save(); ex.beginPath(); ex.moveTo(0,0); ex.lineTo(W*0.55,hz*0.82); ex.lineTo(W*0.72,hz*0.82); ex.lineTo(0,0); ex.closePath();
-      ex.fillStyle=sg; ex.fill(); ex.restore();
-    })();
-    // Cygnus constellation lines — faint, slowly brightening with t
-    (function(){
-      var al=Math.min(0.11, 0.04+t*0.004);
-      var pts={den:[W*.52,hz*.18],alb:[W*.44,hz*.38],cygB:[W*.38,hz*.62],
-        eps:[W*.62,hz*.55],gam:[W*.55,hz*.42]};
-      ex.save(); ex.strokeStyle='rgba(180,215,255,'+al.toFixed(3)+')'; ex.lineWidth=0.8; ex.lineCap='round';
-      [[pts.den,pts.gam],[pts.gam,pts.alb],[pts.alb,pts.cygB],[pts.gam,pts.eps]].forEach(function(seg){
-        ex.beginPath(); ex.moveTo(seg[0][0],seg[0][1]); ex.lineTo(seg[1][0],seg[1][1]); ex.stroke();
-      });
-      ex.restore();
-    })();
+    // (high sky effects removed — Aladin #sky is now visible as the background from the top of the page.
+    // Canvas only draws ground + telescopes + a few low effects. Aladin view is driven directly on scroll.)
     // HORIZON GLOW — sodium light pollution, muted and natural
     var hg=ex.createLinearGradient(0,hz-200,0,hz);
     hg.addColorStop(0,'rgba(140,70,20,0)'); hg.addColorStop(.50,'rgba(175,88,26,.04)');
@@ -898,6 +654,7 @@
   }
 
   var curSection=0; // set by scroll handler, read by drawFrame
+  var aladinSkyActive = false; // when true, canvas skips sky fills so real Aladin shows through
   var lensFlareUntil=1.4; // brief lens flare on page load
   var T0=performance.now(),resizePending=false;
   (function loop(){
@@ -1059,10 +816,10 @@
       var top=els[i].offsetTop, h=els[i].offsetHeight, lp=Math.max(0,Math.min(1,(sc-top)/h));
       pdots.forEach(function(d,k){ d.classList.toggle('on', k===i); });
       prog.classList.toggle('show', i>0); clock.textContent = stops[i].time;
-      // lift-off: fade the ground out across the first section
-      var ep=Math.max(0,Math.min(1, sc/(els[0].offsetHeight*0.82)));
+      // lift-off: fade the ground out across the first section (faster reveal of Aladin sky)
+      var ep=Math.max(0,Math.min(1, sc/(els[0].offsetHeight*0.55)));
       var es=1-ep; earth.style.opacity=es.toFixed(3); ecap.style.opacity=es.toFixed(3);
-      earth.style.transform='translateY('+(ep*42).toFixed(1)+'vh) scale('+(1+ep*0.18).toFixed(3)+')';
+      earth.style.transform='translateY('+(ep*55).toFixed(1)+'vh) scale('+(1+ep*0.12).toFixed(3)+')';
       var a=stops[i], b=stops[Math.min(stops.length-1,i+1)];
       if(lp<=HOLD){ tgt.ra=a.cra; tgt.dec=a.cdec; tgt.fov=a.fov; }
       else{ var tt=(lp-HOLD)/(1-HOLD), e=tt<.5?2*tt*tt:1-Math.pow(-2*tt+2,2)/2;
@@ -1110,6 +867,7 @@
   // If the sky engine never loads (flaky mobile network, blocked CDN), freeze the
   // #earth canvas in place as a permanent starfield so the page is never blank.
   function fallbackToEarth(){
+    aladinSkyActive = false;
     var earthEl=document.getElementById('earth');
     earthEl.style.opacity='1'; earthEl.style.transform='none';
   }
@@ -1123,6 +881,7 @@
         showGotoControl:false, showShareControl:false, showSimbadPointerControl:false, showCooGrid:false,
         showFrame:false, showContextMenu:false, showStatusBar:false, showProjectionControl:false, showCooGridControl:false
       });
+      aladinSkyActive = true;
       annotate(aladin); start(aladin);
     }).catch(fallbackToEarth);
   }
