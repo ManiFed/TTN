@@ -36,7 +36,7 @@
 
   /* the ground we lift off from */
   #earth{position:fixed; inset:0; width:100%; height:100%; z-index:2; pointer-events:none; will-change:transform,opacity;}
-  #earthcap{position:fixed; left:34px; bottom:30px; z-index:2; pointer-events:none;
+  #earthcap{position:fixed; left:32px; bottom:30px; z-index:2; pointer-events:none;
     font-size:12px; letter-spacing:.04em; color:var(--ink-2); display:flex; align-items:center; gap:9px;
     animation:fadeup 1.4s ease-out both}
   @keyframes fadeup{from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none}}
@@ -53,14 +53,13 @@
   main{position:relative; z-index:3;}
   .wrap{max-width:1180px; margin:0 auto; padding:0 32px; width:100%}
 
-  .brandmark{position:fixed; top:24px; left:34px; z-index:30;
+  .brandmark{position:fixed; top:24px; left:32px; z-index:30;
     font-family:'Inter', system-ui, -apple-system, sans-serif; font-weight:900; font-size:18px;
     letter-spacing:-.03em; color:#ffffff; text-shadow:none; line-height:1}
-  .seatflag{position:fixed; top:26px; right:34px; z-index:30; font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); text-shadow:0 1px 20px rgba(0,0,8,.85)}
-  .seatflag b{color:var(--ink); font-weight:500}
-  .clock{position:fixed; right:34px; bottom:30px; z-index:30; font-size:12px; letter-spacing:.06em; color:var(--ink-3); font-variant-numeric:tabular-nums}
-  .utcclock{position:fixed; right:34px; bottom:50px; z-index:30; font-size:10.5px; letter-spacing:.08em; color:var(--ink-3); font-variant-numeric:tabular-nums; opacity:0.6}
-  .progress{position:fixed; left:34px; bottom:110px; z-index:30; display:none; flex-direction:column; gap:9px}
+
+  .clock{position:fixed; right:32px; bottom:30px; z-index:30; font-size:12px; letter-spacing:.06em; color:var(--ink-3); font-variant-numeric:tabular-nums}
+  .utcclock{position:fixed; right:32px; bottom:50px; z-index:30; font-size:10.5px; letter-spacing:.08em; color:var(--ink-3); font-variant-numeric:tabular-nums; opacity:0.6}
+  .progress{position:fixed; left:32px; top:50%; transform:translateY(-50%); z-index:30; display:none; flex-direction:column; gap:10px}
   .progress.show{display:flex}
   .progress .pdot{width:7px; height:7px; border-radius:50%; background:rgba(242,245,255,.22); transition:all .4s; cursor:pointer}
   .progress .pdot:hover{background:rgba(242,245,255,.55); transform:scale(1.35);}
@@ -87,7 +86,7 @@
   .btn{display:inline-flex; align-items:center; gap:9px; font-family:var(--font); font-weight:500; font-size:15px;
     padding:15px 26px; border-radius:100px; cursor:pointer; border:1px solid transparent; text-decoration:none;
     transition:transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s, background .22s}
-  .btn svg{width:15px;height:15px;flex:0 0 auto}
+  .btn svg{width:13px;height:13px;flex:0 0 auto; margin-top:-1px} /* optical vertical align with text */
   .btn-p{color:#04121c; background:#CFefff; box-shadow:0 8px 30px rgba(143,217,255,.30), inset 0 1px 0 rgba(255,255,255,.7); overflow:hidden; position:relative}
   .btn-p::after{content:''; position:absolute; top:0; left:-100%; width:60%; height:100%;
     background:linear-gradient(90deg,transparent,rgba(255,255,255,.38),transparent);
@@ -170,7 +169,7 @@
   @keyframes glassbreathe{0%,100%{background:rgba(160,185,255,.045)} 50%{background:rgba(160,185,255,.065)}}
 
   @media (max-width:860px){
-    .seatflag, .clock, .utcclock, .progress, .cue{ display:none !important; }
+    .clock, .utcclock, .progress, .cue{ display:none !important; }
     .brandmark{ top:18px; left:20px; font-size:14px; }
     .wrap{ padding:0 20px; }
     /* sky panels: full-width glass, sitting low so the real sky shows above them */
@@ -387,9 +386,9 @@
         <p class="sub" style="margin:24px auto 0; max-width:46ch; font-size:19px; color:var(--ink-2)">Create a member account, get your activation code, and connect your first telescope. If you need gear or funding help, tell us — the founding network is meant to include people who were left out of astronomy before.</p>
         <div class="cta-row" style="justify-content:center; margin-top:34px">
           <a class="btn btn-p" href="https://app.thetelescope.net">Create member account</a>
-          <a class="btn btn-g" href="/download/node-agent/macos"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2.01.77-3.28.79-1.35.02-2.37-1.24-3.2-2.48C4.1 16.69 3.4 11.44 4.7 8.4c.65-1.52 1.82-2.48 3.08-2.5 1.21-.02 2.36.8 3.1.8.75 0 2.15-1.03 3.63-.88.62.03 2.35.25 3.46 1.9-3.05 1.88-2.56 5.72.6 6.8.03.01.06.01.09.02zM13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>Download for macOS</a>
-          <a class="btn btn-g" href="/download/node-agent/windows"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg>Download for Windows</a>
-          <a class="btn btn-g" href="/download/node-agent/raspberry-pi-os"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="7.8" cy="10" r="2.2"/><circle cx="12" cy="7.5" r="2.4"/><circle cx="16.2" cy="10" r="2.2"/><circle cx="9.2" cy="15.2" r="1.5"/><circle cx="14.8" cy="15.2" r="1.5"/></svg>Download for Raspberry Pi OS</a>
+          <a class="btn btn-g" href="/download/node-agent/macos"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2.01.77-3.28.79-1.35.02-2.37-1.24-3.2-2.48C4.1 16.69 3.4 11.44 4.7 8.4c.65-1.52 1.82-2.48 3.08-2.5 1.21-.02 2.36.8 3.1.8.75 0 2.15-1.03 3.63-.88.62.03 2.35.25 3.46 1.9-3.05 1.88-2.56 5.72.6 6.8.03.01.06.01.09.02zM13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg> Download for macOS</a>
+          <a class="btn btn-g" href="/download/node-agent/windows"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg> Download for Windows</a>
+          <a class="btn btn-g" href="/download/node-agent/raspberry-pi-os"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="7.8" cy="10" r="2.2"/><circle cx="12" cy="7.5" r="2.4"/><circle cx="16.2" cy="10" r="2.2"/><circle cx="9.2" cy="15.2" r="1.5"/><circle cx="14.8" cy="15.2" r="1.5"/></svg> Download for Raspberry Pi OS</a>
         </div>
         <div class="cta-row" style="justify-content:center; margin-top:12px">
           <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=I%20want%20to%20join%20the%20founding%20network">Talk to us before joining</a>
@@ -985,37 +984,25 @@
   /* ---------- the sky tour ---------- */
   var els=[].slice.call(document.querySelectorAll('.stop'));
   var MOBILE = innerWidth <= 860;   // match the CSS breakpoint (width-only; short desktop windows are NOT mobile)
-  // Compute how far to shift the Aladin camera so the sky object appears centered in
-  // the empty column next to the panel. The grid is minmax(0,1fr) / minmax(0,420px)
-  // with a 40px gap inside a 1180px-max content area with 32px side padding.
-  // Aladin's fov is the *vertical* angular extent, so horizontal angular width = fov * aspect.
-  // d = fraction-of-viewport-width × horizontal-fov / cos(dec), converted to RA degrees.
-  // Grid is: minmax(0,1fr) | gap 40px | minmax(0,420px)
-  // side=1  → <empty col1> <panel col2>  — empty is wider (1fr), panel is 420px on right
-  // side=-1 → <panel col1> <empty col2>  — panel fills 1fr on left, empty is 420px on right
-  var contentW = Math.min(innerWidth, 1180) - 64;
-  var col2W = Math.min(420, contentW);                 // fixed/smaller column
-  var col1W = Math.max(0, contentW - col2W - 40);      // flexible/larger column
-  var contentLeft = (innerWidth - Math.min(innerWidth, 1180)) / 2 + 32;
-  // Center of the empty column in each case
-  var emptyCenterSide1  = contentLeft + col1W / 2;                     // empty=col1, panel=col2
-  var emptyCenterSide_1 = contentLeft + col1W + 40 + col2W / 2;        // panel=col1, empty=col2
-  var viewCx = innerWidth / 2;
   var aspect = innerWidth / innerHeight;
   var stops=els.map(function(s){
     var ra=parseFloat(s.dataset.ra), dec=parseFloat(s.dataset.dec), fov=parseFloat(s.dataset.fov), side=parseFloat(s.dataset.side)||0;
     var cosDec = Math.cos(dec*Math.PI/180);
-    // d = angular shift to center the empty column. Formula: move camera so the empty-col
-    // center maps to the viewport center. pxShift is how far empty-col center is from viewCx.
-    var emptyCx = side===1 ? emptyCenterSide1 : side===-1 ? emptyCenterSide_1 : viewCx;
-    var pxShift = Math.abs(viewCx - emptyCx); // magnitude; sign handled by side in cra formula
-    var d = (pxShift / innerWidth) * fov * aspect / cosDec;
-    // desktop: shift the object into the empty half (left/right of the panel).
-    // mobile: panels sit low, so lift the object UP into the open sky above them.
+    var cra = ra, cdec = dec;
+    if (!MOBILE && side !== 0) {
+      // Simple, robust offset so the key sky object (from data-ra/dec) appears
+      // off-center in the open area beside the glass panel. 0.24 of the horizontal
+      // fov gives a reliable "beside the text" placement regardless of screen size.
+      var horiz = fov * aspect;
+      var bias = horiz * 0.24;
+      cra = ra - side * (bias / cosDec);
+    } else if (MOBILE && side) {
+      // on mobile panels are low; lift target a bit into upper sky
+      cdec = dec - 0.28 * fov;
+    }
     return {
       ra:ra, dec:dec, fov:fov, side:side, time:s.dataset.time||'',
-      cra: MOBILE ? ra : (ra - side*d),
-      cdec: (MOBILE && side) ? dec - 0.30*fov : dec
+      cra: cra, cdec: cdec
     };
   });
   var prog=document.getElementById('progress'); var clock=document.getElementById('clock');
@@ -1081,6 +1068,15 @@
       else{ var tt=(lp-HOLD)/(1-HOLD), e=tt<.5?2*tt*tt:1-Math.pow(-2*tt+2,2)/2;
         tgt.ra=lerp(a.cra,b.cra,e); tgt.dec=lerp(a.cdec,b.cdec,e);
         tgt.fov=Math.exp(lerp(Math.log(a.fov),Math.log(b.fov),e)); }
+
+      // Drive Aladin *directly* from scroll progress. This guarantees the view
+      // actually moves when the user scrolls instead of relying only on the raf lerp.
+      if (aladin) {
+        aladin.gotoRaDec(tgt.ra, tgt.dec);
+        aladin.setFov(tgt.fov);
+      }
+      // keep cur in sync so the hover tick doesn't fight the scroll-driven position
+      cur.ra = tgt.ra; cur.dec = tgt.dec; cur.fov = tgt.fov;
     }
     addEventListener('scroll', compute, {passive:true});
     addEventListener('scroll', function(){ burstUntil=(performance.now()-T0)/1000+0.9; },{passive:true,once:true});
@@ -1093,21 +1089,19 @@
       els[ni].scrollIntoView({behavior:'smooth'});
     });
     compute();
-    aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov);
+    if (aladin) { aladin.gotoRaDec(cur.ra, cur.dec); aladin.setFov(cur.fov); }
     addEventListener('resize', function(){
-      // ensure aladin keeps correct size + view after any viewport change
-      aladin.gotoRaDec(cur.ra, cur.dec);
-      aladin.setFov(cur.fov);
+      if (aladin) { aladin.gotoRaDec(cur.ra, cur.dec); aladin.setFov(cur.fov); }
     }, {passive:true});
     (function tick(){
       if(skyHover) hoverZoom=Math.min(HOVER_MAX, hoverZoom+HOVER_RATE);
       else         hoverZoom=Math.max(1.0,        hoverZoom-HOVER_RESET);
-      var nfov=tgt.fov*hoverZoom;
-      // Only push updates to Aladin when the camera is actually moving — avoids
-      // forcing a WebGL redraw every frame once settled, which pins CPU on mobile.
-      if(Math.abs(tgt.ra-cur.ra)>1e-4 || Math.abs(tgt.dec-cur.dec)>1e-4 || Math.abs(nfov-cur.fov)>1e-4){
-        cur.ra=lerp(cur.ra,tgt.ra,0.18); cur.dec=lerp(cur.dec,tgt.dec,0.18); cur.fov=lerp(cur.fov,nfov,0.18);
-        aladin.gotoRaDec(cur.ra,cur.dec); aladin.setFov(cur.fov);
+      var nfov = tgt.fov * hoverZoom;
+      // Only the hover zoom adjustment runs here; main scroll-driven movement
+      // is handled directly in compute() above so it can't get stuck.
+      if (Math.abs(nfov - cur.fov) > 1e-4) {
+        cur.fov = lerp(cur.fov, nfov, 0.12);
+        if (aladin) aladin.setFov(cur.fov);
       }
       requestAnimationFrame(tick);
     })();
