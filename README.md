@@ -66,6 +66,11 @@ node_v1-main/
 │   ├── README.md         Website documentation and API integration guide
 │   └── future/           Phase 2+ portal and future interfaces
 │
+├── app/                 Flutter cross-platform member app (iOS, Android, web/PWA)
+│   ├── lib/              Screens (dashboard, observations, help/AI chat, nodes, notifications, more), API client, state, Aladin widgets
+│   ├── pubspec.yaml
+│   └── README.md         App build and accessibility notes
+│
 ├── scripts/
 │   ├── manage.py         Admin CLI (status, ingest, batch, submit, check-aavso, generate-code)
 │   └── seed_demo.py      Demo data generator for testing
@@ -86,13 +91,26 @@ node_v1-main/
 | Phase | Status | Goal |
 |-------|--------|------|
 | **0 — Proof of Concept** | ✅ Code complete | First AAVSO-accepted automated observation |
-| **1 — Core System** | 🚀 In progress | Installers shipped, member accounts live, **founding network site live**, 3–5 beta nodes |
-| **2 — Launch** | 🔜 Next | 50 nodes, member portal app, first ATel, first grant application |
+| **1 — Core System** | 🚀 In progress | Installers shipped, member accounts live, **founding network site live**, Flutter app in development, 3–5 beta nodes |
+| **2 — Launch** | 🔜 Next | 50 nodes, member portal app on stores, first ATel, first grant application |
 | **3 — Growth** | Not started | 200 nodes, 25 countries, 10,000+ AAVSO submissions |
 
 ---
 
-## Recent Changes (June 2026)
+## Recent Changes (June–July 2026)
+
+### Member App (Flutter) — Major Progress
+- **App redesign wired to real backend data**
+  - Observation history tab (`observations_tab.dart`): recent photometric measurements + per-night summaries
+  - Help tab (`help_tab.dart`): AI assistant chat (OpenRouter + Claude Haiku 4.5, 5 messages/week), node diagnostics, and safe `config.yaml` patch queue for node agents
+  - Science program suggestions (`suggest_program_screen.dart`): members can propose new targets/programs
+  - More menu, Me tab (moved to sidebar), target detail screens
+  - Real data only mode; members can name their telescopes
+  - Push notifications (Firebase) + night summary alerts
+  - Aladin Lite sky visualization integrated into the operational dashboard
+- **Dashboard iterations**: institutional/no-scroll layouts, workbench-style IDE UI, mission control previews (see `app/archive/`)
+- **Deployment**: Railway one-command deploys (`scripts/deploy-api.sh`), GitHub Actions workflows, watch patterns for api/app/website services; Flutter web builds included in deploys
+- **Native experiments**: iOS-native SwiftUI shell (haptics, TTS accessibility) and parallel macOS explorations
 
 ### Marketing Site Launch (`website/tour.html`)
 - **Interactive founding network experience** — single-page scrollytelling site
@@ -433,6 +451,51 @@ python3 scripts/seed_demo.py --wipe
 ```
 
 Then refresh your browser and watch the stats, map, and light curve populate.
+
+---
+
+## Member App (`app/`) — Flutter Member Experience
+
+The Flutter app is the primary interface for members. It provides telescope status, observation history, night summaries, an AI help assistant, science program suggestions, and push notifications. Designed with strong accessibility principles (large text, haptics, audio descriptions, screen reader support).
+
+### Current Screens / Tabs
+
+| Tab/Screen | Purpose |
+|------------|---------|
+| Dashboard | Live node status, tonight's plan, network activity, Aladin sky view |
+| Nodes | List registered telescopes, claim nodes, name/rename |
+| Observations | Photometric history + night-by-night summaries; drill into targets |
+| Notifications | Alerts, night summaries, system messages (mark read) |
+| Help | Contact links + AI chat assistant (Claude Haiku via OpenRouter, weekly limit) + diagnostics + config patch requests |
+| More | Science program suggestions, settings, about |
+
+The app uses the member-authenticated cloud endpoints (`/api/v1/me/*`, `/api/v1/plan`, `/api/v1/observations`, `/api/v1/help/*`, etc.). It supports push via Firebase.
+
+### Quick Start — App (against local cloud)
+
+```bash
+# 1. Ensure cloud is running (see Quick Start — Cloud Server)
+cd cloud/
+PYTHONPATH="$PWD:$PWD/src" python3 -m cloud.main
+
+# 2. In another terminal, run the Flutter app
+cd app
+# (first time: flutter create . ; flutter pub get)
+flutter run --dart-define=BS_API_BASE=http://localhost:8800
+# For a real device on same LAN: use your host IP instead of localhost
+```
+
+**Web build:** `flutter build web` (output in `app/build/web`).
+
+See `app/README.md` for full setup, accessibility notes, and API contract details.
+
+### Key Features (Phase 1)
+
+- Real-time data from live cloud (no mock data in current main flows)
+- AI-powered help that can suggest and queue safe configuration patches for your node agent
+- Per-member stats, observation lists, target light curves
+- Notifications for completed nights and important events
+- Science program suggestion flow (sends to cloud for review)
 
 ---
 
@@ -974,7 +1037,8 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 | Sleep prevention | OS-native APIs | `SetThreadExecutionState` (Win), `caffeinate` (Mac), `systemd-inhibit` (Linux) |
 | Packaging | PyInstaller one-file | NSIS (Win), pkgbuild/productbuild (Mac), systemd install.sh (Linux) |
 | Marketing site | HTML/CSS/JavaScript (static) | `tour.html` — interactive scrollytelling, Aladin Lite sky vis, live API data |
-| Member portal | Flutter + HTML/CSS/JS (Phase 2) | Phase 1 scaffolding in `website/future/`; accessibility-first design |
+| Member app | Flutter / Dart (iOS, Android, web) | Real backend integration, AI Help assistant, haptics/TTS, Aladin sky, push notifications; strong accessibility focus |
+| AI member support | OpenRouter (Claude Haiku) | Rate-limited chat in-app; queues safe config patches for node agents |
 
 ---
 
