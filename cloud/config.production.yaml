@@ -77,10 +77,18 @@ help:
   model: anthropic/claude-haiku-4.5
 
 scheduler:
+  chorus: true
+  chorus_shadow: false
+  network_optimizer: false
+  local_search_ms: 1500
   replan_interval_minutes: 120
   min_score: 0.25
   max_targets_per_night: 12
   sun_altitude_limit: -12
+  chorus_params:
+    scarcity_gamma: 0.93
+    exploration_beta: 0.15
+    same_site_repeat_factor: 0.25
 
 aavso:
   observer_code: 'EGBA'

@@ -20,10 +20,9 @@ heard.
 > ladders), `ledger.py` (T0 reliability vectors, target state, Ring-0
 > calibration), `planner.py` (orchestration), `backtest.py` (Ring-1 gate) —
 > with schema in `cloud/db.py`, the tuning "chorus" group + backtest gate in
-> `cloud/tuning.py`, and tests in `tests/test_chorus.py`.  Rollout flags:
-> `scheduler.chorus_shadow: true` (default — full pipeline, telemetry + archive,
-> no saved plans) and `scheduler.chorus: true` to go live; either is instant to
-> revert.
+> `cloud/tuning.py`, and tests in `tests/test_chorus.py`. CHORUS is now the
+> default live scheduler via `scheduler.chorus: true`; the former per-node
+> greedy packer is archived under `cloud/archive/`.
 
 ---
 
@@ -888,10 +887,8 @@ else got worse.
 - **Compatibility:** `ObservationPlan`/`PlanItem` unchanged (additive
   `contingencies`, richer `explanation`); `scores` still written; legacy
   reliability columns mirrored; `tuning_state`/`weight_history` reused;
-  `plan_runs` extended. The legacy greedy packer remains behind the existing
-  `scheduler.network_optimizer`-style flag (`scheduler.chorus`) for staged
-  rollout: shadow mode (plan both, log Φ and realized deltas) → per-node
-  canary → fleet.
+  `plan_runs` extended. The former per-node greedy packer remains archived in
+  `cloud/archive/` for reference and explicit experiments.
 
 ---
 

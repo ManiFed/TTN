@@ -95,18 +95,18 @@ tuning:
   min_change: 0.005          # skip apply/notify if no weight moves more than this
 
 scheduler:
-  # Planner selection (highest enabled wins):
+  # Planner selection:
   #   chorus: true            → CHORUS information-theoretic coordinator (CHORUS.md)
-  #   network_optimizer: true → marginal-value fleet optimizer
-  #   both false              → legacy per-node greedy slot-packer
+  #   network_optimizer: true → previous marginal-value fleet optimizer, only
+  #                             used when chorus is explicitly false
+  # The former per-node greedy slot-packer lives in cloud/archive/.
   # chorus_shadow runs the full CHORUS pipeline alongside the incumbent for
   # telemetry + the tuning backtest archive WITHOUT saving plans — the staged
   # rollout path (shadow first, then flip chorus on once plan_runs comparisons
   # look good; set chorus: false for instant rollback at any time).
-  chorus: false
-  chorus_shadow: true
-  network_optimizer: true  # fleet-wide optimizer; set false to fall back to the
-                           # legacy per-node greedy slot-packer (instant rollback)
+  chorus: true
+  chorus_shadow: false
+  network_optimizer: false # CHORUS is the live planner
   local_search_ms: 1500    # annealing refinement budget per network run
   replan_interval_minutes: 120
   min_score: 0.25          # targets below this never get scheduled

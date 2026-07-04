@@ -23,8 +23,8 @@ The objective coefficients (slot-quality blend, redundancy decay, cadence
 strength, slew model) are read live from the AI-tuned tuning.active_params(), so
 the nightly Claude monitor reshapes the optimizer without a restart.
 
-Enabled by scheduler.network_optimizer; scheduler.generate_all_plans delegates
-here when the flag is on, and falls back to the legacy greedy packer when off.
+Enabled only when scheduler.chorus is explicitly false and
+scheduler.network_optimizer is true. CHORUS is the default live planner.
 """
 
 import json
