@@ -138,30 +138,86 @@ def generate_night_summary(node_id: str, night: str) -> dict | None:
     return summary
 
 
-def generate_pending_summaries(config: dict) -> int:
+def _completed_night_for_node(now_utc: datetime, offset_h: float,
+                              ready_local_hour: int = 8) -> str:
+    """
+    Latest local night that is safe to summarize.
+
+    Plans are keyed by the local evening date.  A night that starts on Jul 3
+    ends the morning of Jul 4, so before the local morning cutoff we must look
+    back two calendar dates, not one UTC date.
+    """
+    local_now = now_utc + timedelta(hours=offset_h)
+    days_back = 1 if local_now.hour >= ready_local_hour else 2
+    return (local_now.date() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+
+def _store_missed_summary(node_id: str, night: str) -> None:
+    summary = {
+        "node_id":        node_id,
+        "night":          night,
+        "n_targets":      0,
+        "n_observations": 0,
+        "n_submitted":    0,
+        "targets":        {},
+        "receipt": {
+            "title": "No measurements received",
+            "lead": "A plan was scheduled, but no measurements arrived for this night.",
+            "highlights": [
+                "0 photometric measurements",
+                "Node needs review before the next run",
+            ],
+            "aavso_ready": False,
+        },
+    }
+    db.execute(
+        """INSERT INTO night_summaries
+               (node_id, night, n_targets, n_observations, n_submitted,
+                summary_json, generated_at)
+           VALUES (%s,%s,0,0,0,%s,%s)
+           ON CONFLICT(node_id, night) DO UPDATE SET
+               n_targets      = excluded.n_targets,
+               n_observations = excluded.n_observations,
+               n_submitted    = excluded.n_submitted,
+               summary_json   = excluded.summary_json,
+               generated_at   = excluded.generated_at""",
+        (node_id, night, json.dumps(summary), _now()),
+    )
+
+
+def generate_pending_summaries(config: dict, now: datetime | None = None) -> int:
     """
     For every active node, generate last night's summary if it's missing.
     Called by the daily maintenance loop.  Returns the count of new summaries.
     """
     generated = 0
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    for node in db.query("SELECT node_id FROM nodes WHERE status = 'active'"):
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    for node in db.query(
+        "SELECT node_id, utc_offset_hours FROM nodes WHERE status = 'active'"
+    ):
         nid = node["node_id"]
+        night = _completed_night_for_node(
+            now_utc, float(node.get("utc_offset_hours") or 0.0)
+        )
         if db.query_one(
             "SELECT id FROM night_summaries WHERE node_id = %s AND night = %s",
-            (nid, yesterday),
+            (nid, night),
         ):
             continue
-        summary = generate_night_summary(nid, yesterday)
+        summary = generate_night_summary(nid, night)
         if summary:
             generated += 1
-            _dispatch_notifications(nid, yesterday, summary, config)
+            _dispatch_notifications(nid, night, summary, config)
         else:
-            _dispatch_missed_night(nid, yesterday, config)
+            if _dispatch_missed_night(nid, night, config):
+                _store_missed_summary(nid, night)
+                generated += 1
     return generated
 
 
-def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None) -> None:
+def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None) -> bool:
     """
     A node had a plan for `night` but produced zero measurements. Alert the
     member app so a stuck node (e.g. a plan sitting unrun, a dead ALPACA
@@ -172,7 +228,7 @@ def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None)
         (node_id, night),
     )
     if not plan:
-        return  # no plan was ever generated for this night — nothing to flag
+        return False  # no plan was ever generated for this night — nothing to flag
 
     from cloud import push  # local import to avoid circular dependency
 
@@ -183,7 +239,12 @@ def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None)
            WHERE nm.node_id = %s""",
         (node_id,),
     )
-    payload = json.dumps({"node_id": node_id, "night": night})
+    payload = json.dumps({
+        "node_id": node_id,
+        "night": night,
+        "title": "Telescope missed last night",
+        "message": "A plan was scheduled, but no measurements came in.",
+    })
 
     for m in members:
         db.execute(
@@ -205,6 +266,7 @@ def _dispatch_missed_night(node_id: str, night: str, config: dict | None = None)
             "Node %s had a plan on %s but zero measurements — dispatched "
             "node_missed_night to %d member(s)", node_id, night, len(members),
         )
+    return True
 
 
 def _dispatch_notifications(
