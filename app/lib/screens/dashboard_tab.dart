@@ -54,8 +54,9 @@ class _DashboardTabState extends State<DashboardTab> {
     final api = context.read<AppState>().api;
 
     final nodesFuture = api.nodes().catchError((_) => <Node>[]);
-    final obsFuture =
-        api.observations(days: 1, limit: 10).catchError((_) => <Observation>[]);
+    final obsFuture = api
+        .observations(days: 1, limit: 10)
+        .catchError((_) => <Observation>[]);
     final timelineFuture = api.timeline().catchError((_) => <TimelineItem>[]);
     final targetsFuture = api.targets().catchError((_) => <Target>[]);
     final notifsFuture = api.notifications(limit: 5);
@@ -102,11 +103,16 @@ class _DashboardTabState extends State<DashboardTab> {
                 children: [
                   const Icon(Icons.cloud_off, size: 48, color: BSTheme.ink3),
                   const SizedBox(height: 12),
-                  Text('${snap.error}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: BSTheme.ink2)),
+                  Text(
+                    '${snap.error}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: BSTheme.ink2),
+                  ),
                   const SizedBox(height: 20),
-                  ElevatedButton(onPressed: _refresh, child: const Text('Retry')),
+                  ElevatedButton(
+                    onPressed: _refresh,
+                    child: const Text('Retry'),
+                  ),
                 ],
               ),
             ),
@@ -181,9 +187,11 @@ class _DashboardViewState extends State<_DashboardView> {
     // Also match against live schedule reports from nodes (scheduleTarget).
     // This ensures "In progress" reflects reality even if plan state is not yet set.
     // Only auto-apply live match when user has not explicitly chosen a target by tapping.
-    final noUserSelection = _selectedTargetName == null || _selectedTargetName!.isEmpty;
+    final noUserSelection =
+        _selectedTargetName == null || _selectedTargetName!.isEmpty;
     if (noUserSelection &&
-        (selectedPlan == null || selectedPlan.state.toLowerCase() != 'observing') &&
+        (selectedPlan == null ||
+            selectedPlan.state.toLowerCase() != 'observing') &&
         widget.data.nodes.isNotEmpty &&
         hasPlan) {
       for (final node in widget.data.nodes) {
@@ -232,7 +240,8 @@ class _DashboardViewState extends State<_DashboardView> {
             targets: priorityTargets,
             selectedPlan: selectedPlan,
             selectedTarget: selectedTarget,
-            onSelectTarget: (name) => setState(() => _selectedTargetName = name),
+            onSelectTarget: (name) =>
+                setState(() => _selectedTargetName = name),
           ),
         );
         final fieldPreview = _fadeUp(
@@ -250,7 +259,8 @@ class _DashboardViewState extends State<_DashboardView> {
             target: selectedTarget,
             targets: priorityTargets,
             selectedName: _selectedTargetName,
-            onSelectTarget: (name) => setState(() => _selectedTargetName = name),
+            onSelectTarget: (name) =>
+                setState(() => _selectedTargetName = name),
           ),
         );
         final observations = _fadeUp(
@@ -273,8 +283,12 @@ class _DashboardViewState extends State<_DashboardView> {
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverPadding(
-                  padding:
-                      EdgeInsets.fromLTRB(14, topPad + 10, 14, bottomPad + 14),
+                  padding: EdgeInsets.fromLTRB(
+                    14,
+                    topPad + 10,
+                    14,
+                    bottomPad + 14,
+                  ),
                   sliver: SliverList(
                     delegate: SliverChildListDelegate([
                       Column(
@@ -301,12 +315,12 @@ class _DashboardViewState extends State<_DashboardView> {
           );
         }
 
-        final availableHeight = constraints.maxHeight - topPad - 22;
-        final observationHeight =
-            (availableHeight * 0.22).clamp(142.0, 190.0);
+        const desktopTopPad = kToolbarHeight + 6;
+        final availableHeight = constraints.maxHeight - desktopTopPad - 18;
+        final observationHeight = (availableHeight * 0.22).clamp(142.0, 190.0);
 
         return Padding(
-          padding: EdgeInsets.fromLTRB(12, topPad + 10, 12, 12),
+          padding: const EdgeInsets.fromLTRB(12, desktopTopPad, 12, 12),
           child: Column(
             children: [
               statusBanner,
@@ -498,8 +512,8 @@ class _TelescopeOpsPanel extends StatelessWidget {
     final selectedLabel = node != null
         ? node.label
         : nodes.length > 1
-            ? 'All telescopes'
-            : 'No telescope';
+        ? 'All telescopes'
+        : 'No telescope';
 
     return _OpsPanel(
       padding: EdgeInsets.zero,
@@ -516,9 +530,7 @@ class _TelescopeOpsPanel extends StatelessWidget {
             Row(
               children: [
                 LiveDot(
-                  color: node?.online == true
-                      ? BSTheme.accent
-                      : BSTheme.ink3,
+                  color: node?.online == true ? BSTheme.accent : BSTheme.ink3,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -560,10 +572,7 @@ class _TelescopeOpsPanel extends StatelessWidget {
               color: node?.online == true ? BSTheme.ink : BSTheme.ink3,
             ),
             if (node?.telescopeModel.isNotEmpty == true)
-              _KeyValueLine(
-                label: 'Model',
-                value: node!.telescopeModel,
-              ),
+              _KeyValueLine(label: 'Model', value: node!.telescopeModel),
             const SizedBox(height: 16),
             GestureDetector(
               onTap: onOpenAlerts,
@@ -593,7 +602,9 @@ class _ObservingPlanPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rows = timeline.isNotEmpty ? timeline.take(4).toList() : <TimelineItem>[];
+    final rows = timeline.isNotEmpty
+        ? timeline.take(4).toList()
+        : <TimelineItem>[];
 
     return _OpsPanel(
       padding: EdgeInsets.zero,
@@ -864,16 +875,16 @@ class _SelectedTargetPanelState extends State<_SelectedTargetPanel> {
                 value: widget.plan == null
                     ? '—'
                     : (widget.plan!.ra != 0 || widget.plan!.dec != 0)
-                        ? _formatRa(widget.plan!.ra)
-                        : '—',
+                    ? _formatRa(widget.plan!.ra)
+                    : '—',
               ),
               _KeyValueLine(
                 label: 'Dec',
                 value: widget.plan == null
                     ? '—'
                     : (widget.plan!.ra != 0 || widget.plan!.dec != 0)
-                        ? _formatDec(widget.plan!.dec)
-                        : '—',
+                    ? _formatDec(widget.plan!.dec)
+                    : '—',
               ),
               _KeyValueLine(
                 label: 'Magnitude',
@@ -886,7 +897,9 @@ class _SelectedTargetPanelState extends State<_SelectedTargetPanel> {
                 _SectionLabel('Scheduled observation'),
                 const SizedBox(height: 8),
                 _KeyValueLine(
-                    label: 'Start', value: widget.plan?.startTime ?? '—'),
+                  label: 'Start',
+                  value: widget.plan?.startTime ?? '—',
+                ),
                 _KeyValueLine(
                   label: 'Exposure',
                   value: '${widget.plan!.expDur.toStringAsFixed(0)} s',
@@ -959,8 +972,9 @@ class _TargetPickerButton extends StatelessWidget {
             style: TextStyle(
               fontFamily: 'Geist',
               color: target.name == selectedName ? BSTheme.sky : BSTheme.ink,
-              fontWeight:
-                  target.name == selectedName ? FontWeight.w900 : FontWeight.w700,
+              fontWeight: target.name == selectedName
+                  ? FontWeight.w900
+                  : FontWeight.w700,
             ),
           ),
         );
@@ -1245,88 +1259,88 @@ class _PlanTimelineRow extends StatelessWidget {
             border: Border(bottom: BorderSide(color: BSTheme.glassBorder)),
           ),
           child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            child: LiveDot(
-              color: isActive ? BSTheme.sky : BSTheme.ink3,
-              size: isActive ? 7 : 5,
-            ),
-          ),
-          Expanded(
-            flex: 42,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.target.isEmpty ? 'Scheduled target' : item.target,
+            children: [
+              SizedBox(
+                width: 20,
+                child: LiveDot(
+                  color: isActive ? BSTheme.sky : BSTheme.ink3,
+                  size: isActive ? 7 : 5,
+                ),
+              ),
+              Expanded(
+                flex: 42,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.target.isEmpty ? 'Scheduled target' : item.target,
+                      style: const TextStyle(
+                        fontFamily: 'Geist',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: BSTheme.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${item.expCount} images · ${item.expDur.toStringAsFixed(0)}s · ${item.filter.isEmpty ? 'open' : item.filter.toUpperCase()}',
+                      style: const TextStyle(
+                        fontFamily: 'Geist',
+                        fontSize: 12,
+                        color: BSTheme.ink3,
+                      ),
+                    ),
+                    if (selected) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        '${duration.toStringAsFixed(0)} min planned',
+                        style: const TextStyle(
+                          fontFamily: 'Geist',
+                          fontSize: 10,
+                          color: BSTheme.ink3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 18,
+                child: Text(
+                  type,
                   style: const TextStyle(
                     fontFamily: 'Geist',
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                    color: BSTheme.ink2,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 24,
+                child: Text(
+                  item.startTime.isEmpty ? '—' : item.startTime,
+                  style: const TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
                     color: BSTheme.ink,
                   ),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '${item.expCount} images · ${item.expDur.toStringAsFixed(0)}s · ${item.filter.isEmpty ? 'open' : item.filter.toUpperCase()}',
-                  style: const TextStyle(
+              ),
+              Expanded(
+                flex: 16,
+                child: Text(
+                  status,
+                  style: TextStyle(
                     fontFamily: 'Geist',
-                    fontSize: 12,
-                    color: BSTheme.ink3,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: isActive ? BSTheme.sky : BSTheme.ink3,
                   ),
                 ),
-                if (selected) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    '${duration.toStringAsFixed(0)} min planned',
-                    style: const TextStyle(
-                      fontFamily: 'Geist',
-                      fontSize: 10,
-                      color: BSTheme.ink3,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 18,
-            child: Text(
-              type,
-              style: const TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                color: BSTheme.ink2,
               ),
-            ),
+            ],
           ),
-          Expanded(
-            flex: 24,
-            child: Text(
-              item.startTime.isEmpty ? '—' : item.startTime,
-              style: const TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: BSTheme.ink,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 16,
-            child: Text(
-              status,
-              style: TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: isActive ? BSTheme.sky : BSTheme.ink3,
-              ),
-            ),
-          ),
-        ],
-      ),
         ),
       ),
     );
@@ -1358,61 +1372,61 @@ class _PlanTargetRow extends StatelessWidget {
             border: Border(bottom: BorderSide(color: BSTheme.glassBorder)),
           ),
           child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            child: LiveDot(
-              color: selected ? BSTheme.sky : BSTheme.ink3,
-              size: selected ? 7 : 5,
-            ),
-          ),
-          Expanded(
-            flex: 42,
-            child: Text(
-              target.name,
-              style: const TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 15,
-                fontWeight: FontWeight.w900,
-                color: BSTheme.ink,
+            children: [
+              SizedBox(
+                width: 20,
+                child: LiveDot(
+                  color: selected ? BSTheme.sky : BSTheme.ink3,
+                  size: selected ? 7 : 5,
+                ),
               ),
-            ),
-          ),
-          Expanded(
-            flex: 18,
-            child: Text(
-              target.targetType.isEmpty ? 'Target' : target.targetType,
-              style: const TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                color: BSTheme.ink2,
+              Expanded(
+                flex: 42,
+                child: Text(
+                  target.name,
+                  style: const TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                    color: BSTheme.ink,
+                  ),
+                ),
               ),
-            ),
-          ),
-          const Expanded(
-            flex: 24,
-            child: Text(
-              'Pending',
-              style: TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                color: BSTheme.ink3,
+              Expanded(
+                flex: 18,
+                child: Text(
+                  target.targetType.isEmpty ? 'Target' : target.targetType,
+                  style: const TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 13,
+                    color: BSTheme.ink2,
+                  ),
+                ),
               ),
-            ),
-          ),
-          Expanded(
-            flex: 16,
-            child: Text(
-              'P$priority',
-              style: const TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                color: BSTheme.ink3,
+              const Expanded(
+                flex: 24,
+                child: Text(
+                  'Pending',
+                  style: TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 13,
+                    color: BSTheme.ink3,
+                  ),
+                ),
               ),
-            ),
+              Expanded(
+                flex: 16,
+                child: Text(
+                  'P$priority',
+                  style: const TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 13,
+                    color: BSTheme.ink3,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
         ),
       ),
     );
@@ -1470,10 +1484,7 @@ class _ObservationTableRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(flex: 18, child: _TableText(_shortDate(obs.receivedAt))),
-          Expanded(
-            flex: 28,
-            child: _TableText(obs.targetName, strong: true),
-          ),
+          Expanded(flex: 28, child: _TableText(obs.targetName, strong: true)),
           Expanded(
             flex: 15,
             child: _TableText(obs.filter.isEmpty ? 'CV' : obs.filter),
@@ -1542,11 +1553,7 @@ class _TableText extends StatelessWidget {
 }
 
 class _KeyValueLine extends StatelessWidget {
-  const _KeyValueLine({
-    required this.label,
-    required this.value,
-    this.color,
-  });
+  const _KeyValueLine({required this.label, required this.value, this.color});
 
   final String label;
   final String value;
@@ -1728,7 +1735,9 @@ class _ReadinessPanel extends StatelessWidget {
         icon: Icons.satellite_alt,
       ),
       _ReadinessItem(
-        title: unread == 0 ? 'Alerts quiet' : '$unread alert${unread == 1 ? '' : 's'} waiting',
+        title: unread == 0
+            ? 'Alerts quiet'
+            : '$unread alert${unread == 1 ? '' : 's'} waiting',
         detail: unread == 0
             ? 'Nothing requires member attention right now.'
             : 'Review incoming notices before tonight continues.',
@@ -1740,7 +1749,9 @@ class _ReadinessPanel extends StatelessWidget {
 
     final actionNodes = nodes.where(_nodeNeedsAction).take(2).map((node) {
       return _ReadinessItem(
-        title: node.telescopeModel.isEmpty ? 'Telescope needs review' : node.telescopeModel,
+        title: node.telescopeModel.isEmpty
+            ? 'Telescope needs review'
+            : node.telescopeModel,
         detail: _nodeActionText(node),
         color: node.online ? BSTheme.warm : BSTheme.danger,
         icon: Icons.build_circle_outlined,
@@ -1814,7 +1825,9 @@ class _EvidencePanel extends StatelessWidget {
         children: [
           _PanelHeader(
             label: 'EVIDENCE',
-            title: obs.isEmpty ? 'No measurements yet today' : 'Recent measurements',
+            title: obs.isEmpty
+                ? 'No measurements yet today'
+                : 'Recent measurements',
             detail: obs.isEmpty ? null : '$accepted accepted',
             icon: Icons.science_outlined,
           ),
@@ -1822,14 +1835,12 @@ class _EvidencePanel extends StatelessWidget {
           if (obs.isNotEmpty) ...[
             SizedBox(
               height: 112,
-              child: Sparkline(
-                values: values,
-                color: BSTheme.sky,
-                height: 112,
-              ),
+              child: Sparkline(values: values, color: BSTheme.sky, height: 112),
             ),
             const SizedBox(height: 10),
-            ...obs.take(4).map(
+            ...obs
+                .take(4)
+                .map(
                   (o) => _EvidenceRow(
                     obs: o,
                     onTap: () => _openTarget(context, o.targetName),
@@ -1838,7 +1849,9 @@ class _EvidencePanel extends StatelessWidget {
           ] else if (targets.isNotEmpty)
             ...targets.take(3).map((target) => _TargetIntentRow(target: target))
           else
-            const _EmptyLine('Observations will appear here after a clear run.'),
+            const _EmptyLine(
+              'Observations will appear here after a clear run.',
+            ),
         ],
       ),
     );
@@ -1862,8 +1875,8 @@ class _PanelScrollBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final bounded = constraints.hasBoundedHeight &&
-            constraints.maxHeight.isFinite;
+        final bounded =
+            constraints.hasBoundedHeight && constraints.maxHeight.isFinite;
         if (!bounded) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1878,10 +1891,7 @@ class _PanelScrollBody extends StatelessWidget {
           children: [
             header,
             Expanded(
-              child: SingleChildScrollView(
-                padding: bodyPadding,
-                child: body,
-              ),
+              child: SingleChildScrollView(padding: bodyPadding, child: body),
             ),
           ],
         );
@@ -1923,11 +1933,7 @@ class _OpsPanel extends StatelessWidget {
             ),
             child: child,
           ),
-          Positioned(
-            left: 0,
-            top: 0,
-            child: _CornerMark(color: accent),
-          ),
+          Positioned(left: 0, top: 0, child: _CornerMark(color: accent)),
           Positioned(
             right: 0,
             bottom: 0,
@@ -2170,7 +2176,7 @@ class _TimelineIntentRow extends StatelessWidget {
     final detail = item.reason.isNotEmpty
         ? item.reason
         : '${item.expCount} exposures'
-            '${item.filter.isEmpty ? '' : ' · ${item.filter.toUpperCase()}'}';
+              '${item.filter.isEmpty ? '' : ' · ${item.filter.toUpperCase()}'}';
     return _IntentRow(
       icon: Icons.schedule,
       color: BSTheme.sky,
@@ -2194,7 +2200,8 @@ class _TargetIntentRow extends StatelessWidget {
       icon: Icons.my_location,
       color: priority > 70 ? BSTheme.warm : BSTheme.sky,
       title: target.name,
-      detail: '$type · priority $priority · ${target.nMeasurements} measurements',
+      detail:
+          '$type · priority $priority · ${target.nMeasurements} measurements',
       onTap: () => _openTarget(context, target.name),
     );
   }
@@ -2211,8 +2218,8 @@ class _EvidenceRow extends StatelessWidget {
     final magColor = obs.magnitude < 8
         ? BSTheme.warm
         : obs.magnitude < 11
-            ? BSTheme.sky
-            : BSTheme.ink2;
+        ? BSTheme.sky
+        : BSTheme.ink2;
     final status = obs.aavsoSubmitted ? 'AAVSO accepted' : obs.qualityFlag;
     return _IntentRow(
       icon: Icons.scatter_plot_outlined,
@@ -2302,10 +2309,7 @@ class _IntentRow extends StatelessWidget {
               ],
             ),
           ),
-          if (trailing != null) ...[
-            const SizedBox(width: 8),
-            trailing!,
-          ],
+          if (trailing != null) ...[const SizedBox(width: 8), trailing!],
         ],
       ),
     );
@@ -2327,7 +2331,8 @@ String _nodeActionText(Node node) {
     return 'Set an observing site before tonight can begin.';
   }
   if (node.isSleeping) return 'Sleeping now. It will wait for assignment.';
-  if (node.isOnVacation) return 'Vacation mode is active until ${node.vacationUntil}.';
+  if (node.isOnVacation)
+    return 'Vacation mode is active until ${node.vacationUntil}.';
   return 'Review this telescope before the next observing window.';
 }
 
@@ -2367,8 +2372,8 @@ class _Hero extends StatelessWidget {
     final networkColor = totalNodes == 0
         ? BSTheme.ink3
         : allOnline
-            ? BSTheme.success
-            : BSTheme.warm;
+        ? BSTheme.success
+        : BSTheme.warm;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2416,7 +2421,9 @@ class _Hero extends StatelessWidget {
                   LiveDot(color: networkColor),
                   const SizedBox(width: 7),
                   Text(
-                    totalNodes == 0 ? 'No telescopes' : '$online/$totalNodes live',
+                    totalNodes == 0
+                        ? 'No telescopes'
+                        : '$online/$totalNodes live',
                     style: TextStyle(
                       fontFamily: 'Geist',
                       fontSize: 11,
@@ -2498,17 +2505,21 @@ class _ActivityPanel extends StatelessWidget {
             detail: 'last 24 h',
           ),
           if (obs.isEmpty && timeline.isEmpty)
-            const Expanded(child: _EmptyLine('No observations in the last 24 hours.'))
+            const Expanded(
+              child: _EmptyLine('No observations in the last 24 hours.'),
+            )
           else if (obs.isEmpty) ...[
             const SizedBox(height: 10),
             Expanded(
               child: ListView(
                 padding: EdgeInsets.zero,
-                children: timeline.take(6).map((t) => _TimelineRow(item: t)).toList(),
+                children: timeline
+                    .take(6)
+                    .map((t) => _TimelineRow(item: t))
+                    .toList(),
               ),
             ),
-          ]
-          else ...[
+          ] else ...[
             const SizedBox(height: 10),
             // Full-height sparkline — dominant visual in the left column.
             Expanded(
@@ -2523,7 +2534,12 @@ class _ActivityPanel extends StatelessWidget {
             const SizedBox(height: 8),
             ...obs
                 .take(4)
-                .map((o) => _ActivityRow(obs: o, onTap: () => _openTarget(context, o.targetName))),
+                .map(
+                  (o) => _ActivityRow(
+                    obs: o,
+                    onTap: () => _openTarget(context, o.targetName),
+                  ),
+                ),
           ],
         ],
       ),
@@ -2585,10 +2601,12 @@ class _ActivityRow extends StatelessWidget {
     final magColor = obs.magnitude < 8
         ? BSTheme.warm
         : obs.magnitude < 11
-            ? BSTheme.accent
-            : BSTheme.ink2;
+        ? BSTheme.accent
+        : BSTheme.ink2;
 
-    return _DashboardTapRow(onTap: onTap, child: Row(
+    return _DashboardTapRow(
+      onTap: onTap,
+      child: Row(
         children: [
           Icon(Icons.star_rounded, size: 13, color: magColor),
           const SizedBox(width: 8),
@@ -2629,7 +2647,8 @@ class _ActivityRow extends StatelessWidget {
             ),
           ),
         ],
-      ));
+      ),
+    );
   }
 }
 
@@ -2659,11 +2678,7 @@ class _TargetsPanel extends StatelessWidget {
                   color: BSTheme.warm,
                 ),
               ),
-              const Icon(
-                Icons.chevron_right,
-                size: 14,
-                color: BSTheme.ink3,
-              ),
+              const Icon(Icons.chevron_right, size: 14, color: BSTheme.ink3),
             ],
           ),
           if (targets.isEmpty)
@@ -2676,10 +2691,12 @@ class _TargetsPanel extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: sorted
                       .take(4)
-                      .map((t) => _TargetRow(
-                            target: t,
-                            onTap: () => _openTarget(context, t.name),
-                          ))
+                      .map(
+                        (t) => _TargetRow(
+                          target: t,
+                          onTap: () => _openTarget(context, t.name),
+                        ),
+                      )
                       .toList(),
                 ),
               ),
@@ -2702,10 +2719,11 @@ class _TargetRow extends StatelessWidget {
     final barColor = p > 0.7
         ? BSTheme.accent
         : p > 0.4
-            ? BSTheme.warm
-            : BSTheme.ink3;
-    final typeLabel =
-        target.targetType.isEmpty ? '—' : target.targetType.toUpperCase();
+        ? BSTheme.warm
+        : BSTheme.ink3;
+    final typeLabel = target.targetType.isEmpty
+        ? '—'
+        : target.targetType.toUpperCase();
 
     return _DashboardTapRow(
       onTap: onTap,
@@ -2745,7 +2763,10 @@ class _TargetRow extends StatelessWidget {
               const Text(
                 'obs',
                 style: TextStyle(
-                    fontFamily: 'Geist', fontSize: 9, color: BSTheme.ink3),
+                  fontFamily: 'Geist',
+                  fontSize: 9,
+                  color: BSTheme.ink3,
+                ),
               ),
             ],
           ),
@@ -2766,10 +2787,7 @@ class _TargetRow extends StatelessWidget {
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(2),
                         gradient: LinearGradient(
-                          colors: [
-                            barColor.withValues(alpha: 0.5),
-                            barColor,
-                          ],
+                          colors: [barColor.withValues(alpha: 0.5), barColor],
                         ),
                         boxShadow: [
                           BoxShadow(
@@ -2821,11 +2839,7 @@ class _AlertsPanel extends StatelessWidget {
                   color: unread > 0 ? BSTheme.danger : BSTheme.success,
                 ),
               ),
-              const Icon(
-                Icons.chevron_right,
-                size: 14,
-                color: BSTheme.ink3,
-              ),
+              const Icon(Icons.chevron_right, size: 14, color: BSTheme.ink3),
             ],
           ),
           if (alerts.isEmpty)
@@ -2843,11 +2857,10 @@ class _AlertsPanel extends StatelessWidget {
                       ? MainAxisAlignment.center
                       : MainAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
-                  children:
-                      alerts
-                          .take(3)
-                          .map((a) => _AlertRow(alert: a, onTap: onOpenAlerts))
-                          .toList(),
+                  children: alerts
+                      .take(3)
+                      .map((a) => _AlertRow(alert: a, onTap: onOpenAlerts))
+                      .toList(),
                 ),
               ),
             ),
@@ -2866,7 +2879,9 @@ class _AlertRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unread = !alert.read;
-    return _DashboardTapRow(onTap: onTap, child: Row(
+    return _DashboardTapRow(
+      onTap: onTap,
+      child: Row(
         children: [
           Container(
             width: 6,
@@ -2911,7 +2926,8 @@ class _AlertRow extends StatelessWidget {
             ),
           ),
         ],
-      ));
+      ),
+    );
   }
 }
 
@@ -2995,10 +3011,10 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
   String _selectedProgram = '';
 
   static Color _programColor(String program) => switch (program) {
-        'exoplanet_transits'  => BSTheme.accent,
-        'transient_follow_up' => BSTheme.danger,
-        _                     => BSTheme.warm,
-      };
+    'exoplanet_transits' => BSTheme.accent,
+    'transient_follow_up' => BSTheme.danger,
+    _ => BSTheme.warm,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -3046,7 +3062,9 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 5),
+                        horizontal: 12,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(100),
                         color: selected
@@ -3082,8 +3100,10 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
                 _selectedProgram.isEmpty
                     ? 'No active targets.'
                     : 'No targets in this program yet.',
-                style:
-                    const TextStyle(fontFamily: 'Geist', color: BSTheme.ink3),
+                style: const TextStyle(
+                  fontFamily: 'Geist',
+                  color: BSTheme.ink3,
+                ),
               ),
             )
           : ListView.separated(
@@ -3097,10 +3117,10 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
                 final barColor = t.scienceProgram.isNotEmpty
                     ? _programColor(t.scienceProgram)
                     : (p > 0.7
-                        ? BSTheme.accent
-                        : p > 0.4
-                            ? BSTheme.warm
-                            : BSTheme.ink3);
+                          ? BSTheme.accent
+                          : p > 0.4
+                          ? BSTheme.warm
+                          : BSTheme.ink3);
                 final typeLabel = t.targetType.isEmpty
                     ? '—'
                     : t.targetType.toUpperCase();
@@ -3108,8 +3128,7 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
                 return GestureDetector(
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) =>
-                          TargetDetailScreen(targetName: t.name),
+                      builder: (_) => TargetDetailScreen(targetName: t.name),
                     ),
                   ),
                   child: Padding(
