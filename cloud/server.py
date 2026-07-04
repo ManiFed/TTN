@@ -43,7 +43,7 @@ from urllib.parse import quote
 
 from flask import Flask, jsonify, make_response, request, send_from_directory
 
-from cloud import alerts, auth, data_pipeline, db, help_chat, nights, registry, scheduler, scoring, tuning
+from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, nights, registry, scheduler, scoring, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -304,6 +304,19 @@ def api_register():
         if code_row is None:
             return jsonify({"error": f"activation code not found: {activation_code}"}), 404
         if code_row.get("used_at"):
+            # Idempotent retry window: when the code was consumed moments ago
+            # and is linked to a node, the registration response was most
+            # likely lost in transit (the node crashed or the connection
+            # dropped after the server committed).  Possession of the one-time
+            # code authorises recovering the same credentials; without this a
+            # lost response permanently bricks the member's activation.
+            retry = _activation_retry_credentials(code_row)
+            if retry is not None:
+                logger.warning(
+                    "Activation code %s re-presented within retry window — "
+                    "returning existing credentials for %s",
+                    activation_code, retry["node_id"])
+                return jsonify(retry)
             return jsonify({"error": "activation code already used"}), 409
         if code_row.get("expires_at") and code_row["expires_at"] < _now():
             return jsonify({"error": "activation code expired"}), 410
@@ -371,12 +384,68 @@ def api_register():
     return jsonify(creds)
 
 
+_ACTIVATION_RETRY_WINDOW_S = 900
+
+
+def _activation_retry_credentials(code_row: dict) -> dict | None:
+    """Existing creds for a just-consumed activation code, or None."""
+    used_at = str(code_row.get("used_at") or "")
+    linked_node = str(code_row.get("node_id") or "")
+    if not used_at or not linked_node:
+        return None
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(used_at)).total_seconds()
+    except ValueError:
+        return None
+    if age < 0 or age > _ACTIVATION_RETRY_WINDOW_S:
+        return None
+    existing = db.query_one(
+        "SELECT node_id, api_key FROM nodes WHERE node_id = %s", (linked_node,))
+    if not existing:
+        return None
+    return {"node_id": existing["node_id"], "api_key": existing["api_key"]}
+
+
 @app.route("/api/v1/nodes/heartbeat", methods=["POST"])
 @require_node
 def api_heartbeat(node):
     body = request.get_json(force=True, silent=True) or {}
     registry.heartbeat(node["node_id"], body.get("conditions"))
     return jsonify({"ok": True, "server_time": _now()})
+
+
+@app.route("/api/v1/incidents", methods=["POST"])
+@require_node
+def api_node_incident(node):
+    """Structured incident reported by a node agent (telemetry forwarder).
+
+    Feeds the same reliability_incidents table the cloud writes to, so slew
+    failures, emergency parks, disk exhaustion etc. are visible to a remote
+    operator the moment they happen instead of the morning after.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    incident_type = str(body.get("incident_type") or "").strip()
+    if not incident_type:
+        return jsonify({"error": "incident_type required"}), 400
+    severity = str(body.get("severity") or "info").lower()
+    if severity not in ("info", "warning", "error", "critical"):
+        severity = "info"
+    detail = body.get("detail")
+    if not isinstance(detail, dict):
+        detail = {"raw": str(detail)[:500]} if detail else {}
+    # Bound stored detail so a chatty node can't bloat the incidents table.
+    detail_json = json.dumps(detail)
+    if len(detail_json) > 4000:
+        detail = {"truncated": detail_json[:4000]}
+    incidents.log(
+        node["node_id"],
+        incident_type,
+        severity=severity,
+        target_name=str(body.get("target_name") or ""),
+        detail=detail,
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/api/v1/nodes/me", methods=["GET"])

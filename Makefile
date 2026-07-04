@@ -21,3 +21,13 @@ deploy-cloud:
 # Deploy everything
 .PHONY: deploy
 deploy: deploy-web deploy-cloud
+
+# Run the full test suite (unit tests + reliability gauntlet)
+.PHONY: test
+test:
+	venv/bin/python -m unittest discover -s tests -t .
+
+# Run only the autonomous-node reliability gauntlet (fault-injection tests)
+.PHONY: gauntlet
+gauntlet:
+	venv/bin/python -m unittest discover -s tests/gauntlet -t .

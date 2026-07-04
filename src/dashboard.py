@@ -43,6 +43,8 @@ from src.geolocation import enrich_config_with_location
 from src.telescope_specs import enrich_config_with_telescope
 from src.stacking import LiveStacker
 from src.cloud_communicator import CloudCommunicator
+from src import telemetry as _telemetry
+from src.node_supervisor import NodeSupervisor
 
 
 app = Flask(__name__)
@@ -57,6 +59,7 @@ _state: dict[str, Any] = {
     "telescope": {
         "enabled":   False,
         "connected": False,
+        "error":     None,       # user-facing reason the last connect attempt failed
         "slewing":   None,
         "parked":    None,
         "tracking":  None,
@@ -69,6 +72,7 @@ _state: dict[str, Any] = {
     "camera": {
         "enabled":          False,
         "connected":        False,
+        "error":            None,
         "state":            None,
         "state_name":       None,
         "image_ready":      None,
@@ -79,6 +83,7 @@ _state: dict[str, Any] = {
     "focuser": {
         "enabled":   False,
         "connected": False,
+        "error":     None,
         "position":  None,
         "moving":    False,
         "autofocus_running": False,
@@ -139,6 +144,9 @@ def _enqueue_photometry(fits_path: str) -> None:
             "Photometry queue full (%d items) — dropping %s",
             _PHOT_QUEUE_MAX, os.path.basename(fits_path),
         )
+        _telemetry.event("photometry_queue_full", severity="warning",
+                         detail={"dropped": os.path.basename(fits_path),
+                                 "queue_max": _PHOT_QUEUE_MAX})
 
 
 def _phot_worker() -> None:
@@ -169,6 +177,7 @@ _sched_state: dict = {
     "completed":       0,
     "total":           0,
     "error":           None,
+    "source":          "",   # manual | cloud | interrupt
 }
 
 # ── Image history ─────────────────────────────────────────────────────────────
@@ -705,8 +714,14 @@ def _run_photometry_bg(fits_path: str) -> None:
         else:
             logger.warning("Photometry pipeline returned no result for %s",
                            os.path.basename(fits_path))
+            _telemetry.event("photometry_failed", severity="warning",
+                             detail={"file": os.path.basename(fits_path),
+                                     "reason": "pipeline returned no result"})
     except Exception as exc:
         logger.error("Photometry pipeline crashed: %s", exc)
+        _telemetry.event("photometry_failed", severity="error",
+                         detail={"file": os.path.basename(fits_path),
+                                 "reason": str(exc)[:300]})
     finally:
         with _state_lock:
             _state["photometry"]["running"] = False
@@ -761,6 +776,13 @@ def _cloud_conditions() -> dict:
             out["last_heartbeat_ok"] = _cloud.status.get("last_heartbeat_ok")
         except Exception:
             pass
+    try:
+        # Structured evidence: recent warning+ events, counters, disk space —
+        # lands in the cloud's nodes.last_conditions so a remote operator can
+        # see *why* a night failed without touching the member's machine.
+        out["events"] = _telemetry.heartbeat_summary()
+    except Exception:
+        pass
     return out
 
 
@@ -785,54 +807,67 @@ def _cloud_disconnect_monitor_loop() -> None:
     global _cloud_disconnect_since, _cloud_disconnect_parked
     while True:
         time.sleep(30)
-        cfg = _load_config().get("cloud", {})
-        timeout = float(cfg.get("disconnect_park_timeout", 1800))
-        if timeout <= 0 or _cloud is None or not _cloud.status.get("registered"):
-            _cloud_disconnect_since = None
-            _cloud_disconnect_parked = False
-            continue
+        try:
+            _cloud_disconnect_tick()
+        except Exception as exc:
+            # This watchdog must survive anything (a corrupt config used to
+            # kill it permanently and silently).
+            logger.error("Cloud disconnect monitor tick failed: %s", exc)
 
-        ok = _cloud.status.get("last_heartbeat_ok")
-        if ok is True:
-            if _cloud_disconnect_since is not None:
-                logger.info("Cloud heartbeat restored — disconnect timer cleared")
-            _cloud_disconnect_since = None
-            _cloud_disconnect_parked = False
-            continue
 
-        if ok is not False:
-            continue
+def _cloud_disconnect_tick() -> None:
+    """One evaluation of the cloud-disconnect park policy (called every 30 s)."""
+    global _cloud_disconnect_since, _cloud_disconnect_parked
+    cfg = _load_config().get("cloud", {})
+    timeout = float(cfg.get("disconnect_park_timeout", 1800))
+    if timeout <= 0 or _cloud is None or not _cloud.status.get("registered"):
+        _cloud_disconnect_since = None
+        _cloud_disconnect_parked = False
+        return
 
-        now = time.monotonic()
-        if _cloud_disconnect_since is None:
-            _cloud_disconnect_since = now
-            logger.warning(
-                "Cloud heartbeat failing — will park after %ds without contact",
-                int(timeout),
-            )
-            continue
+    ok = _cloud.status.get("last_heartbeat_ok")
+    if ok is True:
+        if _cloud_disconnect_since is not None:
+            logger.info("Cloud heartbeat restored — disconnect timer cleared")
+        _cloud_disconnect_since = None
+        _cloud_disconnect_parked = False
+        return
 
-        elapsed = now - _cloud_disconnect_since
-        if elapsed < timeout or _cloud_disconnect_parked:
-            continue
+    if ok is not False:
+        return
 
-        _cloud_disconnect_parked = True
-        reason = f"cloud connection lost >{int(timeout)}s"
-        logger.critical("Cloud disconnect timeout — emergency park (%s)", reason)
-        if _safety_mgr is not None:
-            _safety_mgr.emergency_park(reason)
-        elif _tel is not None:
-            _on_safety_unsafe()
+    now = time.monotonic()
+    if _cloud_disconnect_since is None:
+        _cloud_disconnect_since = now
+        logger.warning(
+            "Cloud heartbeat failing — will park after %ds without contact",
+            int(timeout),
+        )
+        return
 
-            def _park() -> None:
-                try:
-                    with _device_lock:
-                        _tel.park()
-                    logger.info("Park complete after cloud disconnect")
-                except Exception as exc:
-                    logger.error("Park after cloud disconnect failed: %s", exc)
+    elapsed = now - _cloud_disconnect_since
+    if elapsed < timeout or _cloud_disconnect_parked:
+        return
 
-            threading.Thread(target=_park, daemon=True, name="cloud-disco-park").start()
+    _cloud_disconnect_parked = True
+    reason = f"cloud connection lost >{int(timeout)}s"
+    logger.critical("Cloud disconnect timeout — emergency park (%s)", reason)
+    _telemetry.event("cloud_disconnect_park", severity="critical",
+                     detail={"timeout_s": int(timeout)})
+    if _safety_mgr is not None:
+        _safety_mgr.emergency_park(reason)
+    elif _tel is not None:
+        _on_safety_unsafe()
+
+        def _park() -> None:
+            try:
+                with _device_lock:
+                    _tel.park()
+                logger.info("Park complete after cloud disconnect")
+            except Exception as exc:
+                logger.error("Park after cloud disconnect failed: %s", exc)
+
+        threading.Thread(target=_park, daemon=True, name="cloud-disco-park").start()
 
 
 def _on_cloud_plan(items: list) -> None:
@@ -842,7 +877,11 @@ def _on_cloud_plan(items: list) -> None:
     valid, err = _validate_schedule_items(items)
     if err is not None:
         logger.warning("Cloud plan rejected by validator: %s", err)
+        _telemetry.event("plan_rejected", severity="error",
+                         detail={"reason": err, "items": len(items)})
         return
+    _telemetry.event("plan_received", severity="info",
+                     detail={"items": len(valid)})
     cfg = _load_config()
     if not cfg.get("cloud", {}).get("auto_run_plans", True):
         logger.warning("Cloud plan received (%d items) — auto_run_plans is off, "
@@ -850,16 +889,38 @@ def _on_cloud_plan(items: list) -> None:
                         "plan is started manually from the dashboard", len(valid))
         if _cloud is not None:
             _cloud.status["plan_pending_review"] = True
+        _telemetry.event("plan_deferred_auto_run_off", severity="warning",
+                         detail={"items": len(valid)})
         return
     if _cloud is not None:
         _cloud.status["plan_pending_review"] = False
     with _sched_lock:
         if _sched_state["running"]:
-            logger.info("Cloud plan received but a schedule is already "
-                        "running — not starting it")
+            # A newer cloud plan supersedes an older one that hasn't actually
+            # started observing yet (still waiting for darkness or a start
+            # time).  An actively exposing schedule is never pre-empted here.
+            if (_sched_state.get("source") == "cloud"
+                    and _sched_state.get("current_phase")
+                    in ("starting", "waiting_for_dark", "waiting")):
+                logger.info("New cloud plan supersedes the waiting one — replacing")
+                _sched_state["cancelled"] = True
+            else:
+                logger.info("Cloud plan received but a schedule is already "
+                            "running — not starting it")
+                return
+    # If we superseded, give the old runner a moment to unwind.
+    for _ in range(100):
+        with _sched_lock:
+            if not _sched_state["running"]:
+                break
+        time.sleep(0.1)
+    with _sched_lock:
+        if _sched_state["running"]:
+            logger.warning("Previous schedule did not stop — new plan not started")
             return
     threading.Thread(
         target=_run_schedule_bg, args=(valid,),
+        kwargs={"source": "cloud", "wait_for_dark": True},
         daemon=True, name="sched-runner-cloud",
     ).start()
     logger.info("Cloud plan started: %d observations", len(valid))
@@ -906,6 +967,16 @@ def _on_cloud_interrupt(item: dict) -> None:
         "notes":    f"interrupt: {item.get('reason', '')}",
     }
 
+    # Interrupts drive the mount exactly like plan items — hold them to the
+    # same coordinate/exposure bounds instead of trusting the payload.
+    valid, err = _validate_schedule_items([sched_item])
+    if err is not None:
+        logger.warning("Interrupt %s rejected by validator: %s", name, err)
+        _telemetry.event("interrupt_rejected", severity="warning",
+                         target=name, detail={"reason": err})
+        return
+    sched_item = valid[0]
+
     logger.warning("Interrupt queued: %s (%.1fs × %d, time_critical=%s)",
                    name, exp_dur, exp_count, time_critical)
     _interrupt_queue.put_nowait(sched_item)
@@ -936,7 +1007,7 @@ def _interrupt_dispatcher_loop() -> None:
             time.sleep(1)
 
         logger.info("Interrupt dispatcher: running %d interrupt observation(s)", len(items))
-        _run_schedule_bg(items)
+        _run_schedule_bg(items, source="interrupt", wait_for_dark=True)
 
 
 # ── Safety manager ─────────────────────────────────────────────────────────────
@@ -955,6 +1026,10 @@ def _on_safety_unsafe() -> None:
     with _state_lock:
         _state["error"] = f"Safety stop: {reason}"
     logger.critical("Safety manager triggered: %s", reason)
+    # Dawn parks are routine; anything else is an emergency worth flagging.
+    routine = str(reason).startswith("dawn")
+    _telemetry.event("emergency_park", severity="info" if routine else "critical",
+                     detail={"reason": reason})
 
 
 # ── Horizon scan state ────────────────────────────────────────────────────────
@@ -1638,18 +1713,22 @@ def _poll_loop() -> None:
                         arm_state = None
                 with _state_lock:
                     _state["telescope"].update(
-                        connected=True, ra=ra, dec=dec,
+                        connected=True, error=None, ra=ra, dec=dec,
                         slewing=slewing, parked=parked, tracking=tracking,
                         arm_state=arm_state,
                     )
                 if _tel_connected_prev is False:
                     logger.info("Telescope connection restored")
                 _tel_connected_prev = True
-            except Exception:
+            except Exception as exc:
                 with _state_lock:
+                    _tel_host = _state["server"]["address"] if _state["server"] else "?"
+                    _tel_port = _state["server"]["port"] if _state["server"] else 0
                     _state["telescope"]["connected"] = False
+                    _state["telescope"]["error"] = _friendly_conn_error(
+                        "telescope", _tel_host, _tel_port, exc)
                 if _tel_connected_prev is True:
-                    logger.warning("Telescope connection lost")
+                    logger.warning("Telescope connection lost: %s", exc)
                 _tel_connected_prev = False
 
         if cam_enabled and _cam is not None:
@@ -1658,18 +1737,22 @@ def _poll_loop() -> None:
                 img_ready = _cam.image_ready()
                 with _state_lock:
                     _state["camera"].update(
-                        connected=True, state=state,
+                        connected=True, error=None, state=state,
                         state_name=_CAMERA_STATES.get(state, "Unknown"),
                         image_ready=img_ready,
                     )
                 if _cam_connected_prev is False:
                     logger.info("Camera connection restored")
                 _cam_connected_prev = True
-            except Exception:
+            except Exception as exc:
                 with _state_lock:
+                    _cam_host = _state["server"]["address"] if _state["server"] else "?"
+                    _cam_port = _state["server"]["port"] if _state["server"] else 0
                     _state["camera"]["connected"] = False
+                    _state["camera"]["error"] = _friendly_conn_error(
+                        "camera", _cam_host, _cam_port, exc)
                 if _cam_connected_prev is True:
-                    logger.warning("Camera connection lost")
+                    logger.warning("Camera connection lost: %s", exc)
                 _cam_connected_prev = False
 
         # Poll focuser position only when it isn't mid-autofocus (the sweep holds
@@ -1683,10 +1766,14 @@ def _poll_loop() -> None:
                 pos    = _foc.position()
                 moving = _foc.is_moving()
                 with _state_lock:
-                    _state["focuser"].update(connected=True, position=pos, moving=moving)
-            except Exception:
+                    _state["focuser"].update(connected=True, error=None, position=pos, moving=moving)
+            except Exception as exc:
                 with _state_lock:
+                    _foc_host = _state["server"]["address"] if _state["server"] else "?"
+                    _foc_port = _state["server"]["port"] if _state["server"] else 0
                     _state["focuser"]["connected"] = False
+                    _state["focuser"]["error"] = _friendly_conn_error(
+                        "focuser", _foc_host, _foc_port, exc)
 
         if _safety_mgr is not None:
             try:
@@ -1712,12 +1799,35 @@ def _start_poller() -> None:
 
 # ── Config helper ──────────────────────────────────────────────────────────────
 
+# Last successfully parsed config. A half-written or hand-mangled config.yaml
+# must degrade to the previous good config, not crash whichever background
+# loop happened to call _load_config() next (the cloud-disconnect watchdog
+# reads it every 30 s and used to die permanently on a parse error).
+_last_good_config: dict = {}
+_config_parse_error_reported = False
+
+
 def _load_config() -> dict:
+    global _last_good_config, _config_parse_error_reported
     try:
         with open("config.yaml") as fh:
             cfg = yaml.safe_load(fh)
+        if cfg is not None and not isinstance(cfg, dict):
+            raise ValueError("config.yaml root must be a mapping")
+        if _config_parse_error_reported:
+            _config_parse_error_reported = False
+            _telemetry.event("config_parse_recovered", severity="info")
     except FileNotFoundError:
         cfg = {}
+    except Exception as exc:
+        if not _config_parse_error_reported:
+            _config_parse_error_reported = True
+            _telemetry.event(
+                "config_parse_failed", severity="error",
+                detail={"error": str(exc)[:300],
+                        "hint": "config.yaml is corrupt — using last good config"})
+        cfg = copy.deepcopy(_last_good_config)
+    _last_good_config = copy.deepcopy(cfg or {})
     cfg = enrich_config_with_location(cfg)
     return enrich_config_with_telescope(cfg)
 
@@ -1898,9 +2008,26 @@ def api_discover():
 _SEESTAR_AP_IP = "192.168.4.1"
 
 
+def _friendly_conn_error(device: str, host: str, port: int, exc: Exception) -> str:
+    """Turn a raw ALPACA connection exception into an actionable message for the UI."""
+    exc_str = str(exc).lower()
+    unreachable = (
+        "timed out" in exc_str or "timeout" in exc_str or "refused" in exc_str or
+        "no route to host" in exc_str or "network is unreachable" in exc_str or
+        "connectionerror" in exc_str or "failed to establish a new connection" in exc_str
+    )
+    if unreachable:
+        return (
+            f"Can't reach the {device} at {host}:{port}. It looks like the Seestar is "
+            f"offline or its network address changed. Check that it's powered on and "
+            f"connected to Wi-Fi, then check your router's device list for its current IP "
+            f"(it may differ from {host} if it rejoined the network)."
+        )
+    return f"Can't reach the {device} at {host}:{port}: {exc}"
+
+
 @app.route("/api/connect", methods=["POST"])
 def api_connect():
-    global _tel, _cam, _cover, _foc
     data    = request.get_json(force=True) or {}
     host    = data.get("host", "")
     port    = int(data.get("port", 11111))
@@ -1914,6 +2041,20 @@ def api_connect():
             )
         }), 400
 
+    body, status = _do_connect(host, port,
+                               set_as_default=bool(data.get("set_as_default", False)))
+    return jsonify(body), status
+
+
+def _do_connect(host: str, port: int, set_as_default: bool = False) -> tuple[dict, int]:
+    """Connect telescope/camera/focuser/cover at *host:port*.
+
+    Shared by the /api/connect route and the headless NodeSupervisor
+    reconnect path, so a service restart at 2 a.m. re-establishes devices
+    without anyone opening the browser dashboard.
+    """
+    global _tel, _cam, _cover, _foc, _manual_disconnect
+    _manual_disconnect = False
     cfg     = _load_config()
     api_ver = cfg.get("alpaca", {}).get("api_version", 1)
     devices = cfg.get("devices", {})
@@ -1943,18 +2084,16 @@ def api_connect():
                 pass
             with _state_lock:
                 _state["telescope"].update(
-                    enabled=True, connected=True,
+                    enabled=True, connected=True, error=None,
                     device_name=tel_device_name, serial=tel_serial,
                 )
             if tel_serial:
                 try:
-                    cfg_w = _load_config()
-                    cfg_w.setdefault("observatory", {})["telescope_serial"] = tel_serial
+                    from src.config_patch import apply_config_patch
+                    obs_patch: dict = {"telescope_serial": tel_serial}
                     if tel_device_name:
-                        cfg_w["observatory"]["telescope_name"] = tel_device_name
-                    with open("config.yaml", "w") as fh:
-                        yaml.dump(cfg_w, fh, default_flow_style=False,
-                                  sort_keys=False, allow_unicode=True)
+                        obs_patch["telescope_name"] = tel_device_name
+                    apply_config_patch({"observatory": obs_patch})
                     logger.info("Telescope identified: %s (serial: %s)", tel_device_name, tel_serial)
                 except Exception as exc:
                     logger.warning("Could not save telescope serial: %s", exc)
@@ -1962,7 +2101,10 @@ def api_connect():
                 _safety_mgr.attach_telescope(_tel)
         except Exception as exc:
             logger.error("Telescope connect failed: %s", exc)
-            errors.append(f"telescope: {exc}")
+            friendly = _friendly_conn_error("telescope", host, port, exc)
+            errors.append(friendly)
+            with _state_lock:
+                _state["telescope"]["error"] = friendly
             _tel = None
 
     if devices.get("camera", {}).get("enabled", False):
@@ -1972,10 +2114,13 @@ def api_connect():
             _cam.connect()
             cam_ok = True
             with _state_lock:
-                _state["camera"].update(enabled=True, connected=True)
+                _state["camera"].update(enabled=True, connected=True, error=None)
         except Exception as exc:
             logger.error("Camera connect failed: %s", exc)
-            errors.append(f"camera: {exc}")
+            friendly = _friendly_conn_error("camera", host, port, exc)
+            errors.append(friendly)
+            with _state_lock:
+                _state["camera"]["error"] = friendly
             _cam = None
 
     if devices.get("focuser", {}).get("enabled", False):
@@ -1984,10 +2129,12 @@ def api_connect():
             _foc = Focuser(host, port, num, api_ver)
             _foc.connect()
             with _state_lock:
-                _state["focuser"].update(enabled=True, connected=True,
+                _state["focuser"].update(enabled=True, connected=True, error=None,
                                          position=_foc.position())
         except Exception as exc:
             logger.warning("Focuser connect failed (autofocus unavailable): %s", exc)
+            with _state_lock:
+                _state["focuser"]["error"] = _friendly_conn_error("focuser", host, port, exc)
             _foc = None
 
     if devices.get("covercalibrator", {}).get("enabled", False):
@@ -2003,21 +2150,18 @@ def api_connect():
         with _state_lock:
             _state["connected"] = False
             _state["server"] = None
-        return jsonify({"error": "No devices connected — " + "; ".join(errors)}), 502
+        return {"error": "No devices connected — " + "; ".join(errors)}, 502
 
     with _state_lock:
         _state["connected"] = True
 
-    if bool(data.get("set_as_default", False)):
+    if set_as_default:
         try:
-            cfg_w = _load_config()
-            if "alpaca" not in cfg_w or cfg_w["alpaca"] is None:
-                cfg_w["alpaca"] = {}
-            cfg_w["alpaca"]["default_server"] = {"address": host, "port": port}
-            with open("config.yaml", "w") as fh:
-                yaml.dump(cfg_w, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            from src.config_patch import apply_config_patch
+            apply_config_patch(
+                {"alpaca": {"default_server": {"address": host, "port": port}}})
             logger.info("Default ALPACA server set to %s:%d", host, port)
-        except OSError as exc:
+        except Exception as exc:
             logger.warning("Could not save default server: %s", exc)
 
     _parts = []
@@ -2029,12 +2173,59 @@ def api_connect():
     _start_poller()
     threading.Thread(target=_auto_mount_and_watch, args=(host,), daemon=True,
                      name="smb-automount").start()
-    return jsonify({"ok": True, "telescope": tel_ok, "camera": cam_ok, "errors": errors})
+    return {"ok": True, "telescope": tel_ok, "camera": cam_ok, "errors": errors}, 200
+
+
+# ── Supervisor glue ────────────────────────────────────────────────────────────
+# True after an explicit user disconnect: the supervisor must not fight the
+# member by silently reconnecting hardware they chose to release.
+_manual_disconnect = False
+
+
+def _supervisor_devices_ok() -> bool:
+    """Whether the supervisor should consider device connectivity handled."""
+    if _manual_disconnect:
+        return True  # user chose to disconnect — leave it alone
+    return _tel is not None or _cam is not None
+
+
+def _supervisor_connect(host: str, port: int) -> bool:
+    _body, status = _do_connect(host, port)
+    return status == 200
+
+
+def _supervisor_watcher_ok() -> bool:
+    if _image_watcher is None:
+        return False
+    return (bool(getattr(_image_watcher, "_running", False))
+            and os.path.isdir(getattr(_image_watcher, "_path", "")))
+
+
+def _revive_image_watcher() -> bool:
+    """Re-mount the Seestar share if possible and restart the image watcher."""
+    cfg = _load_config()
+    iw_cfg = cfg.get("image_watcher", {}) or {}
+    if not iw_cfg.get("enabled", False):
+        return True
+    with _state_lock:
+        srv = _state.get("server") or {}
+    host = srv.get("address")
+    if host:
+        mount_path = _try_mount_seestar_smb(host)
+        if mount_path:
+            _start_image_watcher_at(mount_path)
+            return True
+    path = iw_cfg.get("watch_path", "")
+    if path and os.path.isdir(path):
+        _start_image_watcher_at(path)
+        return True
+    return False
 
 
 @app.route("/api/disconnect", methods=["POST"])
 def api_disconnect():
-    global _tel, _cam, _cover, _foc
+    global _tel, _cam, _cover, _foc, _manual_disconnect
+    _manual_disconnect = True
     with _state_lock:
         _server = _state.get("server") or {}
     _disc_host = _server.get("address", "")
@@ -2997,6 +3188,32 @@ def _sched_cancelled() -> bool:
         return _sched_state["cancelled"]
 
 
+def _start_wait_seconds(start_str: str, now: Optional[time.struct_time] = None) -> float:
+    """Seconds to wait before an item's HH:MM local start time.
+
+    Times carry no date, so the delay is interpreted modulo 24 h: anything up
+    to 8 h in the past is an overdue item that should run immediately (0);
+    everything else is tonight's future and is waited for in full.  (An
+    earlier 2 h wait cap made a plan received at dusk execute the whole night
+    back-to-back, missing every transit window.)  Returns 0 on parse errors.
+    """
+    try:
+        sh, sm = map(int, start_str.split(":"))
+    except (ValueError, AttributeError):
+        return 0.0
+    if not (0 <= sh < 24 and 0 <= sm < 60):
+        return 0.0
+    now = now or time.localtime()
+    target_s = sh * 3600 + sm * 60
+    now_s    = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
+    wait_s   = float(target_s - now_s)
+    if wait_s < 0:
+        wait_s += 86400.0
+    if wait_s >= 16 * 3600:
+        return 0.0  # started < 8 h ago — overdue, run now
+    return wait_s
+
+
 def _sched_prepare_mount() -> None:
     """Best-effort unpark + tracking-on before a run, gated on safety."""
     if _tel is None:
@@ -3037,24 +3254,17 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             "total_frames": exp_count,
         })
 
-    # Wait until scheduled start time (max 2 h wait; skip if overdue)
+    # Wait until the scheduled start time (see _start_wait_seconds).
     if start_str:
-        try:
-            sh, sm = map(int, start_str.split(":"))
-            now = time.localtime()
-            target_s = sh * 3600 + sm * 60
-            now_s    = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
-            wait_s   = target_s - now_s
-            if wait_s < 0:
-                wait_s += 86400
-            if 0 < wait_s <= 7200:
-                logger.info("Schedule: waiting %.0f s until %s for %s",
-                            wait_s, start_str, target)
-                deadline = time.monotonic() + wait_s
-                while time.monotonic() < deadline and not _sched_cancelled():
-                    time.sleep(1)
-        except (ValueError, AttributeError) as exc:
-            logger.debug("Schedule: start-time parse error: %s", exc)
+        wait_s = _start_wait_seconds(start_str)
+        if wait_s > 0:
+            logger.info("Schedule: waiting %.0f s until %s for %s",
+                        wait_s, start_str, target)
+            with _sched_lock:
+                _sched_state["current_phase"] = "waiting"
+            deadline = time.monotonic() + wait_s
+            while time.monotonic() < deadline and not _sched_cancelled():
+                time.sleep(1)
 
     if _sched_cancelled():
         return
@@ -3070,6 +3280,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             logger.warning("Schedule: skipping %s — slew rejected: %s", target, rejection)
             with _sched_lock:
                 _sched_state["error"] = f"{target}: {rejection}"
+            _telemetry.event("slew_rejected", severity="warning", target=target,
+                             detail={"reason": rejection})
             return
         logger.info("Schedule: slewing to %s RA=%.4f h Dec=%.4f°", target, ra, dec)
         try:
@@ -3082,12 +3294,18 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 logger.error("Schedule: slew to %s timed out — skipping exposures", target)
                 with _sched_lock:
                     _sched_state["error"] = f"Slew to {target} timed out"
+                _telemetry.event("slew_failed", severity="error", target=target,
+                                 detail={"reason": "timeout", "timeout_s": 180})
         except Exception as exc:
             logger.error("Schedule: slew failed for %s: %s", target, exc)
             with _sched_lock:
                 _sched_state["error"] = f"Slew to {target} failed: {exc}"
+            _telemetry.event("slew_failed", severity="error", target=target,
+                             detail={"reason": str(exc)[:300]})
     else:
         logger.warning("Schedule: telescope not connected — skipping slew for %s", target)
+        _telemetry.event("device_disconnect", severity="error", target=target,
+                         detail={"reason": "telescope not connected during schedule"})
 
     if _sched_cancelled():
         return
@@ -3146,6 +3364,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 return False
         except Exception as exc:
             logger.error("Schedule: exposure failed %s frame %d: %s", target, frame, exc)
+            _telemetry.event("exposure_failed", severity="error", target=target,
+                             detail={"frame": frame, "reason": str(exc)[:300]})
         finally:
             _pier_cam_pause.clear()
         return True
@@ -3173,7 +3393,54 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 return
 
 
-def _run_schedule_bg(items: list) -> None:
+def _wait_for_darkness(max_wait_s: float = 16 * 3600) -> bool:
+    """Block until the sun is below the dawn threshold (i.e. observing dark).
+
+    Cloud plans can arrive at any time of day (the cloud replans every couple
+    of hours); starting them immediately used to burn every item against the
+    daytime safety latch in seconds, consuming the plan before nightfall.
+
+    Returns True when it's dark (or darkness can't be determined), False when
+    cancelled or the wait timed out.
+    """
+    if _safety_mgr is None:
+        return True
+    deadline = time.monotonic() + max_wait_s
+    announced = False
+    while time.monotonic() < deadline:
+        if _sched_cancelled():
+            return False
+        try:
+            status = _safety_mgr.status()
+        except Exception:
+            return True
+        sun = status.get("sun_elevation")
+        threshold = status.get("dawn_threshold", -18.0)
+        if sun is None:
+            return True  # no location configured — can't gate on darkness
+        dawn_latched = (not status.get("safe", True)
+                        and str(status.get("reason", "")).startswith("dawn"))
+        if sun <= threshold and not dawn_latched:
+            return True
+        if not announced:
+            announced = True
+            logger.info("Schedule: sun at %.1f° (threshold %.1f°) — waiting for dark",
+                        sun, threshold)
+            with _sched_lock:
+                _sched_state["current_phase"] = "waiting_for_dark"
+        # Sleep ~30 s between sun checks, but stay responsive to cancellation
+        # (a superseding cloud plan cancels a waiting schedule and expects it
+        # to unwind within seconds).
+        for _ in range(30):
+            if _sched_cancelled():
+                return False
+            time.sleep(1)
+    logger.warning("Schedule: darkness wait timed out after %.0f h", max_wait_s / 3600)
+    return False
+
+
+def _run_schedule_bg(items: list, source: str = "manual",
+                     wait_for_dark: bool = False) -> None:
     """Background thread: slew + expose for each scheduled observation."""
     with _sched_lock:
         _sched_state.update({
@@ -3182,8 +3449,36 @@ def _run_schedule_bg(items: list) -> None:
             "current_phase": "starting",
             "current_frame": 0, "total_frames": 0,
             "completed": 0, "total": len(items), "error": None,
+            "source": source,
         })
     logger.info("Schedule started: %d observations", len(items))
+    _telemetry.event("schedule_started", severity="info",
+                     detail={"items": len(items), "source": source,
+                             "wait_for_dark": wait_for_dark})
+
+    if wait_for_dark and not _wait_for_darkness():
+        with _sched_lock:
+            cancelled = _sched_state["cancelled"]
+            _sched_state["running"] = False
+            _sched_state["current_phase"] = "cancelled" if cancelled else "done"
+        _telemetry.event("schedule_abandoned_before_dark",
+                         severity="info" if cancelled else "warning",
+                         detail={"cancelled": cancelled, "source": source})
+        return
+
+    # Autonomous runs that start right after a service restart can beat the
+    # supervisor's device reconnect — give it a couple of minutes rather than
+    # burning every item against a not-yet-connected telescope.
+    if source in ("cloud", "interrupt") and _tel is None and items:
+        logger.info("Schedule: telescope not connected yet — waiting up to 180 s")
+        deadline = time.monotonic() + 180
+        while _tel is None and time.monotonic() < deadline and not _sched_cancelled():
+            time.sleep(2)
+        if _tel is None and not _sched_cancelled():
+            _telemetry.event(
+                "device_disconnect", severity="error",
+                detail={"reason": "telescope never connected before schedule start",
+                        "waited_s": 180})
 
     _sched_prepare_mount()
 
@@ -3207,13 +3502,22 @@ def _run_schedule_bg(items: list) -> None:
         logger.error("Schedule crashed: %s", exc)
         with _sched_lock:
             _sched_state["error"] = str(exc)
+        _telemetry.event("schedule_crashed", severity="error",
+                         detail={"error": str(exc)[:300]})
     finally:
         with _sched_lock:
             _sched_state["running"] = False
             _sched_state["current_phase"] = (
                 "cancelled" if _sched_state["cancelled"] else "done"
             )
+            completed = _sched_state["completed"]
+            error = _sched_state["error"]
+            cancelled = _sched_state["cancelled"]
         logger.info("Schedule finished")
+        _telemetry.event(
+            "schedule_finished", severity="info",
+            detail={"completed": completed, "total": len(items),
+                    "cancelled": cancelled, "error": error, "source": source})
 
 
 @app.route("/api/schedule/run", methods=["POST"])
@@ -3270,13 +3574,42 @@ def _validate_schedule_items(items: list) -> tuple[list, Optional[str]]:
             return [], f"item '{label}': exposure count must be ≥ 1"
         if binning < 1:
             return [], f"item '{label}': binning must be ≥ 1"
+        # Time-series fields: the executor reads these to hold a target for a
+        # transit window. They must survive validation or every cloud
+        # time-series plan silently degrades to a single-epoch visit.
+        obs_mode = str(item.get("observation_mode", "single_epoch") or "single_epoch")
+        if obs_mode not in ("single_epoch", "time_series"):
+            return [], f"item '{label}': unknown observation_mode '{obs_mode}'"
+        try:
+            duration_minutes = float(item.get("duration_minutes", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return [], f"item '{label}': duration_minutes must be numeric"
+        if duration_minutes < 0 or duration_minutes > 12 * 60:
+            return [], f"item '{label}': duration_minutes must be in [0, 720]"
         out.append({
             "target": str(item.get("target", "Unknown")),
             "ra": ra, "dec": dec, "expDur": exp_dur,
             "expCount": exp_count, "binning": binning,
             "startTime": str(item.get("startTime", "")),
+            "observation_mode": obs_mode,
+            "duration_minutes": duration_minutes,
+            "filter": str(item.get("filter", "") or ""),
+            "notes": str(item.get("notes", "") or ""),
         })
     return out, None
+
+
+@app.route("/api/events", methods=["GET"])
+def api_events():
+    """Structured reliability events (newest last). ?source=disk reads the
+    persisted JSONL (survives restarts); default is the in-memory ring."""
+    n = min(int(request.args.get("n", 100)), 1000)
+    min_severity = request.args.get("min_severity", "debug")
+    if request.args.get("source") == "disk":
+        events = _telemetry.load_events_file(n)
+    else:
+        events = _telemetry.recent(n, min_severity=min_severity)
+    return jsonify({"events": events, "counters": _telemetry.counters()})
 
 
 @app.route("/api/schedule/status", methods=["GET"])
@@ -4526,6 +4859,7 @@ html[data-night] img, html[data-night] video { filter: none; }
           🔭 Telescope Control
           <div class="badges" id="telModalBadges" style="margin-left:8px;"></div>
         </div>
+        <div id="telModalError" style="display:none;color:var(--red);font-size:11px;padding:4px 0 0;"></div>
       </div>
 
       <!-- Coordinates -->
@@ -5727,7 +6061,21 @@ function renderTelescope(t) {
       if (!t.busy && !t.slewing && !t.tracking && !t.parked)
                       badges.innerHTML += `<span class="badge">Idle</span>`;
     } else if (t.enabled) {
-      badges.innerHTML += `<span class="badge badge-err">Disconnected</span>`;
+      const errBadge = document.createElement("span");
+      errBadge.className = "badge badge-err";
+      errBadge.textContent = "Disconnected";
+      if (t.error) errBadge.title = t.error;
+      badges.appendChild(errBadge);
+    }
+  }
+
+  const errEl = document.getElementById("telModalError");
+  if (errEl) {
+    if (!t.connected && t.enabled && t.error) {
+      errEl.style.display = "block";
+      errEl.textContent   = t.error;
+    } else {
+      errEl.style.display = "none";
     }
   }
 
@@ -7345,6 +7693,12 @@ async function doScan() {
         item.onclick = () => selectSrv(srv.address, srv.port);
         list.appendChild(item);
       });
+    } else if (defSrv) {
+      list.innerHTML = `<div style="color:var(--red);font-size:12px;">`
+        + `Can't find your saved telescope at ${defSrv.address}:${defSrv.port} on this network. `
+        + `Check that the Seestar is powered on and connected to Wi-Fi. If it recently `
+        + `restarted, its IP address may have changed — check your router's device list for `
+        + `its current address.</div>`;
     } else {
       list.innerHTML = '<div style="color:var(--dim);font-size:12px;">No servers found on LAN.</div>';
     }
@@ -9145,6 +9499,25 @@ def launch(port: int = 5173) -> None:
         threading.Thread(target=_pier_cam_loop, daemon=True, name="pier-cam").start()
         with _state_lock:
             _state["pier_cam"]["enabled"] = True
+
+    # Forward error/critical telemetry to the cloud incident API (best-effort,
+    # in a background thread) so failures are diagnosable remotely.
+    if _cloud is not None:
+        _telemetry.set_forwarder(_cloud.submit_incident)
+    _telemetry.event("node_started", severity="info",
+                     detail={"version": "node-v1", "port": port,
+                             "cloud_enabled": bool(cloud_cfg.get("enabled", False))})
+
+    # Supervisor: headless device reconnect, image-watcher revival, disk
+    # health/retention, host-sleep detection.
+    _supervisor = NodeSupervisor(
+        load_config=_load_config,
+        devices_connected=_supervisor_devices_ok,
+        connect_default=_supervisor_connect,
+        watcher_ok=_supervisor_watcher_ok,
+        restart_watcher=_revive_image_watcher,
+    )
+    _supervisor.start()
 
     flask_thread = threading.Thread(
         target=lambda: app.run(

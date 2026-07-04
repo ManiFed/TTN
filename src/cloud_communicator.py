@@ -98,6 +98,8 @@ class CloudCommunicator:
         self._queue_lock = threading.Lock()
         self._last_plan_id: Optional[str] = None
         self._threads: list[threading.Thread] = []
+        self._register_failures = 0
+        self._register_next_attempt = 0.0  # monotonic
 
         # Status surface for the dashboard
         self.status: dict = {
@@ -191,6 +193,13 @@ class CloudCommunicator:
         if self._node_id and self._api_key:
             return True
 
+        # Back off between failed attempts (60 s → 2 min → … → 15 min) so an
+        # invalid activation code doesn't hammer the API forever, while still
+        # recovering quickly from a transient outage at first boot.
+        now = time.monotonic()
+        if now < self._register_next_attempt:
+            return False
+
         obs = self._config.get("observatory", {})
         phot = self._config.get("photometry", {})
         cloud_cfg = self._config.get("cloud", {})
@@ -219,7 +228,18 @@ class CloudCommunicator:
         except Exception as exc:
             logger.warning("Cloud registration failed: %s", exc)
             self.status["error"] = f"registration failed: {exc}"
+            self._register_failures += 1
+            backoff = min(60.0 * (2 ** min(self._register_failures - 1, 4)), 900.0)
+            self._register_next_attempt = now + backoff
+            if self._register_failures in (1, 5, 20):
+                self._telemetry_event(
+                    "registration_failed", "error",
+                    {"error": str(exc)[:200],
+                     "attempts": self._register_failures,
+                     "retry_in_s": int(backoff)})
             return False
+        self._register_failures = 0
+        self._register_next_attempt = 0.0
         self._node_id = resp["node_id"]
         self._api_key = resp["api_key"]
         self._save_state()
@@ -229,25 +249,14 @@ class CloudCommunicator:
         if activation_code:
             self._clear_activation_code()
         logger.info("Registered with cloud as %s", self._node_id)
+        self._telemetry_event("registered", "info", {"node_id": self._node_id})
         return True
 
     def _clear_activation_code(self) -> None:
         """Remove the one-time activation code after successful registration."""
-        import yaml
-        cfg_path = Path("config.yaml")
         try:
-            cfg = yaml.safe_load(cfg_path.read_text()) or {}
-        except Exception as exc:
-            logger.warning("Could not read config to clear activation code: %s", exc)
-            return
-        cloud_cfg = cfg.get("cloud")
-        if not isinstance(cloud_cfg, dict) or not cloud_cfg.get("activation_code"):
-            return
-        cloud_cfg["activation_code"] = ""
-        try:
-            cfg_path.write_text(
-                yaml.dump(cfg, default_flow_style=False, sort_keys=False, allow_unicode=True)
-            )
+            from src.config_patch import apply_config_patch
+            apply_config_patch({"cloud": {"activation_code": ""}})
         except Exception as exc:
             logger.warning("Could not clear activation code from config: %s", exc)
             return
@@ -301,6 +310,7 @@ class CloudCommunicator:
     # ── Heartbeat loop ─────────────────────────────────────────────────────────
 
     def _heartbeat_loop(self) -> None:
+        was_ok: Optional[bool] = None
         while not self._stop.is_set():
             if self._ensure_registered():
                 conditions = {}
@@ -319,9 +329,26 @@ class CloudCommunicator:
                     self.status["last_heartbeat_ok"] = False
                     self.status["error"] = str(exc)
                     logger.warning("Heartbeat failed: %s", exc)
+                    if was_ok is not False:
+                        self._telemetry_event(
+                            "cloud_heartbeat_lost", "warning",
+                            {"error": str(exc)[:200]})
+                    was_ok = False
                 else:
+                    if was_ok is False:
+                        self._telemetry_event("cloud_heartbeat_restored", "info", {})
+                    was_ok = True
                     self._flush_queue()
             self._stop.wait(self._heartbeat_s)
+
+    @staticmethod
+    def _telemetry_event(name: str, severity: str, detail: dict) -> None:
+        """Record a structured event without creating an import cycle at load."""
+        try:
+            from src import telemetry
+            telemetry.event(name, severity=severity, detail=detail)
+        except Exception:
+            pass
 
     # ── Pairing loop (pre-registration only) ──────────────────────────────────
 
@@ -347,25 +374,21 @@ class CloudCommunicator:
 
     def _apply_paired_code(self, code: str) -> None:
         """Save the activation code to config and trigger immediate registration."""
-        import yaml
-        cfg_path = Path("config.yaml")
+        patch = {"cloud": {"activation_code": code, "enabled": True}}
         try:
-            cfg = yaml.safe_load(cfg_path.read_text()) or {}
-        except Exception:
-            cfg = {}
-        if "cloud" not in cfg or not isinstance(cfg["cloud"], dict):
-            cfg["cloud"] = {}
-        cfg["cloud"]["activation_code"] = code
-        cfg["cloud"]["enabled"] = True
-        if not cfg["cloud"].get("url"):
-            cfg["cloud"]["url"] = self._url
-        try:
-            cfg_path.write_text(yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+            existing = self._config.get("cloud", {}).get("url", "")
+            if not existing:
+                patch["cloud"]["url"] = self._url
+            from src.config_patch import apply_config_patch
+            apply_config_patch(patch)
             logger.info("Activation code received via pairing and saved to config.yaml")
-            self._config.setdefault("cloud", {})["activation_code"] = code
-            self._config["cloud"]["enabled"] = True
         except Exception as exc:
             logger.warning("Could not write activation code to config: %s", exc)
+        self._config.setdefault("cloud", {})["activation_code"] = code
+        self._config["cloud"]["enabled"] = True
+        # A fresh code means any previous failure/backoff no longer applies.
+        self._register_failures = 0
+        self._register_next_attempt = 0.0
         self._ensure_registered()
 
     # ── Plan / interrupt polling ───────────────────────────────────────────────
@@ -483,6 +506,21 @@ class CloudCommunicator:
             self._upload_fits(fits_path)
         return True
 
+    def submit_incident(self, event: dict) -> None:
+        """Forward one structured telemetry event to the cloud incident API.
+
+        Best-effort: called from the telemetry forwarder thread; failures are
+        swallowed (the event is still in the heartbeat summary and on disk).
+        """
+        if not (self._node_id and self._api_key):
+            return
+        self._post("/api/v1/incidents", {
+            "incident_type": event.get("event", "unknown"),
+            "severity": event.get("severity", "info"),
+            "target_name": event.get("target", ""),
+            "detail": event.get("detail") or {},
+        })
+
     def upload_aavso_txt(self, txt_path: str) -> None:
         """Upload an AAVSO Extended File Format .txt to the cloud for later email submission."""
         try:
@@ -526,7 +564,11 @@ class CloudCommunicator:
     def _save_queue(self, queue: list) -> None:
         try:
             _QUEUE_FILE.parent.mkdir(exist_ok=True)
-            _QUEUE_FILE.write_text(json.dumps(queue))
+            # Atomic replace: a crash mid-write must not corrupt the queue
+            # file (a corrupt file silently discards every queued measurement).
+            tmp = _QUEUE_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(queue))
+            tmp.replace(_QUEUE_FILE)
         except OSError as exc:
             logger.warning("Could not persist upload queue: %s", exc)
 
@@ -534,24 +576,42 @@ class CloudCommunicator:
         with self._queue_lock:
             queue = self._load_queue()
             queue.append(payload)
-            if len(queue) > _QUEUE_MAX:
+            dropped = len(queue) - _QUEUE_MAX
+            if dropped > 0:
                 queue = queue[-_QUEUE_MAX:]
+                self._telemetry_event(
+                    "upload_queue_overflow", "warning",
+                    {"dropped": dropped, "queue_max": _QUEUE_MAX})
             self._save_queue(queue)
             self.status["queued_uploads"] = len(queue)
 
-    def _flush_queue(self) -> None:
+    def _flush_queue(self, max_items: int = 25, max_seconds: float = 60.0) -> None:
+        """Retry queued uploads, time-boxed.
+
+        Bounded per heartbeat cycle so draining a deep backlog after a long
+        outage cannot monopolise the heartbeat thread (500 items × 30 s
+        timeouts used to stall heartbeats for hours).  Stops at the first
+        failure — if one upload fails the rest will too.
+        """
         with self._queue_lock:
             queue = self._load_queue()
             if not queue:
                 return
-            remaining = []
-            for payload in queue:
+            deadline = time.monotonic() + max_seconds
+            sent = 0
+            failed = False
+            remaining = list(queue)
+            while remaining and sent < max_items and time.monotonic() < deadline:
                 try:
-                    self._post("/api/v1/measurements", payload)
+                    self._post("/api/v1/measurements", remaining[0])
                 except Exception:
-                    remaining.append(payload)
-            if len(remaining) != len(queue):
-                logger.info("Flushed %d queued measurement(s) to cloud",
-                            len(queue) - len(remaining))
+                    failed = True
+                    break
+                remaining.pop(0)
+                sent += 1
+            if sent:
+                logger.info("Flushed %d queued measurement(s) to cloud (%d left%s)",
+                            sent, len(remaining),
+                            ", will continue next heartbeat" if remaining and not failed else "")
             self._save_queue(remaining)
             self.status["queued_uploads"] = len(remaining)
