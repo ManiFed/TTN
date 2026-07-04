@@ -9,6 +9,7 @@
 <meta property="og:description" content="Your home telescope, running itself every clear night, helping catch stars as they flare and fade. Join the first hundred founding nodes." />
 <meta property="og:type" content="website" />
 <meta name="theme-color" content="#02030A" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="preconnect" href="https://aladin.cds.unistra.fr" crossorigin />
@@ -788,23 +789,7 @@
     }catch(e){}
   }
 
-  /* hover-zoom: slowly widen FOV while mouse rests over open sky (not a panel) */
-  var skyHover=false, hoverZoom=1.0, scrolling=false, scrollTimer=null;
-  var HOVER_MAX=3.0, HOVER_RATE=0.005, HOVER_RESET=0.01;
-  document.addEventListener('mousemove',function(e){
-    var el=e.target, over=false;
-    while(el){
-      if(el.classList&&(el.classList.contains('glass')||el.classList.contains('btn')||el.tagName==='BUTTON'||el.tagName==='A'||el.tagName==='INPUT')){over=true;break;}
-      el=el.parentElement;
-    }
-    skyHover=!over&&!scrolling;
-  },{passive:true});
-  document.addEventListener('mouseleave',function(){skyHover=false;});
-  addEventListener('scroll',function(){
-    scrolling=true; skyHover=false; hoverZoom=1.0;
-    clearTimeout(scrollTimer); scrollTimer=setTimeout(function(){scrolling=false;},200);
-  },{passive:true});
-
+  /* Keep each panel's sky view locked; only change Aladin when the active panel changes. */
   var aladinInstance = null;
   var tourStarted = false;
   var scrollCompute = null;
@@ -818,12 +803,22 @@
     aladinInstance = aladin || null;
     var cur={ra:stops[0].cra,dec:stops[0].cdec,fov:stops[0].fov};
     var tgt={ra:cur.ra,dec:cur.dec,fov:cur.fov};
-    var HOLD=0.62;
+    var activeSkySection=-1;
+    function applySkySection(i, force){
+      var a=stops[i], sky=aladinInstance;
+      tgt.ra=a.cra; tgt.dec=a.cdec; tgt.fov=a.fov;
+      cur.ra=tgt.ra; cur.dec=tgt.dec; cur.fov=tgt.fov;
+      if(sky && (force || i!==activeSkySection)){
+        sky.gotoRaDec(tgt.ra, tgt.dec);
+        sky.setFov(tgt.fov);
+      }
+      activeSkySection=i;
+      window.__tourState = {section:i, ra:tgt.ra, dec:tgt.dec, fov:tgt.fov, aladinActive:!!sky};
+    }
     function compute(){
       var sc=scrollY||document.documentElement.scrollTop, i=0;
       for(var j=0;j<els.length;j++){ if(sc>=els[j].offsetTop-2) i=j; }
       curSection=i;
-      var top=els[i].offsetTop, h=els[i].offsetHeight, lp=Math.max(0,Math.min(1,(sc-top)/h));
       pdots.forEach(function(d,k){ d.classList.toggle('on', k===i); });
       prog.classList.toggle('show', i>0); clock.textContent = stops[i].time;
       // lift-off: fade the ground out only once the real Aladin sky is available.
@@ -836,22 +831,7 @@
         earth.style.opacity='1'; if(ecap) ecap.style.opacity='1';
         earth.style.transform='none';
       }
-      var a=stops[i], b=stops[Math.min(stops.length-1,i+1)];
-      if(lp<=HOLD){ tgt.ra=a.cra; tgt.dec=a.cdec; tgt.fov=a.fov; }
-      else{ var tt=(lp-HOLD)/(1-HOLD), e=tt<.5?2*tt*tt:1-Math.pow(-2*tt+2,2)/2;
-        tgt.ra=lerp(a.cra,b.cra,e); tgt.dec=lerp(a.cdec,b.cdec,e);
-        tgt.fov=Math.exp(lerp(Math.log(a.fov),Math.log(b.fov),e)); }
-
-      // Drive Aladin *directly* from scroll progress. This guarantees the view
-      // actually moves when the user scrolls instead of relying only on the raf lerp.
-      var sky = aladinInstance;
-      if (sky) {
-        sky.gotoRaDec(tgt.ra, tgt.dec);
-        sky.setFov(tgt.fov);
-      }
-      // keep cur in sync so the hover tick doesn't fight the scroll-driven position
-      cur.ra = tgt.ra; cur.dec = tgt.dec; cur.fov = tgt.fov;
-      window.__tourState = {section:i, ra:tgt.ra, dec:tgt.dec, fov:tgt.fov, aladinActive:!!sky};
+      applySkySection(i, false);
     }
     scrollCompute = compute;
     addEventListener('scroll', compute, {passive:true});
@@ -865,22 +845,10 @@
       els[ni].scrollIntoView({behavior:'smooth'});
     });
     compute();
-    if (aladinInstance) { aladinInstance.gotoRaDec(cur.ra, cur.dec); aladinInstance.setFov(cur.fov); }
+    applySkySection(curSection, true);
     addEventListener('resize', function(){
-      if (aladinInstance) { aladinInstance.gotoRaDec(cur.ra, cur.dec); aladinInstance.setFov(cur.fov); }
+      applySkySection(curSection, true);
     }, {passive:true});
-    (function tick(){
-      if(skyHover) hoverZoom=Math.min(HOVER_MAX, hoverZoom+HOVER_RATE);
-      else         hoverZoom=Math.max(1.0,        hoverZoom-HOVER_RESET);
-      var nfov = tgt.fov * hoverZoom;
-      // Only the hover zoom adjustment runs here; main scroll-driven movement
-      // is handled directly in compute() above so it can't get stuck.
-      if (Math.abs(nfov - cur.fov) > 1e-4) {
-        cur.fov = lerp(cur.fov, nfov, 0.12);
-        if (aladinInstance) aladinInstance.setFov(cur.fov);
-      }
-      requestAnimationFrame(tick);
-    })();
   }
 
   // If the sky engine never loads (flaky mobile network, blocked CDN), freeze the
