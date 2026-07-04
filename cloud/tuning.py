@@ -35,6 +35,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from cloud import db, objective
+from cloud.chorus import params as chorus_defaults
 
 logger = logging.getLogger("cloud.tuning")
 
@@ -70,15 +71,27 @@ SLOT_KEYS = tuple(DEFAULT_SLOT_WEIGHTS.keys())
 DEFAULT_COORD_PARAMS = objective.DEFAULT_COORD_PARAMS
 COORD_KEYS = tuple(DEFAULT_COORD_PARAMS.keys())
 
+# CHORUS hyperparameters (the information-theoretic coordinator, CHORUS.md §7
+# Ring 1).  Defaults/bounds are owned by cloud.chorus.params; changes to this
+# group are additionally gated by a deterministic counterfactual backtest.
+DEFAULT_CHORUS_PARAMS = dict(chorus_defaults.DEFAULTS)
+CHORUS_KEYS = tuple(DEFAULT_CHORUS_PARAMS.keys())
+CHORUS_BOUNDS = dict(chorus_defaults.BOUNDS)
+
 # The three weight groups are normalized (sum to 1, trust-region step). The
-# coordination group is free scalars, clamped per-key within max_delta_coord and
-# the bounds below.
+# scalar groups (coordination knobs, chorus hyperparameters) are free scalars,
+# clamped per-key within max_delta_coord and the bounds below.
 WEIGHT_GROUPS = {
     "composite":     (DEFAULT_COMPOSITE_WEIGHTS, COMPOSITE_KEYS),
     "observability": (DEFAULT_OBS_WEIGHTS, OBS_KEYS),
     "slot_quality":  (DEFAULT_SLOT_WEIGHTS, SLOT_KEYS),
 }
-SCALAR_GROUP = "coordination"
+SCALAR_GROUP = "coordination"      # legacy name, kept for old callers/tests
+SCALAR_GROUPS = {
+    "coordination": (DEFAULT_COORD_PARAMS, COORD_KEYS),
+    "chorus":       (DEFAULT_CHORUS_PARAMS, CHORUS_KEYS),
+}
+ALL_GROUPS = tuple(WEIGHT_GROUPS) + tuple(SCALAR_GROUPS)
 
 COORD_BOUNDS = {
     "redundancy_decay":            (0.10, 0.95),
@@ -124,6 +137,7 @@ def _default_params(config: dict) -> dict:
         "observability": {**DEFAULT_OBS_WEIGHTS, **(sc.get("observability_weights") or {})},
         "slot_quality":  {**DEFAULT_SLOT_WEIGHTS, **(sc.get("slot_quality_weights") or {})},
         "coordination":  {**DEFAULT_COORD_PARAMS, **(sch.get("coordination") or {})},
+        "chorus":        {**DEFAULT_CHORUS_PARAMS, **(sch.get("chorus_params") or {})},
     }
     return _canonical(raw)
 
@@ -135,9 +149,9 @@ def _canonical(params: dict) -> dict:
     for group, (defaults, keys) in WEIGHT_GROUPS.items():
         src = params.get(group, {}) or {}
         out[group] = {k: float(src.get(k, defaults[k])) for k in keys}
-    coord_src = params.get(SCALAR_GROUP, {}) or {}
-    out[SCALAR_GROUP] = {k: float(coord_src.get(k, DEFAULT_COORD_PARAMS[k]))
-                         for k in COORD_KEYS}
+    for group, (defaults, keys) in SCALAR_GROUPS.items():
+        src = params.get(group, {}) or {}
+        out[group] = {k: float(src.get(k, defaults[k])) for k in keys}
     return out
 
 
@@ -186,7 +200,7 @@ def active_params(config: dict) -> dict:
         return seed
     # Merge stored over seed (per group/key), then canonicalize.
     merged = {g: {**seed.get(g, {}), **(stored.get(g, {}) or {})}
-              for g in ("composite", "observability", "slot_quality", SCALAR_GROUP)}
+              for g in ALL_GROUPS}
     return _canonical(merged)
 
 
@@ -396,7 +410,15 @@ _SYSTEM_PROMPT = (
     "samples in time more), slew/filter/meridian overhead costs, "
     "preferred_target_boost, robustness_cloud_relax, slot_quality_floor, "
     "local_search_aggressiveness, plus slew_deg_per_s and "
-    "redundancy_diversity_sep.\n\n"
+    "redundancy_diversity_sep.\n"
+    "chorus — hyperparameters of the CHORUS information-theoretic coordinator "
+    "(when enabled): kernel_time_scale_h / kernel_phase_scale (sample locality), "
+    "value_scale_* (relative class priorities), scarcity_gamma and "
+    "scarcity_horizon_nights (tonight vs future), same_site_repeat_factor "
+    "(weather-correlation conservatism), exploration_beta (fleet-learning "
+    "appetite), min_marginal, max_obs_per_target. Changes to this group are "
+    "additionally validated by a deterministic backtest replay of recent nights "
+    "before being applied — propose only well-evidenced moves.\n\n"
     "You are given the current params and an evidence brief. Under 'per_factor' "
     "each observability/slot weight has a directly relevant outcome signal with "
     "its own sample count (n_*); 'network' has fleet outcomes (redundancy_rate, "
@@ -435,8 +457,10 @@ _PARAMS_SCHEMA = {
                 "observability": _group_schema(OBS_KEYS),
                 "slot_quality":  _group_schema(SLOT_KEYS),
                 "coordination":  _group_schema(COORD_KEYS),
+                "chorus":        _group_schema(CHORUS_KEYS),
             },
-            "required": ["composite", "observability", "slot_quality", "coordination"],
+            "required": ["composite", "observability", "slot_quality",
+                         "coordination", "chorus"],
             "additionalProperties": False,
         },
         "rationale": {"type": "string"},
@@ -474,6 +498,7 @@ def propose_weights(evidence: dict, current_params: dict, config: dict):
         "max_delta": max_delta,
         "max_delta_coord": max_delta_coord,
         "coord_bounds": COORD_BOUNDS,
+        "chorus_bounds": CHORUS_BOUNDS,
         "evidence": evidence,
     }
     client = anthropic.Anthropic(api_key=api_key)
@@ -539,23 +564,31 @@ def _clamp_and_normalize(current: dict, proposed: dict, keys, defaults: dict,
     return new
 
 
-def _clamp_scalars(current: dict, proposed: dict, max_delta_coord: float) -> dict:
+def _clamp_scalars(current: dict, proposed: dict, max_delta_coord: float,
+                   keys=COORD_KEYS, defaults: dict | None = None,
+                   bounds: dict | None = None) -> dict:
     """
-    Bounded per-key step for the coordination knobs (free scalars, not
+    Bounded per-key step for a scalar knob group (free scalars, not
     normalized).  Each knob moves at most max_delta_coord × |current| (with a
     small absolute floor so near-zero knobs can still move) toward the proposal,
-    then is clamped to its safe bound in COORD_BOUNDS.
+    then is clamped to its safe bound.  Defaults to the coordination group for
+    backward compatibility.
     """
+    defaults = defaults if defaults is not None else DEFAULT_COORD_PARAMS
+    bounds = bounds if bounds is not None else COORD_BOUNDS
     out: dict = {}
-    for k in COORD_KEYS:
-        cur = float(current.get(k, DEFAULT_COORD_PARAMS[k]))
+    for k in keys:
+        cur = float(current.get(k, defaults[k]))
         prop = float(proposed.get(k, cur))
-        lo, hi = COORD_BOUNDS[k]
+        lo, hi = bounds[k]
         span = (hi - lo)
         step_cap = max(max_delta_coord * abs(cur), max_delta_coord * span * 0.1)
         delta = max(-step_cap, min(step_cap, prop - cur))
         out[k] = round(max(lo, min(hi, cur + delta)), 4)
     return out
+
+
+_SCALAR_BOUNDS = {"coordination": COORD_BOUNDS, "chorus": CHORUS_BOUNDS}
 
 
 def _clamp_params(current: dict, proposed: dict, max_delta: float,
@@ -565,8 +598,10 @@ def _clamp_params(current: dict, proposed: dict, max_delta: float,
     for group, (defaults, keys) in WEIGHT_GROUPS.items():
         new[group] = _clamp_and_normalize(
             current.get(group, {}), proposed.get(group, {}), keys, defaults, max_delta)
-    new[SCALAR_GROUP] = _clamp_scalars(
-        current.get(SCALAR_GROUP, {}), proposed.get(SCALAR_GROUP, {}), max_delta_coord)
+    for group, (defaults, keys) in SCALAR_GROUPS.items():
+        new[group] = _clamp_scalars(
+            current.get(group, {}), proposed.get(group, {}), max_delta_coord,
+            keys=keys, defaults=defaults, bounds=_SCALAR_BOUNDS[group])
     return new
 
 
@@ -579,18 +614,48 @@ def _params_material(old: dict, new: dict, eps: float) -> bool:
         if any(abs(float(ng.get(k, defaults[k])) - float(og.get(k, defaults[k]))) > eps
                for k in keys):
             return True
-    og, ng = old.get(SCALAR_GROUP, {}), new.get(SCALAR_GROUP, {})
-    for k in COORD_KEYS:
-        cur = float(og.get(k, DEFAULT_COORD_PARAMS[k]))
-        scale = max(abs(cur), 1e-6)
-        if abs(float(ng.get(k, cur)) - cur) / scale > eps:
-            return True
+    for group, (defaults, keys) in SCALAR_GROUPS.items():
+        og, ng = old.get(group, {}), new.get(group, {})
+        for k in keys:
+            cur = float(og.get(k, defaults[k]))
+            scale = max(abs(cur), 1e-6)
+            if abs(float(ng.get(k, cur)) - cur) / scale > eps:
+                return True
     return False
+
+
+def _gate_chorus_group(current: dict, new_params: dict, config: dict) -> tuple:
+    """Ring-1 backtest gate (CHORUS.md §7): a materially changed chorus group
+    must win a deterministic replay of recent archived nights against realized
+    outcomes, or it is reverted.  Weight groups and coordination knobs are
+    unaffected.  Conservative on error: any failure keeps the current group.
+    Returns (params, note)."""
+    cur_g = current.get("chorus", {}) or {}
+    new_g = new_params.get("chorus", {}) or {}
+    changed = any(
+        abs(float(new_g.get(k, DEFAULT_CHORUS_PARAMS[k]))
+            - float(cur_g.get(k, DEFAULT_CHORUS_PARAMS[k]))) > 1e-6
+        for k in CHORUS_KEYS)
+    if not changed:
+        return new_params, ""
+    try:
+        from cloud.chorus import backtest
+        ok, detail = backtest.gate(cur_g, new_g, config)
+    except Exception as exc:
+        logger.warning("Chorus backtest gate errored — group unchanged: %s", exc)
+        ok, detail = False, {"reason": f"gate error: {exc}"}
+    if ok:
+        return new_params, ""
+    gated = dict(new_params)
+    gated["chorus"] = dict(cur_g) if cur_g else dict(DEFAULT_CHORUS_PARAMS)
+    return gated, (f"[chorus group reverted by backtest gate: "
+                   f"{json.dumps(detail)}]")
 
 
 def apply_and_notify(current: dict, proposed: dict, rationale: str,
                      evidence: dict, config: dict) -> dict:
-    """Clamp every group, persist active params, write an audit row, notify admins."""
+    """Clamp every group, gate the chorus group by backtest, persist active
+    params, write an audit row, notify admins."""
     cfg = config.get("tuning", {})
     max_delta = float(cfg.get("max_delta", _MAX_DELTA_DEFAULT))
     max_delta_coord = float(cfg.get("max_delta_coord", _MAX_DELTA_COORD_DEFAULT))
@@ -598,6 +663,9 @@ def apply_and_notify(current: dict, proposed: dict, rationale: str,
     model = str(cfg.get("model", _MODEL_DEFAULT))
 
     new_params = _clamp_params(current, proposed, max_delta, max_delta_coord)
+    new_params, gate_note = _gate_chorus_group(current, new_params, config)
+    if gate_note:
+        rationale = (rationale + " " + gate_note).strip()
 
     # No-churn guard: if the monitor effectively left the params alone, don't
     # write state, an audit row, or notifications every single night.
@@ -627,11 +695,11 @@ def restore_weights(params: dict, rationale: str, config: dict) -> dict:
     roll back correctly.
     """
     current = active_params(config)
-    group_names = set(WEIGHT_GROUPS) | {SCALAR_GROUP}
+    group_names = set(WEIGHT_GROUPS) | set(SCALAR_GROUPS)
     if params and not (set(params) & group_names):
         params = {"observability": params}      # legacy flat obs-weights row
     merged = {g: {**current.get(g, {}), **(params.get(g, {}) or {})}
-              for g in ("composite", "observability", "slot_quality", SCALAR_GROUP)}
+              for g in ALL_GROUPS}
     restored = _canonical(merged)
     _write_params(restored)
     db.execute(

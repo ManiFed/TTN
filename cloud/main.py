@@ -88,6 +88,15 @@ def start_background_loops(config: dict) -> None:
         if time.gmtime().tm_mday == 1:
             registry.refresh_light_pollution(
                 config.get("light_pollution", {}).get("api_key", ""))
+        if sched_cfg.get("chorus") or sched_cfg.get("chorus_shadow"):
+            # CHORUS T0 + Ring 0: reliability ledger, target state, weather
+            # calibration, realization joins (best-effort, before tuning so
+            # the backtest gate sees fresh realizations).
+            try:
+                from cloud.chorus import ledger as chorus_ledger
+                chorus_ledger.run_nightly(config)
+            except Exception as exc:
+                logger.error("CHORUS ledger maintenance failed: %s", exc)
         tuning.run_nightly(config)
 
     _loop("alert-ingest",

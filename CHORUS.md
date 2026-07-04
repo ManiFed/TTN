@@ -12,6 +12,19 @@ longitudes, parts assigned by what each voice can actually sing, and the whole
 score rewritten every night from what the audience (AAVSO, the science) actually
 heard.
 
+> **Implementation status: built.** The design below is implemented in
+> `cloud/chorus/` — `params.py` (Ring-1 hyperparameters), `physics.py`
+> (measurement model + exposure optimizer), `cells.py` (templates, compiler,
+> kernels), `horizon.py` (T1 scarcity), `assign.py` (T2 lazy submodular
+> greedy + seeded local search), `perform.py` (T3 sequencing + contingency
+> ladders), `ledger.py` (T0 reliability vectors, target state, Ring-0
+> calibration), `planner.py` (orchestration), `backtest.py` (Ring-1 gate) —
+> with schema in `cloud/db.py`, the tuning "chorus" group + backtest gate in
+> `cloud/tuning.py`, and tests in `tests/test_chorus.py`.  Rollout flags:
+> `scheduler.chorus_shadow: true` (default — full pipeline, telemetry + archive,
+> no saved plans) and `scheduler.chorus: true` to go live; either is instant to
+> revert.
+
 ---
 
 ## 0. Executive summary

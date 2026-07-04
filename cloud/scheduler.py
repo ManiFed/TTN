@@ -94,9 +94,13 @@ def generate_plan(
     darkness at the node within 24 h.
     """
     sched_cfg = config.get("scheduler", {})
+    if sched_cfg.get("chorus"):
+        # CHORUS: the information-theoretic coordinator (see CHORUS.md).
+        from cloud.chorus import planner as chorus_planner
+        return chorus_planner.plan_single_node(node, config)
     if sched_cfg.get("network_optimizer"):
-        # New path: coordinated network optimizer. For a single on-demand node
-        # this degenerates to a per-node optimize (no cross-node state), still
+        # Coordinated network optimizer. For a single on-demand node this
+        # degenerates to a per-node optimize (no cross-node state), still
         # richer than the legacy greedy packer below.
         from cloud import network_planner
         return network_planner.plan_single_node(node, config)
@@ -297,9 +301,15 @@ def current_plan(node_id: str) -> Optional[dict]:
 
 def generate_all_plans(config: dict) -> int:
     """Generate a fresh plan for every online node. Returns plan count."""
-    if config.get("scheduler", {}).get("network_optimizer"):
+    sched_cfg = config.get("scheduler", {})
+    if sched_cfg.get("chorus"):
+        from cloud.chorus import planner as chorus_planner
+        return chorus_planner.plan_network(config)
+    if sched_cfg.get("network_optimizer"):
         from cloud import network_planner
-        return network_planner.plan_network(config)
+        count = network_planner.plan_network(config)
+        _maybe_shadow_chorus(config)
+        return count
 
     count = 0
     reservations: dict[str, list[float]] = {}
@@ -321,4 +331,19 @@ def generate_all_plans(config: dict) -> int:
                 severity="error",
                 detail={"error": str(exc)},
             )
+    _maybe_shadow_chorus(config)
     return count
+
+
+def _maybe_shadow_chorus(config: dict) -> None:
+    """Staged rollout: when scheduler.chorus_shadow is on (and chorus itself
+    off), run the full CHORUS pipeline for telemetry + the backtest archive
+    without saving plans.  Best-effort — never affects live planning."""
+    sched_cfg = config.get("scheduler", {})
+    if not sched_cfg.get("chorus_shadow") or sched_cfg.get("chorus"):
+        return
+    try:
+        from cloud.chorus import planner as chorus_planner
+        chorus_planner.plan_shadow(config)
+    except Exception as exc:
+        logger.warning("CHORUS shadow run failed (non-fatal): %s", exc)

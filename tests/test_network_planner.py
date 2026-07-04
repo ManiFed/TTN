@@ -194,8 +194,9 @@ class TuningParamsTest(unittest.TestCase):
     def test_canonical_fills_defaults(self):
         params = tuning._canonical({"composite": {"science": 0.9}})
         self.assertEqual(set(params), {"composite", "observability",
-                                       "slot_quality", "coordination"})
+                                       "slot_quality", "coordination", "chorus"})
         self.assertEqual(set(params["observability"]), set(tuning.OBS_KEYS))
+        self.assertEqual(set(params["chorus"]), set(tuning.CHORUS_KEYS))
 
     def test_weight_group_clamp_normalizes_and_bounds_step(self):
         cur = dict(tuning.DEFAULT_OBS_WEIGHTS)

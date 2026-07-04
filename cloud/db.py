@@ -482,6 +482,49 @@ _LATE_TABLES: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_config_patches_node ON node_config_patches(node_id, status)",
     """
+    CREATE TABLE IF NOT EXISTS chorus_node_ledger (
+        node_id     TEXT PRIMARY KEY,
+        p_exec_a    DOUBLE PRECISION DEFAULT 4.0,
+        p_exec_b    DOUBLE PRECISION DEFAULT 2.0,
+        p_accept_a  DOUBLE PRECISION DEFAULT 4.0,
+        p_accept_b  DOUBLE PRECISION DEFAULT 2.0,
+        kappa       DOUBLE PRECISION DEFAULT 1.0,
+        n_kappa     INTEGER DEFAULT 0,
+        detail      TEXT DEFAULT '{}',
+        updated_at  TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chorus_target_state (
+        target_id  TEXT PRIMARY KEY,
+        state      TEXT DEFAULT '{}',
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chorus_site_calibration (
+        node_id     TEXT PRIMARY KEY,
+        a           DOUBLE PRECISION DEFAULT 0.0,
+        b           DOUBLE PRECISION DEFAULT 1.0,
+        n_nights    INTEGER DEFAULT 0,
+        climatology TEXT DEFAULT '{}',
+        updated_at  TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chorus_run_archive (
+        run_id       TEXT PRIMARY KEY,
+        night        TEXT NOT NULL,
+        ran_at       TEXT NOT NULL,
+        inputs       TEXT NOT NULL,
+        realized     TEXT DEFAULT '',
+        phi_expected DOUBLE PRECISION DEFAULT 0,
+        phi_realized DOUBLE PRECISION,
+        shadow       INTEGER DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_chorus_archive_night ON chorus_run_archive(night)",
+    """
     CREATE TABLE IF NOT EXISTS science_program_suggestions (
         id               SERIAL PRIMARY KEY,
         user_id          TEXT NOT NULL REFERENCES users(user_id),

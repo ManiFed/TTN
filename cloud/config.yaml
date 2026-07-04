@@ -95,6 +95,16 @@ tuning:
   min_change: 0.005          # skip apply/notify if no weight moves more than this
 
 scheduler:
+  # Planner selection (highest enabled wins):
+  #   chorus: true            → CHORUS information-theoretic coordinator (CHORUS.md)
+  #   network_optimizer: true → marginal-value fleet optimizer
+  #   both false              → legacy per-node greedy slot-packer
+  # chorus_shadow runs the full CHORUS pipeline alongside the incumbent for
+  # telemetry + the tuning backtest archive WITHOUT saving plans — the staged
+  # rollout path (shadow first, then flip chorus on once plan_runs comparisons
+  # look good; set chorus: false for instant rollback at any time).
+  chorus: false
+  chorus_shadow: true
   network_optimizer: true  # fleet-wide optimizer; set false to fall back to the
                            # legacy per-node greedy slot-packer (instant rollback)
   local_search_ms: 1500    # annealing refinement budget per network run
@@ -115,6 +125,13 @@ scheduler:
     robustness_cloud_relax: 0.20     # cloud-cutoff relaxation for enclosure/dew nodes
     slot_quality_floor: 0.50
     local_search_aggressiveness: 1.0
+  chorus_params:           # seed only — CHORUS hyperparameters (tuning group
+                           # "chorus"); full key list + bounds in cloud/chorus/params.py.
+                           # Auto-tuned live values live in the DB, and changes are
+                           # gated by the deterministic backtest replay (CHORUS.md §7).
+    scarcity_gamma: 0.93             # nightly discount on future capture chances
+    exploration_beta: 0.15           # value of learning about new/uncertain nodes
+    same_site_repeat_factor: 0.25    # weather-correlation conservatism
 
 aavso:
   observer_code: 'EGBA'

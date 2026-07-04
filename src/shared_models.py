@@ -261,15 +261,21 @@ class ObservationPlan:
     night: str = ""                  # "YYYY-MM-DD" (local evening date)
     generated_at: str = ""           # ISO timestamp
     items: list = field(default_factory=list)   # list[PlanItem | dict]
+    # CHORUS contingency ladder (additive; empty for legacy planners, ignored
+    # by node agents that don't understand it).  See CHORUS.md §6 T3.
+    contingencies: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "plan_id":      self.plan_id,
             "node_id":      self.node_id,
             "night":        self.night,
             "generated_at": self.generated_at,
             "items": [i.to_dict() if isinstance(i, PlanItem) else i for i in self.items],
         }
+        if self.contingencies:
+            out["contingencies"] = self.contingencies
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> "ObservationPlan":
