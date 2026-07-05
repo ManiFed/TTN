@@ -14,3 +14,5 @@ cloud_data/aavso_files/
 app/.metadata
 app/test/
 website/dashboard/
+.venv/
+cloud_data/validation/

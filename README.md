@@ -73,7 +73,14 @@ node_v1-main/
 │
 ├── scripts/
 │   ├── manage.py         Admin CLI (status, ingest, batch, submit, check-aavso, generate-code)
-│   └── seed_demo.py      Demo data generator for testing
+│   ├── seed_demo.py      Demo data generator for testing
+│   └── validate_photometry.py  Photometry validation engine (offline; `make validate`)
+│
+├── docs/validation/     Scientific credibility layer
+│   ├── VALIDATION_REPORT.md  Partner-facing photometry validation report (AAVSO)
+│   ├── RISK_MAP.md           Ranked photometric-error risk analysis
+│   ├── FIXTURE_MANIFEST.md   Real-data corpus spec for beta nodes
+│   └── evidence/             Latest validation run (report, results.json, figures)
 │
 └── build/                Installer build system
     ├── node_agent.spec   PyInstaller spec

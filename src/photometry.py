@@ -7,26 +7,35 @@ photometry measurement suitable for AAVSO submission.
 
 Public API
 ----------
-    from photometry import run_pipeline
-    result = run_pipeline(fits_path, config)   # returns dict or None
+    from photometry import run_pipeline, run_pipeline_ex
+    result = run_pipeline(fits_path, config)              # returns dict or None
+    result, rejection = run_pipeline_ex(fits_path, config)
+    # rejection is a machine-readable record ({stage, reason_code, message,
+    # detail}) explaining why a frame produced no measurement; None on success.
 
 Output dict (matches AAVSO Extended File Format fields)
 -------------------------------------------------------
     {
         "target_name":      "SN2025abc",
-        "bjd":              2460500.1234,
+        "bjd":              2460500.1234,   # BJD_TDB, mid-exposure
         "magnitude":        13.42,
         "uncertainty":      0.08,
         "filter":           "CV",
         "airmass":          1.34,
         "fwhm":             3.2,         # pixels
         "snr":              45.0,
-        "comparison_stars": 7,
+        "comparison_stars": 7,           # used in the final zero-point ensemble
         "quality_flag":     "good",      # good / acceptable / poor
+        "quality_reasons":  [...],       # machine-readable gate results ([] when good)
         "node_id":          "node_042",
         "zero_point":       22.41,
         "zp_scatter":       0.03,
         "fits_file":        "image.fits",
+        "sky_mag":          19.2,        # sky surface brightness, mag/arcsec²
+        "provenance":       {...},       # full audit block: comparison stars +
+                                         # catalogs + rejection reasons, aperture
+                                         # geometry, WCS source, time provenance,
+                                         # saturation check, pipeline version
     }
 """
 
@@ -51,6 +60,11 @@ warnings.filterwarnings("ignore", category=FITSFixedWarning)
 logger = logging.getLogger("photometry")
 
 
+# Version stamp recorded in every measurement's provenance block, so a stored
+# measurement can always be traced to the algorithm that produced it.
+PIPELINE_VERSION = "1.1.0"
+
+
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
@@ -61,6 +75,39 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     then optionally overridden by config["photometry"]["target"].
 
     Returns a measurement dict on success, None on unrecoverable failure.
+    Callers that need to know *why* a frame was rejected should use
+    run_pipeline_ex(), which additionally returns a machine-readable
+    rejection record.
+    """
+    result, _rej = run_pipeline_ex(fits_path, config)
+    return result
+
+
+def _rejection(stage: str, reason_code: str, message: str,
+               fits_path: str = "", target_name: str = "", **detail) -> dict:
+    """Machine-readable record of why a frame produced no measurement."""
+    return {
+        "rejected":    True,
+        "stage":       stage,
+        "reason_code": reason_code,
+        "message":     message,
+        "fits_file":   os.path.basename(fits_path) if fits_path else "",
+        "target_name": target_name,
+        "detail":      detail,
+    }
+
+
+def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
+    """
+    Run the full photometry pipeline on a single FITS file.
+
+    Returns (measurement, rejection):
+        measurement  – dict on success (see module docstring), else None
+        rejection    – None on success, else a dict with stage / reason_code /
+                       message / detail explaining exactly why the frame was
+                       rejected.  Every rejection path emits one of these, so
+                       frame-level rejections are auditable rather than
+                       log-only.
     """
     t0 = time.monotonic()
     # Fill any unset photometry params from the telescope spec catalog (pixel
@@ -83,11 +130,12 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
             data = np.array(hdul[0].data, dtype=np.float32)
     except Exception as exc:
         logger.error("Cannot open FITS %s: %s", fits_path, exc)
-        return None
+        return None, _rejection("load", "fits_unreadable", str(exc), fits_path)
 
     if data is None or data.size == 0:
         logger.error("FITS file has no image data: %s", fits_path)
-        return None
+        return None, _rejection("load", "no_image_data",
+                                "FITS file has no image data", fits_path)
 
     # Collapse one-shot-colour cubes to a 2-D luminance image by averaging the
     # colour planes.  Taking a single plane (the old behaviour took plane 0 = the
@@ -99,14 +147,18 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         data = data.mean(axis=caxis)
     if data.ndim != 2:
         logger.error("Unexpected data shape %s in %s", data.shape, fits_path)
-        return None
+        return None, _rejection("load", "bad_data_shape",
+                                f"unexpected data shape {data.shape}", fits_path,
+                                shape=list(data.shape))
 
     # ── Reject non-science frames ──────────────────────────────────────────────
     image_type = str(header.get("IMAGETYP", "LIGHT")).strip().upper()
     if image_type not in ("LIGHT", "LIGHT FRAME", ""):
         logger.info("Skipping non-LIGHT frame (IMAGETYP=%s): %s",
                     image_type, os.path.basename(fits_path))
-        return None
+        return None, _rejection("frame_type", "non_light_frame",
+                                f"IMAGETYP={image_type} is not a light frame",
+                                fits_path, imagetyp=image_type)
 
     # ── Detector gain ──────────────────────────────────────────────────────────
     # Priority: FITS header EGAIN/CCDGAIN (camera-reported) > config > default
@@ -131,10 +183,14 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
 
     if not target_name:
         logger.warning("No target name in FITS header or config — skipping")
-        return None
+        return None, _rejection("target", "no_target_name",
+                                "no OBJECT in FITS header and no config target",
+                                fits_path)
     if ra_deg is None or dec_deg is None:
         logger.warning("No RA/Dec for target '%s' — skipping", target_name)
-        return None
+        return None, _rejection("target", "no_target_coords",
+                                "no RA/Dec in FITS header or config",
+                                fits_path, target_name)
 
     logger.info("Pipeline start: %s  RA=%.4f°  Dec=%.4f°  file=%s",
                 target_name, ra_deg, dec_deg, os.path.basename(fits_path))
@@ -151,7 +207,7 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     search_radius    = float(phot_cfg.get("astap_search_radius", 10))
     pixel_scale      = phot_cfg.get("pixel_scale")  # arcsec/px, optional scale hint
     force_solve      = bool(phot_cfg.get("force_plate_solve", False))
-    if not _ensure_wcs(
+    wcs_source = _ensure_wcs(
         fits_path, ra_deg, dec_deg,
         solver=solver,
         astap_path=astap_path,
@@ -159,9 +215,12 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         search_radius=search_radius,
         pixel_scale=pixel_scale,
         force=force_solve,
-    ):
+    )
+    if not wcs_source:
         logger.error("Plate solve failed — cannot proceed without WCS")
-        return None
+        return None, _rejection("wcs", "plate_solve_failed",
+                                "no WCS available and plate solve failed",
+                                fits_path, target_name, solver=solver)
 
     # Reload header after potential ASTAP update
     try:
@@ -172,7 +231,8 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
                 wcs = WCS(hdul[0].header, naxis=2)
     except Exception as exc:
         logger.error("Cannot reload WCS from %s: %s", fits_path, exc)
-        return None
+        return None, _rejection("wcs", "wcs_reload_failed", str(exc),
+                                fits_path, target_name)
 
     # ── Step 2: Confirm target is in the image field ──────────────────────────
     h, w = data.shape
@@ -182,13 +242,18 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         tx, ty = float(tx), float(ty)
     except Exception as exc:
         logger.error("WCS world_to_pixel failed: %s", exc)
-        return None
+        return None, _rejection("wcs", "wcs_transform_failed", str(exc),
+                                fits_path, target_name)
 
     margin = 20  # pixels — target must be this far from edges for reliable photometry
     if not (margin <= tx < w - margin and margin <= ty < h - margin):
         logger.warning("Target %s is outside image bounds or too close to edge "
                        "(x=%.1f y=%.1f in %dx%d image)", target_name, tx, ty, w, h)
-        return None
+        return None, _rejection("field", "target_off_frame",
+                                "target outside frame or within edge margin",
+                                fits_path, target_name,
+                                x_px=round(tx, 1), y_px=round(ty, 1),
+                                width=w, height=h, margin=margin)
 
     logger.debug("Target pixel: x=%.1f  y=%.1f", tx, ty)
 
@@ -220,11 +285,15 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     comp_stars = _gather_comparison_stars(
         target_name, ra_deg, dec_deg, field_radius_deg, mag_limit,
         catalogs, target_count,
+        comparison_star_file=str(phot_cfg.get("comparison_star_file", "") or ""),
     )
 
     if not comp_stars:
         logger.error("No comparison stars found in field")
-        return None
+        return None, _rejection("comp_stars", "no_comparison_stars",
+                                "no comparison stars returned by any catalog",
+                                fits_path, target_name,
+                                catalogs=[str(c) for c in catalogs])
 
     # Filter to stars within the image frame
     comp_in_field = []
@@ -248,7 +317,11 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     logger.info("Comparison stars in field: %d / %d", len(comp_in_field), len(comp_stars))
     if len(comp_in_field) < 2:
         logger.error("Too few comparison stars in image field (%d)", len(comp_in_field))
-        return None
+        return None, _rejection("comp_stars", "too_few_comparison_stars",
+                                "fewer than 2 comparison stars land in the frame",
+                                fits_path, target_name,
+                                n_in_field=len(comp_in_field),
+                                n_candidates=len(comp_stars))
 
     # ── Step 5a: Centroid-refine positions onto actual source peaks ───────────
     # The pointing-WCS can be off by tens of pixels; snap each position to the
@@ -300,7 +373,9 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     fluxes, flux_errors = _aperture_photometry(data, positions, ap_r, ann_in, ann_out, read_noise, gain)
     if fluxes is None:
         logger.error("Aperture photometry failed")
-        return None
+        return None, _rejection("photometry", "aperture_photometry_failed",
+                                "photutils aperture photometry raised",
+                                fits_path, target_name)
 
     target_flux      = fluxes[0]
     target_flux_err  = flux_errors[0]
@@ -310,7 +385,33 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     if target_flux <= 0:
         logger.warning("Target flux non-positive (%.1f) — target may be too faint or saturated",
                        target_flux)
-        return None
+        return None, _rejection("photometry", "nonpositive_target_flux",
+                                "background-subtracted target flux is not positive",
+                                fits_path, target_name,
+                                target_flux=round(float(target_flux), 2))
+
+    # ── Step 5b: Saturation check ─────────────────────────────────────────────
+    # A clipped PSF core biases the aperture sum faint, and the catalog cannot
+    # warn us (mag_min is only a proxy).  Check the actual peak pixel around
+    # every measured position against the detector's usable full-scale value.
+    sat_adu = float(phot_cfg.get("saturation_adu", 60000))
+    peak_r  = max(3, int(round(fwhm_px)))
+
+    def _local_peak(px_x: float, px_y: float) -> float:
+        ix, iy = int(round(px_x)), int(round(px_y))
+        y0, y1 = max(0, iy - peak_r), min(h, iy + peak_r + 1)
+        x0, x1 = max(0, ix - peak_r), min(w, ix + peak_r + 1)
+        if y1 <= y0 or x1 <= x0:
+            return 0.0
+        return float(data[y0:y1, x0:x1].max())
+
+    peaks = [_local_peak(x, y) for (x, y) in refined]
+    target_peak_adu  = peaks[0]
+    target_saturated = target_peak_adu >= sat_adu
+    if target_saturated:
+        logger.warning("Target peak %.0f ADU ≥ saturation limit %.0f ADU — "
+                       "magnitude will be biased faint; flagging poor",
+                       target_peak_adu, sat_adu)
 
     # ── Step 6: Differential photometry ──────────────────────────────────────
     def instr_mag(flux: float) -> float:
@@ -318,12 +419,37 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
 
     target_instr = instr_mag(target_flux)
     zero_points, zp_weights = [], []
+    comp_audit: list = []      # one provenance entry per in-field comp star
+    zp_audit_idx: list = []    # comp_audit index for each zero_points entry
 
     for i, cs in enumerate(comp_in_field):
+        entry = {
+            "auid":     cs.get("auid", ""),
+            "source":   cs.get("source", ""),
+            "ra_deg":   round(float(cs["ra_deg"]), 6),
+            "dec_deg":  round(float(cs["dec_deg"]), 6),
+            "cat_mag":  cs.get("mag_v"),
+            "cat_err":  cs.get("mag_err"),
+            "x_px":     round(float(refined[i + 1][0]), 2),
+            "y_px":     round(float(refined[i + 1][1]), 2),
+            "peak_adu": round(peaks[i + 1], 1),
+            "flux":     round(float(comp_fluxes[i]), 2),
+            "used":     False,
+            "reject_reason": None,
+        }
+        comp_audit.append(entry)
+
+        if peaks[i + 1] >= sat_adu:
+            entry["reject_reason"] = "saturated"
+            logger.info("Comp star %s peak %.0f ADU ≥ %.0f — excluded from ensemble",
+                        entry["auid"] or entry["source"], peaks[i + 1], sat_adu)
+            continue
         if comp_fluxes[i] <= 0:
+            entry["reject_reason"] = "nonpositive_flux"
             continue
         ref_mag = cs.get("mag_v")
         if ref_mag is None:
+            entry["reject_reason"] = "no_catalog_magnitude"
             continue
         zp = ref_mag - instr_mag(comp_fluxes[i])
         if comp_flux_errors[i] > 0:
@@ -338,12 +464,18 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         cat_err  = float(cs.get("mag_err") or 0.05)
         sigma_zp = math.sqrt(sigma_instr ** 2 + cat_err ** 2)
         weight   = 1.0 / max(sigma_zp ** 2, 1e-6)
+        entry["zp"] = round(zp, 4)
+        entry["used"] = True
         zero_points.append(zp)
         zp_weights.append(weight)
+        zp_audit_idx.append(len(comp_audit) - 1)
 
     if not zero_points:
         logger.error("Could not compute zero point — no valid comparison stars with known magnitudes")
-        return None
+        return None, _rejection("zero_point", "no_zero_point",
+                                "no usable comparison stars with catalog magnitudes",
+                                fits_path, target_name,
+                                comparison_stars=comp_audit)
 
     zp_arr  = np.array(zero_points)
     w_arr   = np.array(zp_weights)
@@ -356,6 +488,10 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         n_clipped = int(np.sum(masked.mask))
         if n_clipped:
             logger.info("ZP sigma-clip: removed %d outlier(s) from %d comp stars", n_clipped, len(zp_arr))
+        for j, keep in enumerate(good):
+            if not keep:
+                comp_audit[zp_audit_idx[j]]["used"] = False
+                comp_audit[zp_audit_idx[j]]["reject_reason"] = "zp_sigma_clipped"
         zp_arr = zp_arr[good]
         w_arr  = w_arr[good]
 
@@ -371,23 +507,21 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     # ── Step 7: Ancillary quantities ──────────────────────────────────────────
     snr     = float(target_flux / target_flux_err) if target_flux_err > 0 else 0.0
     airmass = _compute_airmass(header, config)
-    bjd     = _compute_bjd(header, ra_deg, dec_deg, config)
+    bjd, time_prov = _compute_bjd_ex(header, ra_deg, dec_deg, config)
 
     # ── Step 8: Quality flag ──────────────────────────────────────────────────
-    n_comp_used    = len(zero_points)
-    min_comp       = int(phot_cfg.get("min_comparison_stars", 3))
-    snr_threshold  = float(phot_cfg.get("snr_threshold", 20))
-    max_unc        = float(phot_cfg.get("max_uncertainty", 0.3))
-    max_airmass    = float(phot_cfg.get("max_airmass", 3.0))
-
-    if (snr >= snr_threshold and uncertainty < max_unc
-            and n_comp_used >= min_comp and airmass < max_airmass):
-        quality_flag = "good"
-    elif (snr >= snr_threshold * 0.5 and uncertainty < max_unc * 1.5
-          and n_comp_used >= 2):
-        quality_flag = "acceptable"
-    else:
-        quality_flag = "poor"
+    n_comp_used = int(len(zp_arr))
+    quality_flag, quality_reasons = evaluate_quality(
+        {
+            "snr":              snr,
+            "uncertainty":      uncertainty,
+            "n_comparison_stars": n_comp_used,
+            "airmass":          airmass,
+            "zp_scatter":       zp_scatter,
+            "target_saturated": target_saturated,
+        },
+        phot_cfg,
+    )
 
     elapsed = time.monotonic() - t0
     logger.info(
@@ -398,7 +532,7 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     )
 
     # ── Step 8b: Sky surface brightness ──────────────────────────────────────
-    pixel_scale = float(phot_cfg.get("pixel_scale", 2.4))
+    pixel_scale = float(phot_cfg.get("pixel_scale") or 2.4)
     if bkg_med > 0 and pixel_scale > 0:
         sky_mag = round(zero_point - 2.5 * math.log10(bkg_med) + 5.0 * math.log10(pixel_scale), 2)
     else:
@@ -418,6 +552,37 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         except Exception as _pe:
             logger.warning("Patrol check error: %s", _pe)
 
+    # ── Step 10: Provenance ───────────────────────────────────────────────────
+    # Everything needed to audit this measurement after the fact: which stars
+    # calibrated it, from which catalogs, why any were rejected, the exact
+    # aperture geometry, and where the WCS and timestamp came from.  Extra keys
+    # are ignored by Measurement.from_dict, so cloud ingestion is unaffected;
+    # the node's AAVSO audit record (JSON) captures the full block.
+    provenance = {
+        "pipeline_version":  PIPELINE_VERSION,
+        "wcs_source":        wcs_source if isinstance(wcs_source, str) else "unknown",
+        "time":              time_prov,
+        "aperture_px": {
+            "radius":        round(ap_r, 2),
+            "annulus_inner": round(ann_in, 2),
+            "annulus_outer": round(ann_out, 2),
+        },
+        "fwhm_px":           round(fwhm_px, 2),
+        "gain_e_per_adu":    round(gain, 3),
+        "read_noise_e":      round(read_noise, 2),
+        "saturation_adu":    sat_adu,
+        "target_xy_px":      [round(tx, 2), round(ty, 2)],
+        "target_peak_adu":   round(target_peak_adu, 1),
+        "target_saturated":  target_saturated,
+        "sky_median_adu":    round(float(bkg_med), 2),
+        "sky_std_adu":       round(float(bkg_std), 2),
+        "catalogs_queried":  [str(c) for c in catalogs],
+        "comparison_stars":  comp_audit,
+        "n_comp_candidates": len(comp_stars),
+        "n_comp_in_field":   len(comp_in_field),
+        "n_comp_used":       n_comp_used,
+    }
+
     return {
         "target_name":      target_name,
         "bjd":              round(bjd, 6),
@@ -429,13 +594,97 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         "snr":              round(snr, 1),
         "comparison_stars": n_comp_used,
         "quality_flag":     quality_flag,
+        "quality_reasons":  quality_reasons,
         "node_id":          node_id,
         "zero_point":       round(zero_point, 3),
         "zp_scatter":       round(zp_scatter, 3),
         "fits_file":        os.path.basename(fits_path),
         "sky_mag":          sky_mag,
         "patrol_alerts":    patrol_alerts,
-    }
+        "provenance":       provenance,
+    }, None
+
+
+# ── Quality gates ──────────────────────────────────────────────────────────────
+
+def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
+    """
+    Pure quality-gate evaluation for one measurement.
+
+    metrics keys: snr, uncertainty, n_comparison_stars, airmass, zp_scatter,
+    target_saturated.
+
+    Returns (flag, reasons):
+        flag     – "good" | "acceptable" | "poor"
+        reasons  – list of machine-readable dicts, one per gate that did not
+                   pass at the "good" level:
+                   {"check": ..., "value": ..., "threshold": ..., "outcome":
+                    "fail" (forces poor) or "warn" (blocks good only)}
+                   Empty list ⇔ flag == "good".
+
+    Gate semantics (thresholds from phot_cfg, defaults in parentheses):
+        target_saturated              → poor            (hard fail)
+        zp_scatter > zp_scatter_max   → poor            (0.30 mag)
+        zp_scatter > zp_scatter_warn  → not good        (0.15 mag)
+        snr < snr_threshold           → not good  (20); < half → poor
+        uncertainty ≥ max_uncertainty → not good (0.3); ≥ 1.5× → poor
+        n_comp < min_comparison_stars → not good   (3); < 2    → poor
+        airmass ≥ max_airmass         → not good  (3.0)
+    """
+    snr        = float(metrics.get("snr", 0.0))
+    unc        = float(metrics.get("uncertainty", 9.99))
+    n_comp     = int(metrics.get("n_comparison_stars", 0))
+    airmass    = float(metrics.get("airmass", 9.9))
+    zp_scatter = float(metrics.get("zp_scatter", 0.0))
+    saturated  = bool(metrics.get("target_saturated", False))
+
+    min_comp      = int(phot_cfg.get("min_comparison_stars", 3))
+    snr_threshold = float(phot_cfg.get("snr_threshold", 20))
+    max_unc       = float(phot_cfg.get("max_uncertainty", 0.3))
+    max_airmass   = float(phot_cfg.get("max_airmass", 3.0))
+    zp_warn       = float(phot_cfg.get("zp_scatter_warn", 0.15))
+    zp_max        = float(phot_cfg.get("zp_scatter_max", 0.30))
+
+    reasons: list = []
+
+    def _flag(check: str, value, threshold, outcome: str) -> None:
+        reasons.append({
+            "check": check,
+            "value": round(value, 4) if isinstance(value, float) else value,
+            "threshold": threshold,
+            "outcome": outcome,
+        })
+
+    if saturated:
+        _flag("target_saturated", True, False, "fail")
+    if zp_scatter > zp_max:
+        _flag("zp_scatter", zp_scatter, zp_max, "fail")
+    elif zp_scatter > zp_warn:
+        _flag("zp_scatter", zp_scatter, zp_warn, "warn")
+
+    if snr < snr_threshold * 0.5:
+        _flag("snr", snr, snr_threshold * 0.5, "fail")
+    elif snr < snr_threshold:
+        _flag("snr", snr, snr_threshold, "warn")
+
+    if unc >= max_unc * 1.5:
+        _flag("uncertainty", unc, max_unc * 1.5, "fail")
+    elif unc >= max_unc:
+        _flag("uncertainty", unc, max_unc, "warn")
+
+    if n_comp < 2:
+        _flag("comparison_stars", n_comp, 2, "fail")
+    elif n_comp < min_comp:
+        _flag("comparison_stars", n_comp, min_comp, "warn")
+
+    if airmass >= max_airmass:
+        _flag("airmass", airmass, max_airmass, "warn")
+
+    if any(r["outcome"] == "fail" for r in reasons):
+        return "poor", reasons
+    if reasons:
+        return "acceptable", reasons
+    return "good", reasons
 
 
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────
@@ -447,9 +696,13 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
                 solve_field_path: str = "solve-field",
                 search_radius: float = 10.0,
                 pixel_scale: Optional[float] = None,
-                force: bool = False) -> bool:
+                force: bool = False) -> Optional[str]:
     """
-    Return True if the FITS file has a valid WCS, plate-solving if needed.
+    Ensure the FITS file has a valid WCS, plate-solving if needed.
+
+    Returns a truthy string naming the WCS source ("header", "solved_astrometry",
+    "solved_astap", "pointing") so provenance can record where the astrometry
+    came from, or None when no WCS could be obtained.
 
     solver  – "astrometry" (Astrometry.net's solve-field) or "astap".
     force   – when True, re-solve even if a WCS is already present. The Seestar
@@ -464,7 +717,7 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
                 hdr = hdul[0].header
                 if "CRVAL1" in hdr and "CRVAL2" in hdr and "CD1_1" in hdr:
                     logger.info("WCS already in FITS header — skipping plate solve")
-                    return True
+                    return "header"
                 # Accept CDELT-style WCS only when it came from a real plate solver,
                 # not from our pointing fallback (which may have used target coords
                 # instead of the mount's actual RA/DEC).  Re-inject when it's ours.
@@ -477,7 +730,7 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
                         # fall through so _inject_pointing_wcs corrects CRVAL
                     else:
                         logger.info("WCS (CDELT) already in FITS header — skipping plate solve")
-                        return True
+                        return "header"
         except Exception as exc:
             logger.warning("Could not inspect FITS header: %s", exc)
     else:
@@ -486,13 +739,15 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     if solver == "astrometry":
         if _run_astrometry_net(fits_path, ra_deg, dec_deg,
                                solve_field_path, search_radius, pixel_scale):
-            return True
+            return "solved_astrometry"
         logger.warning("Astrometry.net solve failed — falling back to ASTAP")
-        return _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
+        if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+            return "solved_astap"
+        return None
 
     logger.info("Running ASTAP plate solver")
     if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
-        return True
+        return "solved_astap"
 
     # No plate solver available — fall back to constructing a simple TAN WCS
     # from the telescope's reported pointing and the known pixel scale.  This
@@ -506,13 +761,15 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
             "Install ASTAP for accurate astrometry.",
             ra_deg, dec_deg, pixel_scale,
         )
-        return _inject_pointing_wcs(fits_path, ra_deg, dec_deg, pixel_scale)
+        if _inject_pointing_wcs(fits_path, ra_deg, dec_deg, pixel_scale):
+            return "pointing"
+        return None
 
     logger.error(
         "Plate solve failed and photometry.pixel_scale is not set — "
         "cannot construct fallback WCS.  Install ASTAP or set pixel_scale."
     )
-    return False
+    return None
 
 
 def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
@@ -734,7 +991,14 @@ def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
 def _estimate_fwhm(data: np.ndarray, fallback_px: float = 4.0) -> float:
     """
     Estimate image FWHM in pixels using DAOStarFinder on bright, non-saturated
-    stars, fitting second-moment Gaussians on 21×21 stamps.
+    stars, then Gaussian PSF fits (photutils.psf.fit_fwhm) on each star, with
+    second-moment Gaussians on 21×21 stamps as the fallback estimator.
+
+    The moment estimator is exact on noise-free data but biased high on real
+    frames: sky noise in the stamp wings is rectified by the zero clip and
+    inflates the second moment (measured ×2 at Seestar-like S/N), which in turn
+    doubles the aperture radius and degrades SNR.  The PSF fit does not share
+    that bias; the moment path remains for older photutils without fit_fwhm.
 
     ``fallback_px`` is the last-resort PSF width used when no sources can be
     measured.  It is derived per-telescope from the pixel scale (see
@@ -765,6 +1029,21 @@ def _estimate_fwhm(data: np.ndarray, fallback_px: float = 4.0) -> float:
         # Support both old ('xcentroid') and new ('x_centroid') photutils column names
         x_col = "x_centroid" if "x_centroid" in sources.colnames else "xcentroid"
         y_col = "y_centroid" if "y_centroid" in sources.colnames else "ycentroid"
+
+        # Preferred estimator: per-star Gaussian PSF fit
+        try:
+            from photutils.psf import fit_fwhm
+            xy = [(float(row[x_col]), float(row[y_col])) for row in subset[:12]]
+            if xy:
+                fitted = np.atleast_1d(fit_fwhm(data - median, xypos=xy, fit_shape=15))
+                fitted = fitted[np.isfinite(fitted)]
+                fitted = fitted[(fitted > 1.0) & (fitted < 25.0)]
+                if len(fitted) >= 3:
+                    return float(np.median(fitted))
+        except ImportError:
+            pass  # photutils < 1.12 — use the moment estimator below
+        except Exception as exc:
+            logger.debug("PSF-fit FWHM failed (%s) — using moment estimator", exc)
 
         fwhms = []
         half = 10  # stamp half-size
@@ -815,14 +1094,18 @@ def _gather_comparison_stars(
     mag_limit: float,
     catalogs,
     target_count: int,
+    comparison_star_file: str = "",
 ) -> list:
     """
     Query the configured catalogs in order, accumulating de-duplicated
     comparison stars until ``target_count`` is reached or the list is exhausted.
 
-    Recognised catalog names: "aavso", "apass", "atlas", "gaia". Unknown names
-    are skipped with a warning. Order matters — earlier catalogs win on
-    duplicates, so list curated/most-reliable photometry first.
+    Recognised catalog names: "aavso", "apass", "atlas", "gaia", and "file"
+    (a frozen local JSON catalog — see _get_comparison_stars_file — used for
+    offline validation runs and network-free reprocessing with a pinned,
+    auditable comparison sequence).  Unknown names are skipped with a warning.
+    Order matters — earlier catalogs win on duplicates, so list
+    curated/most-reliable photometry first.
     """
     comp_stars: list = []
     for raw in catalogs:
@@ -830,7 +1113,11 @@ def _gather_comparison_stars(
         if len(comp_stars) >= target_count:
             break
         try:
-            if cat == "aavso":
+            if cat == "file":
+                new = _get_comparison_stars_file(
+                    comparison_star_file, ra_deg, dec_deg,
+                    field_radius_deg, mag_limit)
+            elif cat == "aavso":
                 new = _get_comparison_stars_aavso(
                     target_name, ra_deg, dec_deg, field_radius_deg, mag_limit)
             elif cat == "apass":
@@ -876,6 +1163,61 @@ def _merge_comp_stars(existing: list, new: list, sep_arcsec: float = 5.0) -> lis
             out.append(s)
             coords.append((s["ra_deg"], s["dec_deg"]))
     return out
+
+
+def _get_comparison_stars_file(
+    path: str,
+    ra_deg: float,
+    dec_deg: float,
+    field_radius_deg: float,
+    mag_limit: float,
+) -> list:
+    """
+    Load comparison stars from a frozen local JSON catalog (no network).
+
+    The file is a JSON list of objects with at least ra_deg, dec_deg, mag_v;
+    optional auid, mag_err (default 0.05), source (default "file").  Entries
+    outside ``field_radius_deg`` of the target or fainter than ``mag_limit``
+    are skipped, so one catalog file can serve several nearby fields.
+
+    This backend exists for (a) deterministic offline validation runs and
+    (b) reprocessing real data with a pinned, auditable comparison sequence.
+    """
+    if not path:
+        logger.warning("Catalog 'file' listed but photometry.comparison_star_file is not set")
+        return []
+    import json as _json
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            entries = _json.load(fh)
+    except Exception as exc:
+        logger.warning("Cannot read comparison star file %s: %s", path, exc)
+        return []
+    if not isinstance(entries, list):
+        logger.warning("Comparison star file %s is not a JSON list", path)
+        return []
+
+    comp_stars = []
+    cos_dec = math.cos(math.radians(dec_deg))
+    for e in entries:
+        try:
+            e_ra, e_dec = float(e["ra_deg"]), float(e["dec_deg"])
+            mag_v = float(e["mag_v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        sep2 = ((e_ra - ra_deg) * cos_dec) ** 2 + (e_dec - dec_deg) ** 2
+        if sep2 > field_radius_deg ** 2 or mag_v > mag_limit:
+            continue
+        comp_stars.append({
+            "auid":    str(e.get("auid", "")),
+            "ra_deg":  e_ra,
+            "dec_deg": e_dec,
+            "mag_v":   mag_v,
+            "mag_err": float(e.get("mag_err", 0.05) or 0.05),
+            "source":  str(e.get("source", "file")),
+        })
+    logger.info("File catalog %s: %d comparison stars", os.path.basename(path), len(comp_stars))
+    return comp_stars
 
 
 def _get_comparison_stars_aavso(
@@ -1248,13 +1590,25 @@ def _aperture_photometry(
 # ── Helper: BJD ───────────────────────────────────────────────────────────────
 
 def _compute_bjd(header: dict, ra_deg: float, dec_deg: float, config: dict) -> float:
-    """
-    Return Barycentric Julian Date (BJD_TDB) for the exposure mid-point.
+    """Backward-compatible wrapper around _compute_bjd_ex (BJD value only)."""
+    bjd, _prov = _compute_bjd_ex(header, ra_deg, dec_deg, config)
+    return bjd
 
-    Two steps are required for a real BJD, and the previous implementation did
-    only the first:
-      1. Convert the UTC timestamp to the TDB time scale.
-      2. Add the light-travel time from the observatory to the solar-system
+
+def _compute_bjd_ex(header: dict, ra_deg: float, dec_deg: float,
+                    config: dict) -> tuple:
+    """
+    Return (BJD_TDB, time_provenance) for the exposure mid-point.
+
+    Steps:
+      1. Parse DATE-OBS (UTC, start of exposure by FITS convention).
+      2. Shift to the exposure mid-point using EXPTIME/EXPOSURE/LIVETIME —
+         for a stacked Seestar frame integrating for minutes, timestamping the
+         start instead of the mid-point is a systematic timing bias of half
+         the integration (e.g. +2.5 min on a 5-min stack), which matters for
+         exoplanet transits and eclipse timings.
+      3. Convert the UTC timestamp to the TDB time scale.
+      4. Add the light-travel time from the observatory to the solar-system
          barycenter for the target's direction (Time.light_travel_time).  This
          Rømer term is up to ±8.3 minutes and is what distinguishes BJD from a
          plain geocentric/topocentric JD.
@@ -1263,6 +1617,10 @@ def _compute_bjd(header: dict, ra_deg: float, dec_deg: float, config: dict) -> f
     when the observatory location is unknown we evaluate it at the geocenter —
     still far better than omitting the barycentric term entirely.  Falls back to
     JD(TDB) at the observer if the correction itself fails.
+
+    time_provenance records how the timestamp was derived so each measurement
+    can be audited: {"time_scale", "time_ref", "date_obs", "exptime_s",
+    "barycentric"}.
     """
     date_obs = header.get("DATE-OBS", "")
     t = None
@@ -1278,21 +1636,53 @@ def _compute_bjd(header: dict, ra_deg: float, dec_deg: float, config: dict) -> f
                 break
             except Exception:
                 continue
+
+    prov = {
+        "time_scale":  "BJD_TDB",
+        "time_ref":    "exposure_start",
+        "date_obs":    str(date_obs) if date_obs else None,
+        "exptime_s":   None,
+        "barycentric": True,
+    }
+
     if t is None:
         if date_obs:
             logger.warning("Could not parse DATE-OBS '%s' — using current time", date_obs)
         else:
             logger.debug("DATE-OBS missing — using current time for BJD")
         t = Time.now()
+        prov["time_ref"] = "system_clock"
+    else:
+        # Mid-exposure correction.  Per the FITS convention DATE-OBS marks the
+        # start of the exposure; EXPTIME (or EXPOSURE/LIVETIME) is taken as the
+        # total integration of the frame, which for a live stack is the
+        # accumulated exposure.  Disable via photometry.bjd_midpoint_correction
+        # for devices whose DATE-OBS is already the mid- or end-point.
+        midpoint = bool(config.get("photometry", {})
+                        .get("bjd_midpoint_correction", True))
+        exptime = None
+        for key in ("EXPTIME", "EXPOSURE", "LIVETIME"):
+            try:
+                v = float(header.get(key))
+                if v > 0:
+                    exptime = v
+                    break
+            except (TypeError, ValueError):
+                continue
+        prov["exptime_s"] = exptime
+        if midpoint and exptime is not None:
+            t = t + (exptime / 2.0) * u.s
+            prov["time_ref"] = "mid_exposure"
 
     location = _observer_location(config)
     try:
         coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
         ltt = t.light_travel_time(coord, kind="barycentric", location=location)
-        return float((t.tdb + ltt).jd)
+        return float((t.tdb + ltt).jd), prov
     except Exception as exc:
         logger.warning("Barycentric correction failed (%s) — using JD(TDB) without it", exc)
-        return float(t.tdb.jd)
+        prov["barycentric"] = False
+        return float(t.tdb.jd), prov
 
 
 def _observer_location(config: dict) -> EarthLocation:

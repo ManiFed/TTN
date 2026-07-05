@@ -77,10 +77,16 @@ photometry:
   aperture_factor: 1.5
   astap_path: astap
   astap_search_radius: 10
+  # BJD is stamped at mid-exposure (DATE-OBS + EXPTIME/2, FITS convention).
+  # Set false for devices whose DATE-OBS is already the mid- or end-point.
+  bjd_midpoint_correction: true
   comparison_catalogs:
   - aavso
   - apass
   - gaia
+  # Frozen local JSON catalog for the "file" comparison backend (offline /
+  # reproducible validation runs).  See docs/validation/FIXTURE_MANIFEST.md
+  comparison_star_file: ''
   comparison_target_count: 8
   enabled: true
   field_radius: 0.5
@@ -100,6 +106,9 @@ photometry:
   node_id: seestar-live-001
   pixel_scale: 2.4
   read_noise: 5
+  # Peak-ADU level treated as saturated: target → quality poor, comparison
+  # stars → excluded from the zero-point ensemble.
+  saturation_adu: 60000
   snr_threshold: 20
   solve_field_path: /opt/homebrew/bin/solve-field
   solver: astrometry
@@ -107,6 +116,10 @@ photometry:
     dec_deg: null
     name: ''
     ra_deg: null
+  # Zero-point ensemble scatter gates: above warn blocks quality=good,
+  # above max forces quality=poor.
+  zp_scatter_max: 0.3
+  zp_scatter_warn: 0.15
 pier_cam:
   bin: 2
   device_index: 0

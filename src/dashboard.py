@@ -380,11 +380,15 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdr["NAXIS"]    = 2
                 hdr["NAXIS1"]   = sci.shape[1]
                 hdr["NAXIS2"]   = sci.shape[0]
-                hdr["DATE-OBS"] = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime())
                 # Pull what we can from the camera device
                 if exp_dur is None:
                     with _state_lock:
                         exp_dur = _state["camera"].get("exposure_duration")
+                # DATE-OBS is the exposure *start* per the FITS convention (the
+                # photometry BJD mid-point correction depends on it); we save
+                # right after readout, so start ≈ now − exposure duration.
+                _start = _time.time() - float(exp_dur or 0.0)
+                hdr["DATE-OBS"] = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime(_start))
                 if exp_dur is not None:
                     hdr["EXPTIME"] = float(exp_dur)
                 try:
