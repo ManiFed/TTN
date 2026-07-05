@@ -123,6 +123,7 @@ def main() -> None:
 
     # ── API server (dev only — production uses cloud/wsgi.py + gunicorn) ───────
     server_cfg = config.get("server", {})
+    # Deploy config intentionally binds the cloud API publicly.
     host = server_cfg.get("host", "0.0.0.0")
     port = int(os.environ.get("PORT", server_cfg.get("port", 8800)))
     app = create_app(config)

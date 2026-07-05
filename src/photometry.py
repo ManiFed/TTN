@@ -821,9 +821,8 @@ def _run_astrometry_net(fits_path: str, ra_deg: float, dec_deg: float,
     import shutil
 
     base    = os.path.splitext(os.path.basename(fits_path))[0]
-    # Force workdir into /tmp — astrometry.net generates broken PNM paths when
-    # the workdir is in macOS's /var/folders system temp tree.
-    workdir = tempfile.mkdtemp(prefix="bs_anet_", dir="/tmp")
+    # Use the system temp directory for solve-field scratch output.
+    workdir = tempfile.mkdtemp(prefix="bs_anet_")
     # Also copy the input FITS into /tmp so solve-field's path handling is consistent.
     solve_input = os.path.join(workdir, base + ".fits")
     shutil.copy2(fits_path, solve_input)

@@ -136,7 +136,8 @@ def send(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # Fixed HTTPS FCM API endpoint.
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             logger.debug("FCM sent to %s…: HTTP %s", fcm_token[:12], resp.status)
             return True
     except urllib.error.HTTPError as exc:

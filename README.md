@@ -11,6 +11,23 @@ manual intervention required.
 
 ---
 
+## Fleet Digital Twin
+
+The network can be simulated offline as an evolving instrument: synthetic
+fleets (5–1,000 nodes), correlated weather, class-specific target physics,
+and the production CHORUS solver executed unchanged, compared against
+baseline schedulers on identical nights.  Deterministic per seed, no DB, no
+live APIs.
+
+```bash
+python -m sim list                          # scenario library
+python -m sim run --scenario beta_5_nodes   # one command, full comparison
+python -m pytest tests/test_sim.py          # CI-safe smoke tests (~8 s)
+```
+
+See `SIMULATION.md` (model + assumptions + how to run) and
+`docs/FLEET_DIGITAL_TWIN_REPORT.md` (partner-facing results).
+
 ## Repository Contents
 
 ```

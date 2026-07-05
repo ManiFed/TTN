@@ -285,8 +285,6 @@ def fetch_asassn(cfg: dict) -> list:
     Requires a free account at https://asas-sn.osu.edu/sky-patrol/
     Set alerts.asassn.api_key in cloud/config.yaml.
     """
-    import csv
-    import io
     import requests
 
     api_key = str(cfg.get("api_key", "") or "").strip()
@@ -483,7 +481,7 @@ _FETCHERS: dict[str, Callable[[dict], list]] = {
 # ── Dedup / cross-match / store ────────────────────────────────────────────────
 
 def _target_id_for(name: str) -> str:
-    return "tgt_" + hashlib.sha1(name.strip().lower().encode()).hexdigest()[:12]
+    return "tgt_" + hashlib.sha256(name.strip().lower().encode()).hexdigest()[:12]
 
 
 def _find_crossmatch(ra_deg: float, dec_deg: float) -> Optional[dict]:

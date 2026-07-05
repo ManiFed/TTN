@@ -32,7 +32,6 @@ import platform
 import subprocess
 import sys
 import threading
-import time
 from typing import Optional
 
 logger = logging.getLogger("sleep_prevention")

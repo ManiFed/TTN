@@ -25,7 +25,7 @@ import time
 from typing import Any, Optional
 
 import yaml
-from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory, stream_with_context
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 from pyongc.ongc import listObjects as _ongc_list
 from alpaca.discovery import discover_servers
@@ -34,7 +34,7 @@ from alpaca.telescope import Telescope
 from alpaca.camera import Camera, ExposureCancelled
 from alpaca.focuser import Focuser
 from alpaca.autofocus import autofocus_device, AutofocusCancelled, AutofocusError
-from alpaca.covercalibrator import CoverCalibrator, COVER_STATE_NAMES, COVER_NOT_PRESENT, COVER_MOVING, COVER_OPEN, COVER_CLOSED
+from alpaca.covercalibrator import CoverCalibrator
 from src.image_watcher import ImageWatcher
 from src.photometry import run_pipeline as _run_photometry
 from src.aavso_submission import submit as _aavso_submit
@@ -605,9 +605,12 @@ def _on_new_fits(info: dict) -> None:
     filter_ = header.get("FILTER", "")
 
     parts = [f"{kb:.1f} KB"]
-    if obj:     parts.append(f"obj={obj}")
-    if exptime: parts.append(f"exp={exptime}s")
-    if filter_: parts.append(f"filter={filter_}")
+    if obj:
+        parts.append(f"obj={obj}")
+    if exptime:
+        parts.append(f"exp={exptime}s")
+    if filter_:
+        parts.append(f"filter={filter_}")
     logger.info("FITS captured: %s  (%s)", os.path.basename(path), "  ".join(parts))
 
     b64 = _fits_to_png_b64(path)
@@ -626,7 +629,6 @@ def _on_new_fits(info: dict) -> None:
     # Optionally run photometry pipeline in background thread
     with _state_lock:
         phot_enabled = _state["photometry"]["enabled"]
-        phot_running = _state["photometry"]["running"]
 
     if phot_enabled:
         _enqueue_photometry(path)
@@ -2169,8 +2171,10 @@ def _do_connect(host: str, port: int, set_as_default: bool = False) -> tuple[dic
             logger.warning("Could not save default server: %s", exc)
 
     _parts = []
-    if tel_ok: _parts.append("telescope")
-    if cam_ok: _parts.append("camera")
+    if tel_ok:
+        _parts.append("telescope")
+    if cam_ok:
+        _parts.append("camera")
     logger.info("Connected to %s:%d — %s", host, port, " + ".join(_parts))
     if errors:
         logger.warning("Connection warnings: %s", "; ".join(errors))
@@ -2592,7 +2596,6 @@ def api_expose():
                 # Grab current telescope position as target label
                 with _state_lock:
                     ra  = _state["telescope"].get("ra")
-                    dec = _state["telescope"].get("dec")
                 target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
                 logger.info("Exposure complete — image captured (%.2f s  bin%d)", duration, binning)
                 _store_history_image(target, duration, binning, 1, 1, b64)
@@ -9423,7 +9426,6 @@ def launch(port: int = 5173) -> None:
     global _safety_mgr, _image_watcher, _cloud
 
     import urllib.request
-    import webbrowser
 
     cfg = _load_config()
     log_cfg = cfg.get("logging", {})
@@ -9536,12 +9538,13 @@ def launch(port: int = 5173) -> None:
     url = f"http://localhost:{port}"
     for _ in range(20):
         try:
-            urllib.request.urlopen(url, timeout=0.5)
+            # Local readiness probe only.
+            urllib.request.urlopen(url, timeout=0.5)  # nosec B310
             break
         except Exception:
             time.sleep(0.25)
 
-    print(f"\n  NODE v1 running\n", file=sys.__stdout__)
+    print("\n  NODE v1 running\n", file=sys.__stdout__)
 
     try:
         while True:

@@ -12,9 +12,8 @@ resolution).
 """
 
 import logging
-import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from cloud import db
 from cloud.conditions import altitude_curve

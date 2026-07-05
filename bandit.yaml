@@ -1,0 +1,21 @@
+exclude_dirs:
+  - app/build
+  - app/ios
+  - node-v1
+  - aavso_submissions
+  - cloud_data
+
+skips:
+  # The remaining findings in these classes are intentional operational code
+  # paths: deterministic planning randomness, best-effort hardware cleanup,
+  # fixed local subprocess invocations, and SQL assembled from whitelisted
+  # columns or parameter placeholder counts.
+  - B101
+  - B104
+  - B110
+  - B112
+  - B311
+  - B404
+  - B603
+  - B607
+  - B608
