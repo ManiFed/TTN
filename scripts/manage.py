@@ -26,8 +26,6 @@ Examples
 """
 
 import argparse
-import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,7 +108,7 @@ def cmd_status(config: dict) -> None:
 
     # AAVSO config status
     aavso = config.get("aavso", {})
-    print(f"\nAAVSO config:")
+    print("\nAAVSO config:")
     print(f"  observer_code : {aavso.get('observer_code') or '(not set)'}")
     print(f"  username      : {aavso.get('username') or '(not set)'}")
     print(f"  password      : {'(set)' if aavso.get('password') else '(not set)'}")
@@ -287,7 +285,7 @@ def cmd_generate_code(args) -> None:
     chars = string.ascii_uppercase + string.digits
     expires = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
 
-    print(f"\n=== Activation Code Generator ===\n")
+    print("\n=== Activation Code Generator ===\n")
     if user_id:
         u = db.query_one("SELECT email FROM users WHERE user_id = ?", (user_id,))
         if u is None:

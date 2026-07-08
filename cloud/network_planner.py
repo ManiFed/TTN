@@ -544,8 +544,6 @@ def _anneal(state, opps_by_node, contexts, coord, budget_ms, aggr, seed, greedy_
     while it < max_iters and time.monotonic() < deadline:
         it += 1
         move = rng.random()
-        undo = None
-
         if move < 0.45 and state.placements:           # relocate
             p = rng.choice(state.placements)
             if p.opp.is_transit:
@@ -631,6 +629,7 @@ def sequence_node(ctx: NodeContext, assigned: list, coord: dict,
     assigned = sorted(assigned, key=lambda os: os[1])
     items: list = []
     prev = None
+    prev_slot = None
     for opp, slot in assigned:
         start_utc = ctx.slot_utc(slot)
         start_local = start_utc + ctx.utc_offset

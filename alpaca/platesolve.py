@@ -258,7 +258,7 @@ def solve_image_array(
 
     tmp_path = None
     try:
-        fd, tmp_path = tempfile.mkstemp(suffix=".fits", prefix="bs_solve_", dir="/tmp")
+        fd, tmp_path = tempfile.mkstemp(suffix=".fits", prefix="bs_solve_")
         os.close(fd)
         fits.PrimaryHDU(data=data).writeto(tmp_path, overwrite=True)
 

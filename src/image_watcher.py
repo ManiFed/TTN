@@ -16,7 +16,6 @@ callback fires.  The callback receives a dict:
 import logging
 import os
 import threading
-import time
 from typing import Callable
 
 logger = logging.getLogger("image_watcher")

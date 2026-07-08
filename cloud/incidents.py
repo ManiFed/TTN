@@ -198,7 +198,6 @@ def auto_triage(node_id: str, stats: dict[str, Any]) -> None:
 
     outlier_rate      = float(stats.get("outlier_rate", 0) or 0)
     reliability       = float(stats.get("reliability_score", 1) or 1)
-    incident_penalty  = float(stats.get("incident_penalty", 0) or 0)
 
     cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     raw_errors = db.query_one(

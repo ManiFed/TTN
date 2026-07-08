@@ -150,13 +150,13 @@ class CloudCommunicator:
         logger.info("Cloud communicator started → %s", self._url)
         if not (self._node_id and self._api_key) and self._pair_token:
             print(
-                f"\n  ┌─────────────────────────────────────────────┐\n"
-                f"  │  Not yet linked to The Telescope Net.       │\n"
-                f"  │  Open the app, create an activation         │\n"
-                f"  │  code, then paste it into the dashboard:    │\n"
-                f"  │                                             │\n"
-                f"  │      http://localhost:5173                  │\n"
-                f"  └─────────────────────────────────────────────┘\n",
+                "\n  ┌─────────────────────────────────────────────┐\n"
+                "  │  Not yet linked to The Telescope Net.       │\n"
+                "  │  Open the app, create an activation         │\n"
+                "  │  code, then paste it into the dashboard:    │\n"
+                "  │                                             │\n"
+                "  │      http://localhost:5173                  │\n"
+                "  └─────────────────────────────────────────────┘\n",
                 flush=True,
             )
 

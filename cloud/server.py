@@ -36,12 +36,15 @@ import os
 import re
 import secrets
 import string
-import xml.etree.ElementTree as ET
+import threading as _threading
+import time as _time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from pathlib import Path
 from urllib.parse import quote
 
-from flask import Flask, jsonify, make_response, request, send_from_directory
+from defusedxml import ElementTree as ET
+from flask import Flask, jsonify, make_response, redirect as _redirect, request, send_from_directory
 
 from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
@@ -128,16 +131,15 @@ def serve_website(filename):
 # GitHub Releases are the canonical source. The endpoint redirects so the URL
 # on the website stays stable even as release tags change.
 
-from flask import redirect as _redirect
-
 _GITHUB_RELEASE_BASE = "https://github.com/ManiFed/TTN/releases/download"
+_GITHUB_RELEASE_PAGE = "https://github.com/ManiFed/TTN/releases/tag/v1.0.1"
 
 _DOWNLOAD_URLS = {
     "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-macOS.pkg",
-    "windows": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-Setup.exe",
-    "linux":   f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
-    "raspberry-pi-os": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
-    "raspbian": f"{_GITHUB_RELEASE_BASE}/v1.0.1/TelescopeNetNode-1.0.1-raspios-arm64.tar.gz",
+    "windows": os.environ.get("TTN_WINDOWS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
+    "linux":   os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
+    "raspberry-pi-os": os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
+    "raspbian": os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
 }
 
 @app.route("/download/node-agent")
@@ -237,10 +239,6 @@ def _validate_and_consume_code(code: str, node_id: str) -> str | None:
     )
     return row["user_id"]  # may be None
 
-
-# ── Pairing store (in-memory, TTL 30 min) ────────────────────────────────────
-import time as _time
-import threading as _threading
 
 _pair_store: dict = {}
 _pair_lock = _threading.Lock()
@@ -545,7 +543,6 @@ def api_images(node):
 # them so the operator can email them to observations@aavso.org.
 
 def _aavso_file_dir() -> "Path":
-    from pathlib import Path
     d = Path(_config.get("storage", {}).get("aavso_file_dir", "cloud_data/aavso_files"))
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -583,7 +580,6 @@ def api_aavso_files_upload(node):
 
 @app.route("/api/v1/aavso-files", methods=["GET"])
 def api_aavso_files_list():
-    from pathlib import Path
     root = _aavso_file_dir()
     files = []
     for txt in sorted(root.rglob("*.txt"), reverse=True):
@@ -600,7 +596,6 @@ def api_aavso_files_list():
 @app.route("/api/v1/aavso-files/download/<path:rel>", methods=["GET"])
 def api_aavso_files_download(rel):
     from pathlib import Path
-    import re as _re
     # Guard against path traversal
     if ".." in rel or rel.startswith("/"):
         return jsonify({"error": "invalid path"}), 400
@@ -1231,7 +1226,6 @@ def api_admin_candidate_update(cand_id: int):
 @require_admin
 def api_admin_incidents():
     """List structured incidents. ?status=open|investigating|resolved|all (default: open+investigating)."""
-    from cloud import incidents as _inc
     status_filter = request.args.get("status", "active")
     if status_filter == "all":
         rows = db.query(
@@ -1260,7 +1254,6 @@ def api_admin_incident_update(incident_id: int):
         resolution_note free text
         resolver        name/email of person resolving
     """
-    from cloud import incidents as _inc
     body = request.get_json(force=True, silent=True) or {}
     allowed = {"status", "root_cause", "resolution_note", "resolver"}
     updates = {k: v for k, v in body.items() if k in allowed}

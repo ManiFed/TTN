@@ -270,7 +270,6 @@ class SafetyManager:
         with self._lock:
             ds = self._disconnect_since
             elapsed = (time.monotonic() - ds) if ds is not None else None
-            tel = self._tel
 
         sun_el: Optional[float] = None
         if self._lat != 0.0 or self._lon != 0.0:

@@ -17,3 +17,5 @@ logs/
 app/.metadata
 app/test/
 website/dashboard/
+.venv/
+cloud_data/validation/

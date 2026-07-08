@@ -20,7 +20,7 @@ Pure stdlib; no DB, no cloud imports.  All datetimes are aware UTC.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 

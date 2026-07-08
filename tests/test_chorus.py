@@ -222,7 +222,9 @@ class HorizonTest(unittest.TestCase):
     def test_unreachable_target_is_maximally_scarce(self):
         nodes = [_node()]
         p_exec = {"N1": 0.9}
-        clear = lambda node, when: 0.6
+        def clear(node, when):
+            return 0.6
+
         reachable = {"target_id": "A", "ra_deg": (horizon.sun_ra_deg(BASE) + 180) % 360,
                      "dec_deg": 40.0}
         unreachable = {"target_id": "B", "ra_deg": 10.0, "dec_deg": -40.0}
@@ -237,7 +239,9 @@ class HorizonTest(unittest.TestCase):
         nodes = [_node()]
         t = {"target_id": "A", "ra_deg": (horizon.sun_ra_deg(BASE) + 180) % 360,
              "dec_deg": 40.0}
-        clear = lambda node, when: 0.6
+        def clear(node, when):
+            return 0.6
+
         s_good = horizon.scarcity(t, nodes, {"N1": 0.95}, clear, _params(), today=BASE)
         s_poor = horizon.scarcity(t, nodes, {"N1": 0.30}, clear, _params(), today=BASE)
         self.assertLess(s_good, s_poor)

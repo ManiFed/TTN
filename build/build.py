@@ -42,6 +42,7 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
@@ -94,12 +95,16 @@ def download_astap_binaries() -> bool:
 
     print(f"\n=== Downloading ASTAP binary ({key}) ===")
     print(f"  URL: {url}")
+    if urlparse(url).scheme != "https":
+        print("  WARNING: refusing non-HTTPS ASTAP download URL")
+        return False
 
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / Path(url).name
         print("  Downloading...", end=" ", flush=True)
         try:
-            urllib.request.urlretrieve(url, archive)
+            # HTTPS release URL is validated above.
+            urllib.request.urlretrieve(url, archive)  # nosec B310
         except Exception as exc:
             print(f"FAILED\n  {exc}")
             return False

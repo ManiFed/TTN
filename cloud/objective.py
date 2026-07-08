@@ -26,7 +26,7 @@ makes the coordination logic unit-testable in isolation.
 
 import math
 from datetime import datetime
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 # Sensible fallbacks so callers (and tests) can omit the tuned dicts.
 DEFAULT_SLOT_WEIGHTS = {

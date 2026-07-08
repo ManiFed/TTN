@@ -157,7 +157,9 @@ class AssignmentTest(unittest.TestCase):
         }
         a1, _ = self._run(contexts, opps)
         a2, _ = self._run(contexts, opps)
-        sig = lambda a: sorted((n, o.target_id, s) for n, lst in a.items() for o, s in lst)
+        def sig(a):
+            return sorted((n, o.target_id, s) for n, lst in a.items() for o, s in lst)
+
         self.assertEqual(sig(a1), sig(a2))
 
     def test_transit_pinned_to_its_window(self):

@@ -100,7 +100,8 @@ class WcsInjectTest(unittest.TestCase):
         hdr["CRVAL1"] = 99.9    # stale onboard WCS to be replaced
         hdr["CD1_1"] = 0.001
         hdr["OBJECT"] = "T CrB"  # non-WCS card to preserve
-        fpath = tempfile.mktemp(suffix=".fits")
+        with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as tmp:
+            fpath = tmp.name
         fits.PrimaryHDU(data, hdr).writeto(fpath, overwrite=True)
 
         wh = fits.Header()
@@ -111,7 +112,8 @@ class WcsInjectTest(unittest.TestCase):
             ("CD2_1", 0.0), ("CD2_2", 2e-4),
         ]:
             wh[k] = v
-        wpath = tempfile.mktemp(suffix=".wcs")
+        with tempfile.NamedTemporaryFile(suffix=".wcs", delete=False) as tmp:
+            wpath = tmp.name
         fits.PrimaryHDU(header=wh).writeto(wpath, overwrite=True)
 
         try:
