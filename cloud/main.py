@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from cloud import alerts, data_pipeline, db, nights, registry, scheduler, scoring, tuning
+from cloud import alerts, crossmatch, data_pipeline, db, ingest_worker, live, nights, registry, scheduler, scoring, survey, tuning
 from cloud.server import create_app
 
 logger = logging.getLogger("cloud.main")
@@ -83,11 +83,22 @@ def start_background_loops(config: dict) -> None:
 
     def maintenance():
         data_pipeline.prune_raw_images(config)
+        survey.prune_survey_measurements(config)
+        ingest_worker.prune_contrib_files(config)
+        live.prune_dispatch_events()
         nights.generate_pending_summaries(config)
         registry.refresh_all_performance()
         if time.gmtime().tm_mday == 1:
             registry.refresh_light_pollution(
                 config.get("light_pollution", {}).get("api_key", ""))
+        if sched_cfg.get("reflow", False):
+            # Self-healing: reconcile whether reflowed work got delivered so the
+            # ledger join has a realization signal (algorithm untouched).
+            try:
+                from cloud.chorus import reflow
+                reflow.reconcile_outcomes(config)
+            except Exception as exc:
+                logger.error("reflow reconcile failed: %s", exc)
         if sched_cfg.get("chorus") or sched_cfg.get("chorus_shadow"):
             # CHORUS T0 + Ring 0: reliability ledger, target state, weather
             # calibration, realization joins (best-effort, before tuning so
@@ -106,6 +117,16 @@ def start_background_loops(config: dict) -> None:
     _loop("aavso-batch",
           float(aavso_cfg.get("batch_interval_minutes", 360)) * 60,
           lambda: data_pipeline.submit_pending_batch(config))
+    def crossmatch_pass():
+        crossmatch.run_pending(config)
+        crossmatch.run_pending_retro(config)
+    _loop("crossmatch", 300, crossmatch_pass)
+    _loop("ingest-worker", float(config.get("survey", {}).get("ingest_interval_s", 30)),
+          lambda: ingest_worker.process_pending(config))
+    if sched_cfg.get("reflow", False):
+        from cloud.chorus import reflow
+        _loop("reflow", float(sched_cfg.get("reflow_interval_s", 60)),
+              lambda: reflow.tick(config))
     _loop("maintenance", 86400, maintenance)
 
 

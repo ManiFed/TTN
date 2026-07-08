@@ -579,7 +579,9 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
             need = max(1, math.ceil(obs_min / STEP_MIN))
             if s0 < 0 or s0 + need > ctx.n_slots:
                 continue
-            t_sub = min(float(node.get("max_exposure_s", 30.0) or 30.0), 30.0)
+            t_sub = float(node.get("max_exposure_s", 30.0) or 30.0)
+            if str(node.get("mount_type") or "alt_az") == "alt_az":
+                t_sub = min(t_sub, 30.0)   # field-rotation limit
             bin_subs = max(3, int(600.0 / t_sub))     # σ per ~10-min bin
             mid_slot = s0 + need // 2
             alt = alts_at(ctx, tw.ra_deg, tw.dec_deg, mid_slot)

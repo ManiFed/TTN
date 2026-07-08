@@ -1,0 +1,19 @@
+# Realtime SSE gateway — realtime.thetelescope.net
+# In Railway: create a NEW service, Settings → Config file path = /railway.realtime.toml
+# Connect to the same GitHub repo (main branch). Shares DATABASE_URL with the API service.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.realtime"
+watchPatterns = [
+  "realtime/**",
+  "cloud/**",
+  "src/**",
+  "Dockerfile.realtime",
+  "railway.realtime.toml",
+]
+
+[deploy]
+startCommand = "sh -c 'gunicorn -k gevent -w 1 --timeout 0 --bind 0.0.0.0:${PORT:-8810} realtime.wsgi:app'"
+healthcheckPath = "/api/v1/health"
+healthcheckTimeout = 30
+restartPolicyType = "always"

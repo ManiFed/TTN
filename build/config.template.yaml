@@ -53,24 +53,33 @@ photometry:
   solver: astap           # astap | astrometry (Astrometry.net solve-field)
   astap_path: astap       # bundled with the Node Agent; no separate install needed
   solve_field_path: solve-field
-  force_plate_solve: false  # re-solve each stack, discarding the Seestar's onboard WCS
-  # pixel_scale is required for the pointing-WCS fallback when the plate solver
-  # has no catalog yet. Alt-az mounts (e.g. Seestar S50) must set this or the
-  # pipeline will abort with "cannot construct fallback WCS".
-  pixel_scale: 2.4          # arcsec/px — Seestar S50 IMX462 at 250mm focal length
+  force_plate_solve: false  # re-solve each stack, discarding any onboard WCS
+  # Hardware-derived parameters ship unset: ALPACA autodetection and the
+  # telescope spec catalog fill them at connect time, and after ~25 solved
+  # frames the node reports its own *measured* pixel scale / FOV / limiting
+  # magnitude to the registry (self-characterization). Set explicit values
+  # only to override what the rig measures about itself.
+  pixel_scale: null         # arcsec/px (autodetected; needed early only for the pointing-WCS fallback)
+  field_radius: null        # deg (autodetected from optics)
+  mag_limit: null           # faintest comparison star (autodetected from optics)
+  mag_min: 10.0             # skip stars brighter than this — likely saturated
   astap_search_radius: 10
   aperture_factor: 1.5
   annulus_inner: 4.0
   annulus_outer: 6.0
-  field_radius: 0.5
-  mag_min: 10.0             # skip stars brighter than this — likely saturated on Seestar frames
-  mag_limit: 15.0
   comparison_catalogs: [aavso, apass, gaia]  # queried in order until enough found
   comparison_target_count: 8
   min_comparison_stars: 3
   snr_threshold: 20
   max_uncertainty: 0.3
   max_airmass: 3.0
+  # Open Aperture full-frame survey: measure every catalog-matched star in
+  # every frame and stream compact source lists to the cloud.
+  survey_enabled: true
+  survey_snr_min: 5
+  survey_max_sources: 800
+  survey_max_zp_scatter: 0.15
+  survey_match_radius_arcsec: 5
   fits_export:
     enabled: true
     export_dir: fits_export
@@ -87,10 +96,12 @@ aavso:
 cloud:
   enabled: true
   url: 'https://api.thetelescope.net'
+  realtime_url: 'https://realtime.thetelescope.net'  # SSE push gateway (blank = poll only)
   activation_code: ''
   node_id: ''             # set automatically after first registration
   api_key: ''             # set automatically after first registration
   heartbeat_interval: 60
+  heartbeat_fast_interval: 5     # fast cadence while observing (dark/exposing)
   plan_poll_interval: 300
   auto_run_plans: true    # execute cloud observation plans automatically
   upload_images: false

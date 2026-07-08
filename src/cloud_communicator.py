@@ -64,6 +64,11 @@ def _utc_offset_hours() -> float:
 _STATE_FILE = Path("data") / "cloud_state.json"
 _QUEUE_FILE = Path("data") / "cloud_upload_queue.json"
 _QUEUE_MAX = 500
+# Survey source lists are ~10-50 KB each, so this queue is capped by bytes
+# rather than item count: ~20 MB rides out multi-day cloud outages without
+# risking the disk the way an uncapped FITS backlog would.
+_SURVEY_QUEUE_FILE = Path("data") / "survey_upload_queue.json"
+_SURVEY_QUEUE_MAX_BYTES = 20 * 1024 * 1024
 
 
 class CloudCommunicator:
@@ -74,15 +79,26 @@ class CloudCommunicator:
         on_plan: Optional[Callable[[list], None]] = None,
         on_interrupt: Optional[Callable[[dict], None]] = None,
         get_telescope_specs: Optional[Callable[[], dict]] = None,
+        get_state: Optional[Callable[[], dict]] = None,
     ) -> None:
         cloud_cfg = config.get("cloud", {})
         self._url = str(cloud_cfg.get("url", "")).rstrip("/")
         self._heartbeat_s = float(cloud_cfg.get("heartbeat_interval", 60))
         self._plan_poll_s = float(cloud_cfg.get("plan_poll_interval", 300))
         self._upload_images = bool(cloud_cfg.get("upload_images", False))
+        # THE ORGANISM: adaptive heartbeat + realtime push.
+        # When the node is observing (dark/active) it heartbeats fast so its live
+        # phase and any retasking arrive within seconds; idle/daytime it relaxes
+        # to the slow cadence to save the fleet's request budget.
+        self._heartbeat_fast_s = float(cloud_cfg.get("heartbeat_fast_interval", 5))
+        # Realtime SSE gateway: separate host from the main API (own Railway
+        # service). Falls back to url if unset; empty disables the SSE loop and
+        # the node runs on polling alone (fully functional, just slower).
+        self._realtime_url = str(cloud_cfg.get("realtime_url", "")).rstrip("/")
         self._config = config
         self._get_conditions = get_conditions
         self._get_telescope_specs = get_telescope_specs
+        self._get_state = get_state
         self._on_plan = on_plan
         self._on_interrupt = on_interrupt
 
@@ -111,6 +127,7 @@ class CloudCommunicator:
             "plan_items": 0,
             "plan_pending_review": False,
             "queued_uploads": len(self._load_queue()),
+            "queued_survey_uploads": len(self._load_survey_queue()),
             "error": None,
         }
 
@@ -122,6 +139,8 @@ class CloudCommunicator:
             return
         loops = [("cloud-heartbeat", self._heartbeat_loop),
                  ("cloud-plan", self._plan_loop)]
+        if self._realtime_url or self._url:
+            loops.append(("cloud-sse", self._sse_loop))
         if not (self._node_id and self._api_key):
             loops.append(("cloud-pair", self._pair_loop))
         for name, target in loops:
@@ -309,9 +328,29 @@ class CloudCommunicator:
 
     # ── Heartbeat loop ─────────────────────────────────────────────────────────
 
+    def _current_state(self) -> dict:
+        """Second-scale phase report for the live fleet map. Best-effort."""
+        if not self._get_state:
+            return {}
+        try:
+            return self._get_state() or {}
+        except Exception as exc:
+            logger.debug("State callback failed: %s", exc)
+            return {}
+
+    def _heartbeat_interval(self, state: dict) -> float:
+        """Fast cadence while observing so retasking/live-state arrive within
+        seconds; slow cadence when idle or in daylight to spare request budget."""
+        phase = str(state.get("phase") or "").lower()
+        if state.get("is_dark") or phase in (
+                "slewing", "exposing", "stacking", "clouded"):
+            return self._heartbeat_fast_s
+        return self._heartbeat_s
+
     def _heartbeat_loop(self) -> None:
         was_ok: Optional[bool] = None
         while not self._stop.is_set():
+            interval = self._heartbeat_s
             if self._ensure_registered():
                 conditions = {}
                 if self._get_conditions:
@@ -320,9 +359,12 @@ class CloudCommunicator:
                     except Exception as exc:
                         logger.debug("Conditions callback failed: %s", exc)
                 conditions["utc_offset_hours"] = _utc_offset_hours()
+                state = self._current_state()
+                interval = self._heartbeat_interval(state)
                 try:
                     self._post("/api/v1/nodes/heartbeat",
-                               {"conditions": conditions})
+                               {"conditions": conditions, "state": state,
+                                "heartbeat_s": interval})
                     self.status["last_heartbeat_ok"] = True
                     self.status["error"] = None
                 except Exception as exc:
@@ -339,7 +381,71 @@ class CloudCommunicator:
                         self._telemetry_event("cloud_heartbeat_restored", "info", {})
                     was_ok = True
                     self._flush_queue()
-            self._stop.wait(self._heartbeat_s)
+                    self._flush_survey_queue()
+            self._stop.wait(interval)
+
+    # ── Realtime push (SSE) ─────────────────────────────────────────────────────
+
+    def _sse_loop(self) -> None:
+        """Hold a Server-Sent-Events connection to the realtime gateway.
+
+        Events are pure signals: on 'plan'/'interrupt'/'retask' we immediately
+        run the normal authenticated poll, so content is always fetched over the
+        main API and the stream is never trusted for payloads. If the stream is
+        unavailable the node loses nothing — the plan/interrupt polling loop is
+        the correctness path; this just collapses its latency to ~1 s.
+        """
+        import requests
+        base = self._realtime_url or self._url
+        backoff = 3.0
+        last_id = 0
+        while not self._stop.is_set():
+            if not (self._node_id and self._api_key):
+                self._stop.wait(5)
+                continue
+            try:
+                params = {"node_id": self._node_id, "api_key": self._api_key}
+                headers = {"Accept": "text/event-stream"}
+                if last_id:
+                    headers["Last-Event-ID"] = str(last_id)
+                with requests.get(base + "/api/v1/stream", params=params,
+                                  headers=headers, stream=True,
+                                  timeout=(10, 65)) as resp:
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"HTTP {resp.status_code}")
+                    backoff = 3.0  # connected — reset backoff
+                    for raw in resp.iter_lines():
+                        if self._stop.is_set():
+                            return
+                        if not raw:
+                            continue
+                        # text/event-stream carries no charset, so requests
+                        # yields bytes; decode defensively either way.
+                        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                        if line.startswith("id:"):
+                            try:
+                                last_id = int(line[3:].strip())
+                            except ValueError:
+                                pass
+                        elif line.startswith("event:"):
+                            self._on_sse_event(line[6:].strip())
+            except Exception as exc:
+                logger.debug("SSE connection dropped: %s", exc)
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 60.0)
+
+    def _on_sse_event(self, kind: str) -> None:
+        """React to a push signal by fetching over the authenticated main API."""
+        try:
+            if kind in ("plan", "retask"):
+                self._poll_plan()
+                self._poll_interrupts()
+            elif kind == "interrupt":
+                self._poll_interrupts()
+            elif kind == "config":
+                self._poll_config_patches()
+        except Exception as exc:
+            logger.debug("SSE-triggered poll (%s) failed: %s", kind, exc)
 
     @staticmethod
     def _telemetry_event(name: str, severity: str, detail: dict) -> None:
@@ -506,6 +612,53 @@ class CloudCommunicator:
             self._upload_fits(fits_path)
         return True
 
+    def submit_survey(self, frame: dict, sources: list) -> bool:
+        """Upload one frame's full-frame survey source list, gzip-compressed.
+
+        On failure the payload queues to its own byte-capped disk queue and
+        retries on the heartbeat cadence. Returns True when delivered now."""
+        payload = {"frame": frame, "sources": sources}
+        if not (self._node_id and self._api_key):
+            self._enqueue_survey(payload)
+            return False
+        try:
+            self._post_survey(payload)
+            logger.info("Survey uploaded to cloud: %d sources from %s",
+                        len(sources), frame.get("fits_file", "?"))
+        except Exception as exc:
+            logger.warning("Survey upload failed — queued for retry: %s", exc)
+            self._enqueue_survey(payload)
+            return False
+        return True
+
+    def _post_survey(self, payload: dict) -> None:
+        import gzip
+        import requests
+        body = gzip.compress(json.dumps(payload).encode("utf-8"))
+        headers = dict(self._headers())
+        headers["Content-Type"] = "application/json"
+        headers["Content-Encoding"] = "gzip"
+        resp = requests.post(self._url + "/api/v1/survey", data=body,
+                             headers=headers, timeout=60)
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+    def submit_characterization(self, report: dict) -> bool:
+        """Report measured optics (pixel scale, FOV, FWHM, limiting mag) to
+        the registry. Best-effort: the next report follows in ~25 solved
+        frames, so failures are logged rather than queued."""
+        if not (self._node_id and self._api_key):
+            return False
+        try:
+            self._post("/api/v1/nodes/characterization", report)
+            logger.info("Characterization reported: %s",
+                        {k: v for k, v in report.items()
+                         if k not in ("window_frames",)})
+            return True
+        except Exception as exc:
+            logger.warning("Characterization report failed: %s", exc)
+            return False
+
     def submit_incident(self, event: dict) -> None:
         """Forward one structured telemetry event to the cloud incident API.
 
@@ -615,3 +768,61 @@ class CloudCommunicator:
                             ", will continue next heartbeat" if remaining and not failed else "")
             self._save_queue(remaining)
             self.status["queued_uploads"] = len(remaining)
+
+    # ── Survey upload queue (byte-capped) ─────────────────────────────────────
+
+    def _load_survey_queue(self) -> list:
+        try:
+            return json.loads(_SURVEY_QUEUE_FILE.read_text())
+        except (OSError, ValueError):
+            return []
+
+    def _save_survey_queue(self, queue: list) -> None:
+        try:
+            _SURVEY_QUEUE_FILE.parent.mkdir(exist_ok=True)
+            tmp = _SURVEY_QUEUE_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(queue))
+            tmp.replace(_SURVEY_QUEUE_FILE)
+        except OSError as exc:
+            logger.warning("Could not persist survey queue: %s", exc)
+
+    def _enqueue_survey(self, payload: dict) -> None:
+        with self._queue_lock:
+            queue = self._load_survey_queue()
+            queue.append(payload)
+            # Enforce the byte cap by dropping oldest frames first: recent
+            # frames are the ones deviation detection still cares about.
+            dropped = 0
+            while len(queue) > 1 and len(json.dumps(queue)) > _SURVEY_QUEUE_MAX_BYTES:
+                queue.pop(0)
+                dropped += 1
+            if dropped:
+                self._telemetry_event(
+                    "survey_queue_overflow", "warning",
+                    {"dropped_frames": dropped,
+                     "max_bytes": _SURVEY_QUEUE_MAX_BYTES})
+            self._save_survey_queue(queue)
+            self.status["queued_survey_uploads"] = len(queue)
+
+    def _flush_survey_queue(self, max_items: int = 10,
+                            max_seconds: float = 30.0) -> None:
+        """Retry queued survey uploads, time-boxed like _flush_queue."""
+        with self._queue_lock:
+            queue = self._load_survey_queue()
+            if not queue:
+                return
+            deadline = time.monotonic() + max_seconds
+            sent = 0
+            remaining = list(queue)
+            while remaining and sent < max_items and time.monotonic() < deadline:
+                try:
+                    self._post_survey(remaining[0])
+                except Exception:
+                    break
+                remaining.pop(0)
+                sent += 1
+            if sent:
+                logger.info("Flushed %d queued survey frame(s) to cloud (%d left)",
+                            sent, len(remaining))
+            self._save_survey_queue(remaining)
+            self.status["queued_survey_uploads"] = len(remaining)

@@ -37,6 +37,20 @@ def _bool(v) -> int:
     return 1 if v and str(v).lower() not in ("0", "false", "no", "") else 0
 
 
+def auto_tier(filter_set) -> int:
+    """Capability tier from the filter complement (VISION.md): a rig with at
+    least three of Johnson-Cousins B/V/R/I does real multi-band photometry —
+    tier 2. Everything else that observes is tier 1 (tier 0 = contributor,
+    tier 3 = spectroscopy, assigned manually)."""
+    if isinstance(filter_set, str):
+        try:
+            filter_set = json.loads(filter_set or "[]")
+        except ValueError:
+            filter_set = []
+    bands = {str(f).strip().upper() for f in (filter_set or [])}
+    return 2 if len(bands & {"B", "V", "R", "I"}) >= 3 else 1
+
+
 def register_node(info: dict, lp_api_key: str = "") -> dict:
     """
     Register a new node (or re-register an existing one by node_id + api_key).
@@ -67,8 +81,21 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     mpsas, bortle = fetch_light_pollution(node.latitude, node.longitude, lp_api_key)
 
     portable = _bool(info.get("portable", False))
-    # Portable nodes start sleeping; fixed nodes start active.
-    initial_status = "sleeping" if (portable and not existing) else "active"
+    contributor = _bool(info.get("contributor", False))
+    # Portable nodes start sleeping; fixed nodes start active. Contributor
+    # nodes are tier-0 virtual instruments: they upload survey frames from
+    # existing images but are never scheduled by CHORUS.
+    if contributor and not existing:
+        initial_status = "contributor"
+    else:
+        initial_status = "sleeping" if (portable and not existing) else "active"
+    if contributor:
+        tier = 0
+    else:
+        tier = max(int(info.get("tier", 1)),
+                   auto_tier(info.get("filter_set", '["CV"]')))
+    mount_type = ("none" if contributor
+                  else str(info.get("mount_type", "alt_az") or "alt_az"))
 
     db.execute(
         """INSERT INTO nodes (
@@ -121,13 +148,13 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
             node.latitude, node.longitude, node.elevation,
             node.city, node.country, node.utc_offset_hours,
             mpsas, bortle,
-            int(info.get("tier", 1)),
+            tier,
             node.telescope_model,
             str(info.get("telescope_serial", "") or ""),
             str(info.get("telescope_name", "") or ""),
             node.aperture_mm, node.focal_length_mm, node.fov_deg,
             node.pixel_scale_arcsec,
-            str(info.get("mount_type", "alt_az") or "alt_az"),
+            mount_type,
             node.max_exposure_s,
             str(info.get("camera_model", "") or ""),
             _bool(info.get("cooled_camera")),
@@ -147,7 +174,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     logger.info(
         "Node %s %s: Tier %d %s @ %.4f,%.4f  (%.1f mpsas, Bortle %d)",
         node_id, "updated" if existing else "registered",
-        int(info.get("tier", 1)), node.telescope_model,
+        tier, node.telescope_model,
         node.latitude, node.longitude, mpsas, bortle,
     )
     return {"node_id": node_id, "api_key": api_key}
@@ -176,7 +203,7 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     """
     params: list = [_now()]
     sql = ("UPDATE nodes SET last_heartbeat = %s, "
-           "status = CASE WHEN status IN ('vacation', 'disabled') THEN status ELSE 'active' END")
+           "status = CASE WHEN status IN ('vacation', 'disabled', 'contributor') THEN status ELSE 'active' END")
     if conditions:
         sql += ", last_conditions = %s"
         params.append(json.dumps(conditions))
@@ -187,6 +214,63 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     sql += " WHERE node_id = %s"
     params.append(node_id)
     db.execute(sql, tuple(params))
+
+
+def update_characterization(node_id: str, report: dict) -> dict:
+    """Apply a node's self-measured optics to its capability columns.
+
+    Guarded: at least 10 solved frames behind the medians, and every value
+    inside physical bounds. CHORUS and scoring already read these columns,
+    so a rig that registered with vague specs converges to reality without
+    any scheduler changes. Provenance lands in measured_specs/measured_at.
+    """
+    try:
+        n_frames = int(report.get("n_frames") or 0)
+    except (TypeError, ValueError):
+        n_frames = 0
+    if n_frames < 10:
+        return {"ok": False, "error": "need >= 10 solved frames"}
+
+    bounds = {
+        "pixel_scale_arcsec": (0.05, 60.0),
+        "fov_deg":            (0.02, 30.0),
+        "fwhm_arcsec":        (0.3, 60.0),
+        "limiting_mag":       (8.0, 22.0),
+    }
+    accepted = {}
+    for key, (lo, hi) in bounds.items():
+        val = report.get(key)
+        if val is None:
+            continue
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            continue
+        if lo <= val <= hi:
+            accepted[key] = round(val, 4)
+
+    if not accepted:
+        return {"ok": False, "error": "no values within physical bounds"}
+
+    sets, params = [], []
+    if "pixel_scale_arcsec" in accepted:
+        sets.append("pixel_scale_arcsec = %s")
+        params.append(accepted["pixel_scale_arcsec"])
+    if "fov_deg" in accepted:
+        sets.append("fov_deg = %s")
+        params.append(accepted["fov_deg"])
+    if "limiting_mag" in accepted:
+        sets.append("mag_faint_limit = %s")
+        params.append(accepted["limiting_mag"])
+    now = _now()
+    sets += ["measured_specs = %s", "measured_at = %s"]
+    params += [json.dumps({**accepted, "n_frames": n_frames}), now]
+    params.append(node_id)
+    db.execute(f"UPDATE nodes SET {', '.join(sets)} WHERE node_id = %s",
+               tuple(params))
+    logger.info("Node %s self-characterized (%d frames): %s",
+                node_id, n_frames, accepted)
+    return {"ok": True, "applied": accepted}
 
 
 def get_node(node_id: str) -> Optional[dict]:
@@ -203,7 +287,7 @@ def list_nodes(active_only: bool = False) -> list:
 def is_online(node_row: dict) -> bool:
     """True when the node has heartbeated recently and is not in a non-observing state."""
     status = node_row.get("status", "active")
-    if status in ("disabled", "sleeping", "vacation"):
+    if status in ("disabled", "sleeping", "vacation", "contributor"):
         return False
     hb = node_row.get("last_heartbeat")
     if not hb:
@@ -340,8 +424,12 @@ def refresh_node_performance(node_id: str) -> dict:
 
 
 def refresh_all_performance() -> int:
-    """Refresh performance stats for every active node.  Returns node count."""
-    nodes = db.query("SELECT node_id FROM nodes WHERE status != 'disabled'")
+    """Refresh performance stats for every active node.  Returns node count.
+
+    Tier-0 contributor nodes are skipped: they never execute plans, so an
+    AAVSO-acceptance-based reliability score would be meaningless noise."""
+    nodes = db.query(
+        "SELECT node_id FROM nodes WHERE status != 'disabled' AND tier > 0")
     for n in nodes:
         try:
             refresh_node_performance(n["node_id"])

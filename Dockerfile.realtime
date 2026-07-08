@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir --upgrade pip
+
+COPY realtime/requirements.txt realtime/requirements.txt
+RUN pip install --no-cache-dir -r realtime/requirements.txt
+
+COPY realtime/ realtime/
+COPY cloud/ cloud/
+COPY src/ src/
+
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE ${PORT:-8810}
+
+CMD ["sh", "-c", "gunicorn -k gevent -w 1 --timeout 0 --bind 0.0.0.0:${PORT:-8810} realtime.wsgi:app"]

@@ -311,6 +311,56 @@ def cmd_generate_code(args) -> None:
     print()
 
 
+def cmd_candidates(config: dict, args) -> None:
+    """Discovery-candidate review queue: list, confirm, or reject."""
+    from cloud import crossmatch, survey
+
+    if getattr(args, "confirm", None):
+        result = crossmatch.confirm_candidate(
+            int(args.confirm),
+            target_type=getattr(args, "type", "") or "",
+            note=getattr(args, "note", "") or "")
+        if result is None:
+            print(f"ERROR: candidate #{args.confirm} not found or not open")
+            sys.exit(1)
+        print(f"\nCONFIRMED: candidate #{result['candidate_id']} → "
+              f"target {result['name']} ({result['target_id']})")
+        print("CHORUS will schedule it on the next replan cycle.\n")
+        return
+    if getattr(args, "reject", None):
+        if not crossmatch.reject_candidate(
+                int(args.reject), note=getattr(args, "note", "") or ""):
+            print(f"ERROR: candidate #{args.reject} not found")
+            sys.exit(1)
+        print(f"\nRejected candidate #{args.reject}\n")
+        return
+
+    s = survey.stats()
+    print(f"\n=== Open Aperture survey ===\n")
+    print(f"  Stars tracked:        {s['sources']:,}")
+    print(f"  Raw measurements:     {s['measurements']:,}")
+    print(f"  Open candidates:      {s['candidates_open']}")
+    print(f"  Awaiting review:      {s['candidates_review']}\n")
+
+    rows = db.query(
+        "SELECT * FROM discovery_candidates "
+        "WHERE state IN ('detected','crossmatching','candidate') "
+        "ORDER BY updated_at DESC LIMIT 50")
+    if not rows:
+        print("No open candidates.\n")
+        return
+    print(f"{'ID':>4}  {'STATE':<13} {'KIND':<11} {'RA':>9} {'DEC':>9} "
+          f"{'Δmag':>5} {'DET':>3} {'NODES':>5}  LAST SEEN")
+    for r in rows:
+        delta = f"{r['peak_delta_mag']:.2f}" if r.get("peak_delta_mag") else "  — "
+        print(f"{r['id']:>4}  {r['state']:<13} {r['kind']:<11} "
+              f"{r['ra_deg']:>9.4f} {r['dec_deg']:>+9.4f} {delta:>5} "
+              f"{r['n_detections']:>3} {r['n_nodes']:>5}  {str(r['updated_at'])[:16]}")
+    print("\nVerdicts:  manage.py candidates --confirm <id> [--type VAR|SN] "
+          "[--note '...']\n           manage.py candidates --reject <id> "
+          "[--note '...']\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="The Telescope Net cloud admin CLI",
@@ -321,7 +371,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         choices=["status", "ingest", "batch", "submit", "check-aavso",
-                 "nights", "generate-code"],
+                 "nights", "generate-code", "candidates"],
         help="command to run",
     )
     parser.add_argument(
@@ -336,6 +386,22 @@ def main() -> None:
         "--expires-days", type=int, default=90,
         help="(generate-code) days until codes expire (default: 90)",
     )
+    parser.add_argument(
+        "--confirm", metavar="ID",
+        help="(candidates) confirm a discovery candidate as a real target",
+    )
+    parser.add_argument(
+        "--reject", metavar="ID",
+        help="(candidates) reject a discovery candidate",
+    )
+    parser.add_argument(
+        "--type", metavar="TYPE",
+        help="(candidates --confirm) target type, e.g. VAR, SN, NOVA",
+    )
+    parser.add_argument(
+        "--note", metavar="TEXT",
+        help="(candidates) note recorded with the verdict",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -349,6 +415,7 @@ def main() -> None:
         "check-aavso":   lambda: cmd_check_aavso(config),
         "nights":        lambda: cmd_nights(config),
         "generate-code": lambda: cmd_generate_code(args),
+        "candidates":    lambda: cmd_candidates(config, args),
     }
     dispatch[args.command]()
 

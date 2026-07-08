@@ -43,7 +43,7 @@ from urllib.parse import quote
 
 from flask import Flask, jsonify, make_response, request, send_from_directory
 
-from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, nights, registry, scheduler, scoring, tuning
+from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -341,6 +341,10 @@ def api_register():
             if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
                 continue
             info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
+        # Contributor codes create tier-0 virtual nodes: survey uploads only,
+        # never scheduled by CHORUS.
+        if str(code_row.get("code_type") or "node") == "contributor":
+            info["contributor"] = True
 
     try:
         creds = registry.register_node(
@@ -407,11 +411,32 @@ def _activation_retry_credentials(code_row: dict) -> dict | None:
     return {"node_id": existing["node_id"], "api_key": existing["api_key"]}
 
 
+@app.route("/api/v1/nodes/characterization", methods=["POST"])
+@require_node
+def api_characterization(node):
+    """Self-measured optics from the node's own plate solves. A dedicated
+    endpoint: re-POSTing register would overwrite owner/location wholesale,
+    and heartbeat conditions only land in a JSON blob nothing reads."""
+    body = request.get_json(force=True, silent=True) or {}
+    result = registry.update_characterization(node["node_id"], body)
+    return (jsonify(result), 200) if result.get("ok") else (jsonify(result), 400)
+
+
 @app.route("/api/v1/nodes/heartbeat", methods=["POST"])
 @require_node
 def api_heartbeat(node):
     body = request.get_json(force=True, silent=True) or {}
     registry.heartbeat(node["node_id"], body.get("conditions"))
+    # THE ORGANISM: fold the optional second-scale phase report into the live
+    # fleet map. Old node agents omit "state" and simply don't appear live.
+    state = body.get("state")
+    if isinstance(state, dict):
+        try:
+            live.record_state(
+                node["node_id"], state,
+                heartbeat_s=float(body.get("heartbeat_s") or 60.0))
+        except Exception as exc:
+            logger.debug("live.record_state failed for %s: %s", node["node_id"], exc)
     return jsonify({"ok": True, "server_time": _now()})
 
 
@@ -478,6 +503,27 @@ def api_measurements(node):
     measurement = body.get("measurement") or body   # accept bare measurement dicts
     result = data_pipeline.ingest_measurement(
         node["node_id"], measurement, body.get("conditions"))
+    return (jsonify(result), 200) if result.get("ok") else (jsonify(result), 400)
+
+
+@app.route("/api/v1/survey", methods=["POST"])
+@require_node
+def api_survey(node):
+    """Full-frame survey source lists. Nodes gzip these (~10-50 KB/frame);
+    Flask does not transparently decompress, so handle it here."""
+    raw = request.get_data()
+    if request.headers.get("Content-Encoding", "").lower() == "gzip":
+        import gzip as _gzip
+        try:
+            raw = _gzip.decompress(raw)
+        except OSError:
+            return jsonify({"error": "bad gzip body"}), 400
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return jsonify({"error": "bad json body"}), 400
+    result = survey.ingest_batch(node["node_id"], body, _config,
+                                 node_tier=int(node.get("tier") or 1))
     return (jsonify(result), 200) if result.get("ok") else (jsonify(result), 400)
 
 
@@ -855,6 +901,63 @@ def api_network_status():
     })
 
 
+@app.route("/api/v1/network/fleet", methods=["GET"])
+def api_network_fleet():
+    """THE ORGANISM: live second-scale phase of every node in the fleet.
+
+    Public read (like network/status) so the member 'organism' view and the
+    node dashboard can render who is dark, clouded, exposing, or offline right
+    now. Nodes appear here only after they start sending heartbeat 'state'.
+    """
+    fleet = live.fleet_state()
+    # Fold in static location so the client can place each node on the globe
+    # without a second call; live rows carry only volatile phase.
+    locs = {
+        n["node_id"]: {
+            "latitude": n.get("latitude"),
+            "longitude": n.get("longitude"),
+            "city": n.get("city") or n.get("session_city") or "",
+            "telescope_model": n.get("telescope_model") or "",
+        }
+        for n in registry.list_nodes()
+    }
+    for row in fleet:
+        row.update(locs.get(row["node_id"], {}))
+    return jsonify({
+        "fleet":       fleet,
+        "nodes_live":  len(fleet),
+        "dark_online": sum(1 for n in fleet if n["online"] and n["is_dark"]),
+        "server_time": _now(),
+    })
+
+
+@app.route("/api/v1/network/organism", methods=["GET"])
+def api_network_organism():
+    """THE ORGANISM activity feed: live fleet + what the network just did on its
+    own (mid-night reflows and reflex confirmations). The data behind the member
+    'organism' view — 'node X clouded out, its targets moved to Y; a candidate
+    was auto-confirmed on Z'."""
+    night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    reflows = db.query(
+        "SELECT from_node, to_node, target_name, expected_info, outcome, "
+        "       created_at FROM reflow_log WHERE night = %s "
+        "ORDER BY created_at DESC LIMIT 50", (night,))
+    reflexes = db.query(
+        "SELECT name, ra_deg, dec_deg, node_ids, created_at FROM interrupts "
+        "WHERE reason = 'reflex_confirm' AND created_at > %s "
+        "ORDER BY created_at DESC LIMIT 50", (since,))
+    for r in reflexes:
+        r["node_ids"] = db.loads(r.pop("node_ids", "[]"), [])
+        r["source_key"] = str(r.get("name", "")).replace("reflex:", "")
+    return jsonify({
+        "fleet":       live.fleet_state(),
+        "reflows":     reflows,
+        "reflex_confirmations": reflexes,
+        "server_time": _now(),
+    })
+
+
 @app.route("/api/v1/network/activity", methods=["GET"])
 def api_network_activity():
     """Public feed of recent observations, submissions, nodes, and interrupts."""
@@ -1077,6 +1180,53 @@ def api_admin_patrol():
     return jsonify({"n": len(rows), "hours": hours, "detections": rows})
 
 
+@app.route("/api/v1/admin/candidates", methods=["GET"])
+@require_admin
+def api_admin_candidates():
+    """Discovery candidates. ?state=candidate|detected|crossmatching|confirmed|
+    rejected|known_vsx|known_tns|open|all (default: candidate — human review queue)."""
+    state = request.args.get("state", "candidate")
+    if state == "all":
+        rows = db.query(
+            "SELECT * FROM discovery_candidates ORDER BY updated_at DESC LIMIT 200")
+    elif state == "open":
+        rows = db.query(
+            "SELECT * FROM discovery_candidates WHERE state IN %s "
+            "ORDER BY updated_at DESC LIMIT 200", (survey.OPEN_STATES,))
+    else:
+        rows = db.query(
+            "SELECT * FROM discovery_candidates WHERE state = %s "
+            "ORDER BY updated_at DESC LIMIT 200", (state,))
+    return jsonify({"count": len(rows), "state": state, "candidates": rows,
+                    "survey": survey.stats()})
+
+
+@app.route("/api/v1/admin/candidates/<int:cand_id>", methods=["PATCH"])
+@require_admin
+def api_admin_candidate_update(cand_id: int):
+    """Human verdict on a discovery candidate.
+
+    Body: {"action": "confirm"|"reject", "target_type": "VAR|SN|...",
+           "note": "..."} — confirm creates a target CHORUS schedules on the
+    next replan cycle.
+    """
+    from cloud import crossmatch as _cm
+    body = request.get_json(force=True, silent=True) or {}
+    action = str(body.get("action") or "").lower()
+    if action == "confirm":
+        result = _cm.confirm_candidate(
+            cand_id, target_type=str(body.get("target_type") or ""),
+            note=str(body.get("note") or ""))
+        if result is None:
+            return jsonify({"error": "candidate not found or not open"}), 404
+        return jsonify({"ok": True, **result})
+    if action == "reject":
+        if not _cm.reject_candidate(cand_id, note=str(body.get("note") or "")):
+            return jsonify({"error": "candidate not found"}), 404
+        return jsonify({"ok": True, "candidate_id": cand_id})
+    return jsonify({"error": "action must be confirm or reject"}), 400
+
+
 @app.route("/api/v1/admin/incidents", methods=["GET"])
 @require_admin
 def api_admin_incidents():
@@ -1293,6 +1443,22 @@ def api_me_nodes(user):
         r["conditions"] = db.loads(r.get("last_conditions"), {})
         r.pop("last_conditions", None)
     return jsonify({"nodes": rows})
+
+
+@app.route("/api/v1/me/nodes/<node_id>/live", methods=["GET"])
+@auth.require_member
+def api_me_node_live(user, node_id):
+    """Live phase of one of the member's own nodes (organism view)."""
+    owns = db.query_one(
+        "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+        (node_id, user["user_id"]),
+    )
+    if owns is None:
+        return jsonify({"error": "not your node"}), 403
+    state = live.node_live(node_id)
+    if state is None:
+        return jsonify({"live": None, "message": "node has not reported live state"}), 200
+    return jsonify({"live": state})
 
 
 @app.route("/api/v1/me/highlights", methods=["GET"])
@@ -1519,12 +1685,29 @@ def api_me_stats(user):
             FROM night_summaries WHERE node_id IN ({placeholders})""",
         tuple(node_ids),
     ) or {}
+    contrib = db.query_one(
+        """SELECT COUNT(*) AS frames,
+                  COALESCE(SUM(n_sources), 0) AS stars
+             FROM contributions WHERE user_id = %s AND status = 'done'""",
+        (user["user_id"],)) or {}
+    placeholders_all = ",".join(["%s"] * len(node_ids))
+    survey_stars = db.query_one(
+        f"""SELECT COUNT(*) AS n FROM survey_measurements
+            WHERE node_id IN ({placeholders_all})""",
+        tuple(node_ids)) or {}
+    discoveries = db.query_one(
+        """SELECT COUNT(*) AS n FROM discovery_candidates
+           WHERE state = 'confirmed' AND node_ids::text LIKE ANY(%s)""",
+        (["%" + nid + "%" for nid in node_ids],)) or {}
     return jsonify({
         "total_observations": totals.get("total", 0) or 0,
         "aavso_submitted":    int(totals.get("submitted", 0) or 0),
         "targets_observed":   totals.get("targets", 0) or 0,
         "clear_nights":       int(clear.get("clear_nights", 0) or 0),
         "node_count":         len(node_ids),
+        "frames_contributed": int(contrib.get("frames", 0) or 0),
+        "survey_stars_measured": int(survey_stars.get("n", 0) or 0),
+        "discoveries_touched":   int(discoveries.get("n", 0) or 0),
     })
 
 
@@ -1721,20 +1904,221 @@ def api_me_generate_activation_code(user):
 
     portable = 1 if body.get("portable") else 0
     telescope_display_name = str(body.get("telescope_display_name") or "").strip()[:80]
+    code_type = ("contributor"
+                 if str(body.get("code_type") or "") == "contributor" else "node")
 
     code = _generate_activation_code()
     expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     db.execute(
         "INSERT INTO activation_codes"
         " (code, user_id, created_at, expires_at, observatory_name, latitude, longitude,"
-        "  telescope_model, telescope_specs, portable, telescope_display_name)"
-        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "  telescope_model, telescope_specs, portable, telescope_display_name, code_type)"
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (code, user["user_id"], _now(), expires, location_name, lat, lon,
-         telescope_model, telescope_specs_json, portable, telescope_display_name),
+         telescope_model, telescope_specs_json, portable, telescope_display_name,
+         code_type),
     )
     logger.info("Activation code generated for member %s: %s (location: %s, portable: %s)",
                 user["user_id"], code, location_name or "not set", bool(portable))
     return jsonify({"code": code, "expires_at": expires})
+
+
+# ── Open contribution: browser FITS uploads ───────────────────────────────────
+
+def _ensure_contributor_node(user) -> str:
+    """The member's tier-0 virtual node (created on first contribution).
+
+    Direct insert rather than registry.register_node: virtual nodes have no
+    real location (they're never scheduled), so the lat/lon validation and
+    light-pollution lookup would only add noise and API calls."""
+    row = db.query_one(
+        "SELECT n.node_id FROM nodes n JOIN node_members nm USING (node_id) "
+        "WHERE nm.user_id = %s AND n.status = 'contributor' LIMIT 1",
+        (user["user_id"],))
+    if row:
+        return row["node_id"]
+    node_id = f"node_c{secrets.token_hex(4)}"
+    now = _now()
+    db.execute(
+        "INSERT INTO nodes (node_id, api_key, owner_name, latitude, longitude, "
+        " tier, mount_type, telescope_model, status, registered_at, last_heartbeat) "
+        "VALUES (%s,%s,%s,0,0,0,'none','Contributed frames','contributor',%s,%s)",
+        (node_id, secrets.token_urlsafe(32),
+         str(user.get("display_name") or ""), now, now))
+    db.execute(
+        "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (%s,%s,%s)",
+        (node_id, user["user_id"], now))
+    logger.info("Contributor node %s created for member %s",
+                node_id, user["user_id"])
+    return node_id
+
+
+def _fits_header_probe(raw: bytes) -> dict:
+    """Header sanity checks without loading pixels: WCS present, LIGHT frame,
+    plausible DATE-OBS."""
+    import io
+    from astropy.io import fits as _fits
+    with _fits.open(io.BytesIO(raw), memmap=False,
+                    ignore_missing_simple=True) as hdul:
+        hdr = hdul[0].header
+        has_wcs = ("CRVAL1" in hdr and "CRVAL2" in hdr
+                   and ("CD1_1" in hdr or "CDELT1" in hdr))
+        image_type = str(hdr.get("IMAGETYP", "LIGHT")).strip().upper()
+        date_obs = str(hdr.get("DATE-OBS", ""))
+    return {"wcs": has_wcs,
+            "light": image_type in ("LIGHT", "LIGHT FRAME", ""),
+            "date_obs": date_obs}
+
+
+@app.route("/api/v1/me/contributions", methods=["POST"])
+@auth.require_member
+def api_me_contribute(user):
+    """Drag-and-drop FITS contribution: anyone's existing images become
+    survey science. The cloud solver adds a WCS when the frame lacks one, so a
+    plain LIGHT frame from any camera is accepted — EVERY LENS ON EARTH."""
+    import hashlib
+    f = request.files.get("file")
+    if f is None:
+        return jsonify({"error": "no file in upload"}), 400
+    raw = f.read()
+    if len(raw) > 32 * 1024 * 1024:
+        return jsonify({"error": "file exceeds 32 MB"}), 400
+    if len(raw) < 2880:
+        return jsonify({"error": "not a FITS file"}), 400
+
+    daily_cap = int((_config.get("survey") or {}).get("contrib_daily_cap", 200))
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    n_today = (db.query_one(
+        "SELECT COUNT(*) AS n FROM contributions "
+        "WHERE user_id = %s AND created_at >= %s",
+        (user["user_id"], today)) or {}).get("n", 0)
+    if n_today >= daily_cap:
+        return jsonify({"error": f"daily contribution cap ({daily_cap}) reached"}), 429
+
+    try:
+        probe = _fits_header_probe(raw)
+    except Exception:
+        return jsonify({"error": "could not parse FITS header"}), 400
+    if not probe["light"]:
+        return jsonify({"error": "only LIGHT frames carry survey science"}), 400
+    # No WCS is fine now: the ingest worker plate-solves frames on the solver
+    # service before extraction. wcs_present just records what arrived.
+
+    sha256 = hashlib.sha256(raw).hexdigest()
+    if db.query_one("SELECT id FROM contributions WHERE sha256 = %s", (sha256,)):
+        return jsonify({"error": "this frame was already contributed"}), 409
+
+    from pathlib import Path
+    import re as _re
+    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", f.filename or "frame.fits")
+    if not safe_name.lower().endswith((".fits", ".fit")):
+        safe_name += ".fits"
+    dest_dir = Path((_config.get("survey") or {})
+                    .get("contrib_dir", "cloud_data/contrib")) / user["user_id"] / today
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{sha256[:12]}_{safe_name}"
+    dest.write_bytes(raw)
+
+    node_id = _ensure_contributor_node(user)
+    cid = db.execute(
+        "INSERT INTO contributions (user_id, node_id, filename, sha256, "
+        " size_bytes, status, wcs_present, stored_path, date_obs, created_at) "
+        "VALUES (%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s)",
+        (user["user_id"], node_id, safe_name, sha256, len(raw),
+         1 if probe["wcs"] else 0, str(dest), probe.get("date_obs", ""),
+         _now()), returning_id=True)
+    logger.info("Contribution #%s queued: %s (%d KB) from member %s",
+                cid, safe_name, len(raw) // 1024, user["user_id"])
+    return jsonify({"ok": True, "contribution_id": cid, "status": "pending",
+                    "node_id": node_id})
+
+
+@app.route("/api/v1/me/contributions/batch-manifest", methods=["POST"])
+@auth.require_member
+def api_me_contribute_manifest(user):
+    """Archive dedup: a bulk uploader sends the sha256 list of an image folder
+    and learns which frames are new, so years of history upload without
+    re-sending anything the network already has (contributions.sha256 UNIQUE)."""
+    body = request.get_json(force=True, silent=True) or {}
+    shas = body.get("sha256") or []
+    if not isinstance(shas, list) or not shas:
+        return jsonify({"error": "sha256 list required"}), 400
+    shas = [str(s).strip().lower() for s in shas[:5000] if str(s).strip()]
+    if not shas:
+        return jsonify({"error": "no valid sha256 values"}), 400
+    known = {r["sha256"] for r in db.query(
+        "SELECT sha256 FROM contributions WHERE sha256 = ANY(%s)", (shas,))}
+    new = [s for s in shas if s not in known]
+    return jsonify({"new": new, "known": sorted(known),
+                    "n_new": len(new), "n_known": len(known)})
+
+
+@app.route("/api/v1/me/discoveries", methods=["GET"])
+@auth.require_member
+def api_me_discoveries(user):
+    """Discovery candidates this member's nodes (or contributions) touched —
+    the feed behind 'your telescope may have found something new'."""
+    node_ids = [r["node_id"] for r in db.query(
+        "SELECT node_id FROM node_members WHERE user_id = %s",
+        (user["user_id"],))]
+    if not node_ids:
+        return jsonify({"count": 0, "discoveries": []})
+    rows = db.query(
+        "SELECT id, source_key, ra_deg, dec_deg, kind, filter, first_bjd, "
+        "       last_bjd, n_detections, n_nodes, node_ids, peak_delta_mag, "
+        "       last_mag, state, vsx_name, tns_name, target_id, updated_at "
+        "FROM discovery_candidates "
+        "WHERE node_ids::text LIKE ANY(%s) "
+        "ORDER BY updated_at DESC LIMIT 100",
+        (["%" + nid + "%" for nid in node_ids],))
+    for r in rows:
+        touched = db.loads(r.pop("node_ids", "[]"), [])
+        r["your_nodes"] = [n for n in touched if n in node_ids]
+        r["retrospective"] = False
+    # Retrospective discoveries this member's own uploads produced ("a nova was
+    # in your 2023 frame") — credited by user_id on the contribution.
+    retro = db.query(
+        "SELECT id, source_key, ra_deg, dec_deg, kind, filter, bjd, mag, "
+        "       delta_mag, state, vsx_name, tns_name, updated_at "
+        "FROM retro_discoveries WHERE user_id = %s "
+        "ORDER BY updated_at DESC LIMIT 100", (user["user_id"],))
+    for r in retro:
+        r["retrospective"] = True
+    combined = rows + retro
+    return jsonify({"count": len(combined), "discoveries": combined,
+                    "live": len(rows), "retrospective": len(retro)})
+
+
+@app.route("/api/v1/survey/lightcurves/<source_key>", methods=["GET"])
+def api_survey_lightcurve(source_key: str):
+    """Public light curve for any surveyed star — every measurement the
+    network (scheduled nodes and contributors alike) has of it."""
+    src = db.query_one(
+        "SELECT source_key, filter, ra_deg, dec_deg, catalog_mag, catalog_src, "
+        "       n_obs, mean_mag, m2, vsx_name, variability_flag, last_bjd "
+        "FROM survey_sources WHERE source_key = %s "
+        "ORDER BY n_obs DESC LIMIT 1", (source_key,))
+    if src is None:
+        return jsonify({"error": "unknown survey source"}), 404
+    n = int(src.get("n_obs") or 0)
+    src["stdev_mag"] = (round((float(src.pop("m2") or 0.0) / (n - 1)) ** 0.5, 4)
+                        if n > 1 else None)
+    points = db.query(
+        "SELECT bjd, mag, mag_err, snr, filter, node_id "
+        "FROM survey_measurements WHERE source_key = %s "
+        "ORDER BY bjd DESC LIMIT 500", (source_key,))
+    return jsonify({"source": src, "count": len(points),
+                    "measurements": points})
+
+
+@app.route("/api/v1/me/contributions", methods=["GET"])
+@auth.require_member
+def api_me_contributions(user):
+    rows = db.query(
+        "SELECT id, filename, status, n_sources, error, created_at, "
+        "processed_at FROM contributions WHERE user_id = %s "
+        "ORDER BY created_at DESC LIMIT 100", (user["user_id"],))
+    return jsonify({"count": len(rows), "contributions": rows})
 
 
 @app.route("/api/v1/admin/activation-codes", methods=["POST"])

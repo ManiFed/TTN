@@ -176,7 +176,9 @@ def refresh_node(node: dict) -> dict:
             acc_b += w
 
     # kappa: delivered error vs the physics prediction, hardware-normalized.
-    t_sub = min(float(node.get("max_exposure_s", 30.0) or 30.0), 30.0)
+    t_sub = float(node.get("max_exposure_s", 30.0) or 30.0)
+    if str(node.get("mount_type") or "alt_az") == "alt_az":
+        t_sub = min(t_sub, 30.0)   # field-rotation limit
     n_sub = 24                       # nominal 12-minute stack
     num, den, n_k = KAPPA_PRIOR_WEIGHT * 1.0, KAPPA_PRIOR_WEIGHT, 0
     for m in meas:

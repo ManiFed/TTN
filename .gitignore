@@ -9,8 +9,11 @@ data/
 dist/
 build/node_agent/
 cloud_data/*.db
+cloud_data/*.db-shm
+cloud_data/*.db-wal
 cloud_data/raw_images/
 cloud_data/aavso_files/
+logs/
 app/.metadata
 app/test/
 website/dashboard/

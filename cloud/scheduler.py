@@ -28,11 +28,17 @@ def _now() -> str:
 
 def choose_exposure(mag: Optional[float], node: dict) -> tuple:
     """
-    (expDur seconds, expCount) sized to the target brightness and capped by
-    the node's per-sub exposure limit (alt-az field rotation). Total time on
-    target stays in the 5–20 min range that suits stacked Seestar photometry.
+    (expDur seconds, expCount) sized to the target brightness and the node's
+    actual hardware, not the Seestar's.
+
+    Total integration scales with light grasp — a 100 mm aperture needs a
+    quarter of the 50 mm baseline's time for the same SNR — clamped to
+    [3, 30] minutes. Sub-exposures on alt-az mounts stay short (field
+    rotation); equatorial mounts run subs up to their max_exposure_s.
     """
-    max_exp = float(node.get("max_exposure_s", 30.0))
+    max_exp = float(node.get("max_exposure_s", 30.0) or 30.0)
+    aperture = float(node.get("aperture_mm", 50.0) or 50.0)
+    mount = str(node.get("mount_type") or "alt_az")
     if mag is None:
         mag = 13.0
     if mag < 9.0:
@@ -43,6 +49,10 @@ def choose_exposure(mag: Optional[float], node: dict) -> tuple:
         dur, total_min = 15.0, 12.0
     else:
         dur, total_min = 30.0, 20.0
+    total_min = min(30.0, max(3.0, total_min * (50.0 / max(aperture, 10.0)) ** 2))
+    if mount != "alt_az":
+        # No field rotation: fewer, deeper subs (read noise amortizes).
+        dur = max(dur, min(max_exp, 120.0))
     dur = min(dur, max_exp)
     count = max(5, int(round(total_min * 60.0 / dur)))
     return dur, count

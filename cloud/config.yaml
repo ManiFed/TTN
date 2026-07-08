@@ -109,6 +109,12 @@ scheduler:
   network_optimizer: false # CHORUS is the live planner
   local_search_ms: 1500    # annealing refinement budget per network run
   replan_interval_minutes: 120
+  # THE ORGANISM: mid-night reflow. When a node clouds out/drops offline with
+  # unexecuted plan items, re-value them on currently-dark nodes (reusing
+  # CHORUS best_slot) and dispatch as interrupts. Off by default.
+  reflow: false
+  reflow_interval_s: 60
+  reflow_max_per_night: 200
   min_score: 0.25          # targets below this never get scheduled
   max_targets_per_night: 12
   sun_altitude_limit: -12  # nautical darkness
@@ -148,6 +154,53 @@ storage:
   raw_image_dir: cloud_data/raw_images
   raw_image_retention_days: 14
   max_image_mb: 64
+
+# Open Aperture full-frame survey: ingest bounds, deviation-detection
+# thresholds, and retention for raw survey rows (Welford aggregates in
+# survey_sources are permanent).
+survey:
+  max_sources_per_batch: 800
+  retention_days: 120
+  deviants_per_node_night: 50
+  bootstrap_min_delta_mag: 1.0     # vs catalog, n_obs < baseline_min_n
+  bootstrap_min_sigma: 5.0
+  baseline_min_n: 5                # own-baseline phase starts here
+  baseline_min_z: 5.0
+  baseline_min_delta_mag: 0.3
+  new_source_min_snr: 10.0
+  variable_suspect_stdev: 0.2      # own-scatter above this → survey science, not alerts
+  crossmatch_radius_arcsec: 10.0   # VSX/TNS cone match for candidates
+  historical_days: 7               # contributed frames older than this → retro path
+  # THE ORGANISM: reflex confirmation. On candidate promotion, task other dark
+  # nodes to confirm within seconds instead of waiting for the nightly replan.
+  reflex:
+    enabled: true
+    max_per_night_global: 30       # ceiling on autonomous confirmations/night
+    max_per_candidate: 1
+    min_peak_delta_mag: 0.5        # only confirm meaningful brightness steps
+    cooldown_min: 120              # per-source cooldown between reflex fires
+    n_nodes: 3                     # confirming nodes per candidate
+    expires_hours: 2
+
+# EVERY LENS ON EARTH: cloud plate solving for contributed frames.
+# Runs on the solver worker service (astrometry.net index volume). The web
+# fallback (nova.astrometry.net) is for archive frames outside the local index.
+solver:
+  solve_field_path: solve-field
+  search_radius_deg: 15
+  timeout_s: 180
+  web_fallback: false
+  web_api_key: ${ASTROMETRY_API_KEY}
+  web_timeout_s: 300
+
+# Ingestion triage: cheap heuristic gate before the solver spends time. Rejects
+# junk, stretched/non-linear, and star-trailed frames.
+triage:
+  enabled: true
+  min_sources: 8
+  max_saturated_frac: 0.02
+  max_elongation: 1.8
+  max_gradient_ratio: 6.0
 
 logging:
   level: INFO

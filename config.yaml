@@ -36,8 +36,10 @@ cloud:
   disconnect_park_timeout: 1800
   enabled: true
   heartbeat_interval: 60
+  heartbeat_fast_interval: 5
   node_id: ''
   plan_poll_interval: 300
+  realtime_url: https://realtime.thetelescope.net
   upload_images: false
   url: https://api.thetelescope.net
 devices:
@@ -103,6 +105,12 @@ photometry:
   snr_threshold: 20
   solve_field_path: /opt/homebrew/bin/solve-field
   solver: astrometry
+  survey_enabled: true
+  survey_mag_limit: 17
+  survey_match_radius_arcsec: 5
+  survey_max_sources: 800
+  survey_max_zp_scatter: 0.15
+  survey_snr_min: 5
   target:
     dec_deg: null
     name: ''

@@ -7,3 +7,7 @@ astropy>=6.0
 anthropic>=0.92
 google-auth>=2.28.0
 psycopg2-binary>=2.9.9
+# Open Aperture: contrib_worker runs the node's survey photometry on
+# browser-uploaded frames (photutils) with catalog lookups (astroquery).
+photutils>=1.9
+astroquery>=0.4.6

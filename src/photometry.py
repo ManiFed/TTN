@@ -30,6 +30,7 @@ Output dict (matches AAVSO Extended File Format fields)
     }
 """
 
+import json
 import logging
 import math
 import os
@@ -418,6 +419,36 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         except Exception as _pe:
             logger.warning("Patrol check error: %s", _pe)
 
+    # ── Step 10: Full-frame survey extraction (opt-in) ────────────────────────
+    # Every catalog-matched star in the field, measured with the same aperture
+    # geometry and the frame's ensemble zero point. Only runs when that zero
+    # point is trustworthy — a scattered ZP would poison every survey mag.
+    survey_sources: list = []
+    if phot_cfg.get("survey_enabled", False):
+        max_zp_scatter = float(phot_cfg.get("survey_max_zp_scatter", 0.15))
+        if zp_scatter <= max_zp_scatter:
+            try:
+                center_ra, center_dec = (float(v) for v in
+                                         wcs.pixel_to_world_values(w / 2.0, h / 2.0))
+                scale = _wcs_pixel_scale(wcs) or pixel_scale
+                half_diag_deg = 0.5 * math.hypot(w, h) * scale / 3600.0
+                survey_mag_limit = float(phot_cfg.get("survey_mag_limit", mag_limit + 2.0))
+                cat_stars = _load_survey_catalog(
+                    center_ra, center_dec, half_diag_deg, survey_mag_limit,
+                    n_max=int(phot_cfg.get("survey_catalog_max", 600)))
+                survey_sources, _, _ = _run_survey_extraction(
+                    data, wcs, bkg_med, bkg_std, fwhm_px,
+                    ap_r, ann_in, ann_out, read_noise, gain,
+                    cat_stars, phot_cfg,
+                    zero_point=zero_point, zp_scatter=zp_scatter)
+            except Exception as _se:
+                logger.warning("Survey extraction error: %s", _se)
+        else:
+            logger.info("Survey extraction skipped: zp_scatter %.3f > %.3f",
+                        zp_scatter, max_zp_scatter)
+
+    _record_characterization(wcs, w, h, fwhm_px, survey_sources)
+
     return {
         "target_name":      target_name,
         "bjd":              round(bjd, 6),
@@ -435,6 +466,7 @@ def run_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         "fits_file":        os.path.basename(fits_path),
         "sky_mag":          sky_mag,
         "patrol_alerts":    patrol_alerts,
+        "survey_sources":   survey_sources,
     }
 
 
@@ -1462,3 +1494,408 @@ def _run_patrol_check(
     except Exception as exc:
         logger.warning("Patrol check raised: %s", exc)
         return []
+
+
+# ── Full-frame survey extraction ("every star in every frame") ────────────────
+
+_CATALOG_CACHE_DIR = os.path.join("data", "catalog_cache")
+_CATALOG_CACHE_TTL_DAYS = 30.0
+
+
+def _wcs_pixel_scale(wcs) -> Optional[float]:
+    """Pixel scale in arcsec/px from the WCS CD/CDELT matrix, or None."""
+    try:
+        cd = wcs.pixel_scale_matrix  # deg/px, works for CD and CDELT forms
+        return float(math.sqrt(abs(np.linalg.det(cd))) * 3600.0)
+    except Exception:
+        return None
+
+
+def _load_survey_catalog(
+    ra_deg: float,
+    dec_deg: float,
+    radius_deg: float,
+    mag_limit: float,
+    n_max: int = 600,
+) -> list:
+    """
+    Deep field catalog for full-frame photometry, disk-cached per field center.
+
+    CHORUS revisits the same fields nightly, so a 30-day cache both speeds the
+    pipeline and keeps VizieR query volume flat as the survey scales. ATLAS
+    REFCAT2 (complete to m≈19) is queried first; Gaia DR3 fills sparse fields.
+    Keys are quantized to 0.01° so nightly re-centerings of the same target
+    field share one cache entry.
+    """
+    key = f"{ra_deg:.2f}_{dec_deg:+.2f}_{radius_deg:.2f}_{mag_limit:.1f}".replace(".", "d")
+    cache_path = os.path.join(_CATALOG_CACHE_DIR, f"{key}.json")
+
+    try:
+        with open(cache_path) as fh:
+            cached = json.load(fh)
+        age_days = (time.time() - float(cached.get("fetched_at", 0))) / 86400.0
+        if age_days < _CATALOG_CACHE_TTL_DAYS and cached.get("stars"):
+            logger.debug("Survey catalog cache hit: %s (%d stars, %.1f d old)",
+                         key, len(cached["stars"]), age_days)
+            return cached["stars"]
+    except (OSError, ValueError):
+        pass
+
+    stars = _get_comparison_stars_atlas(ra_deg, dec_deg, radius_deg, mag_limit,
+                                        n_max=n_max)
+    if len(stars) < n_max // 4:
+        gaia = _get_comparison_stars_gaia(ra_deg, dec_deg, radius_deg, mag_limit,
+                                          n_max=n_max)
+        stars = _merge_comp_stars(stars, gaia)
+    stars = stars[:n_max]
+
+    if stars:
+        try:
+            os.makedirs(_CATALOG_CACHE_DIR, exist_ok=True)
+            tmp = cache_path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({"fetched_at": time.time(), "stars": stars}, fh)
+            os.replace(tmp, cache_path)
+        except OSError as exc:
+            logger.debug("Survey catalog cache write failed: %s", exc)
+
+    logger.info("Survey catalog: %d stars within %.2f° of (%.3f, %+.3f)",
+                len(stars), radius_deg, ra_deg, dec_deg)
+    return stars
+
+
+def _record_characterization(wcs, w: int, h: int, fwhm_px: float,
+                             survey_sources: list) -> None:
+    """Feed this solved frame's measured optics into the rolling
+    self-characterization windows (best-effort; never blocks photometry)."""
+    try:
+        from src import self_characterization
+        scale = _wcs_pixel_scale(wcs)
+        fov = (scale * math.hypot(w, h) / 3600.0) if scale else None
+        limiting = None
+        matched = [s["mag"] for s in survey_sources
+                   if s.get("matched") and float(s.get("snr") or 0.0) >= 5.0]
+        if matched:
+            limiting = max(matched)
+        self_characterization.record_frame(
+            pixel_scale_arcsec=scale,
+            fov_deg=fov,
+            fwhm_arcsec=(fwhm_px * scale) if scale else None,
+            limiting_mag=limiting,
+        )
+    except Exception as exc:
+        logger.debug("Characterization recording skipped: %s", exc)
+
+
+def _survey_source_key(matched_cs: Optional[dict], ra: float, dec: float) -> str:
+    """
+    Stable identity for a survey source across nodes and nights.
+
+    Matched sources key on the catalog id when one exists, else on the
+    *catalog* position (identical in every query, so identical on every node).
+    Unmatched sources key on the measured position quantized to ~3.6″; the
+    cloud cone-matches new-source candidates, so bin-edge splits are benign.
+    """
+    if matched_cs is not None:
+        auid = str(matched_cs.get("auid") or "").strip()
+        if auid:
+            return auid
+        return f"c{matched_cs['ra_deg']:.4f}{matched_cs['dec_deg']:+.4f}"
+    return f"p{ra:.3f}{dec:+.3f}"
+
+
+def _run_survey_extraction(
+    data: np.ndarray,
+    wcs,
+    bkg_med: float,
+    bkg_std: float,
+    fwhm_px: float,
+    ap_r: float,
+    ann_in: float,
+    ann_out: float,
+    read_noise: float,
+    gain: float,
+    catalog_stars: list,
+    phot_cfg: dict,
+    zero_point: Optional[float] = None,
+    zp_scatter: Optional[float] = None,
+) -> tuple:
+    """
+    Measure every detectable star in the frame with real aperture photometry.
+
+    When ``zero_point`` is None the frame self-calibrates from the matched
+    catalog pairs (used by run_survey_pipeline for contributed frames with no
+    curated comparison ensemble); otherwise the caller's ensemble zero point
+    is used unchanged.
+
+    Returns (sources, zero_point, zp_scatter); sources is [] on failure.
+    """
+    try:
+        from photutils.detection import DAOStarFinder
+    except ImportError:
+        logger.debug("photutils not available — skipping survey extraction")
+        return [], zero_point, zp_scatter
+
+    snr_min     = float(phot_cfg.get("survey_snr_min", 5.0))
+    max_sources = int(phot_cfg.get("survey_max_sources", 800))
+    match_arcsec = float(phot_cfg.get("survey_match_radius_arcsec", 5.0))
+
+    daofind = DAOStarFinder(fwhm=fwhm_px, threshold=5.0 * bkg_std,
+                            exclude_border=True)
+    detections = daofind(data - bkg_med)
+    if detections is None or len(detections) == 0:
+        return [], zero_point, zp_scatter
+
+    x_col = "x_centroid" if "x_centroid" in detections.colnames else "xcentroid"
+    y_col = "y_centroid" if "y_centroid" in detections.colnames else "ycentroid"
+
+    detections.sort("peak", reverse=True)
+    detections = detections[:max_sources]
+
+    xs = np.asarray(detections[x_col], dtype=float)
+    ys = np.asarray(detections[y_col], dtype=float)
+    positions = list(zip(xs, ys))
+
+    fluxes, flux_errors = _aperture_photometry(
+        data, positions, ap_r, ann_in, ann_out, read_noise, gain)
+    if fluxes is None:
+        return [], zero_point, zp_scatter
+
+    try:
+        ras, decs = wcs.pixel_to_world_values(xs, ys)
+        ras = np.asarray(ras, dtype=float)
+        decs = np.asarray(decs, dtype=float)
+    except Exception as exc:
+        logger.warning("Survey WCS conversion failed: %s", exc)
+        return [], zero_point, zp_scatter
+
+    # Nearest-catalog-star match, vectorized (≤800 × ≤600 is trivial).
+    thr_deg = match_arcsec / 3600.0
+    match_idx = np.full(len(ras), -1, dtype=int)
+    if catalog_stars:
+        cat_ra  = np.array([c["ra_deg"] for c in catalog_stars])
+        cat_dec = np.array([c["dec_deg"] for c in catalog_stars])
+        cos_dec = np.cos(np.radians(decs))[:, None]
+        d2 = ((ras[:, None] - cat_ra[None, :]) * cos_dec) ** 2 \
+             + (decs[:, None] - cat_dec[None, :]) ** 2
+        nearest = np.argmin(d2, axis=1)
+        near_d2 = d2[np.arange(len(ras)), nearest]
+        match_idx = np.where(near_d2 <= thr_deg ** 2, nearest, -1)
+
+    valid = fluxes > 0
+    instr = np.full(len(fluxes), np.nan)
+    instr[valid] = -2.5 * np.log10(np.maximum(fluxes[valid], 1e-10))
+
+    # Self-calibrate the zero point from matched pairs when none was supplied.
+    if zero_point is None:
+        zps, zpw = [], []
+        for i in range(len(ras)):
+            ci = int(match_idx[i])
+            if ci < 0 or not valid[i]:
+                continue
+            cs = catalog_stars[ci]
+            ref = cs.get("mag_v")
+            if ref is None:
+                continue
+            sigma_instr = 1.0857 * (flux_errors[i] / fluxes[i]) if flux_errors[i] > 0 else 0.05
+            cat_err = float(cs.get("mag_err") or 0.05)
+            sigma_zp = math.sqrt(sigma_instr ** 2 + cat_err ** 2)
+            zps.append(ref - instr[i])
+            zpw.append(1.0 / max(sigma_zp ** 2, 1e-6))
+        if len(zps) < 5:
+            logger.warning("Survey self-calibration failed: only %d matched "
+                           "catalog stars", len(zps))
+            return [], None, None
+        zp_arr, w_arr = np.array(zps), np.array(zpw)
+        from astropy.stats import sigma_clip as _sigma_clip
+        masked = _sigma_clip(zp_arr, sigma=2.5, maxiters=5)
+        good = ~masked.mask
+        zp_arr, w_arr = zp_arr[good], w_arr[good]
+        zero_point = float(np.average(zp_arr, weights=w_arr))
+        zp_scatter = float(np.std(zp_arr)) if len(zp_arr) > 1 else 0.05
+        logger.info("Survey self-calibrated ZP=%.3f scatter=%.3f from %d stars",
+                    zero_point, zp_scatter, len(zp_arr))
+
+    zp_err = float(zp_scatter or 0.05)
+    sources = []
+    for i in range(len(ras)):
+        if not valid[i] or flux_errors[i] <= 0:
+            continue
+        snr = float(fluxes[i] / flux_errors[i])
+        if snr < snr_min:
+            continue
+        mag = float(instr[i] + zero_point)
+        sigma_poisson = 1.0857 * (flux_errors[i] / fluxes[i])
+        mag_err = float(math.sqrt(sigma_poisson ** 2 + zp_err ** 2))
+        ci = int(match_idx[i])
+        cs = catalog_stars[ci] if ci >= 0 else None
+        sources.append({
+            "key":     _survey_source_key(cs, float(ras[i]), float(decs[i])),
+            "ra":      round(float(ras[i]), 5),
+            "dec":     round(float(decs[i]), 5),
+            "mag":     round(mag, 3),
+            "mag_err": round(mag_err, 3),
+            "snr":     round(snr, 1),
+            "cat_mag": round(float(cs["mag_v"]), 3) if cs and cs.get("mag_v") is not None else None,
+            "cat_err": round(float(cs.get("mag_err") or 0.05), 3) if cs else None,
+            "cat_src": cs.get("source", "") if cs else "",
+            "matched": cs is not None,
+        })
+
+    logger.info("Survey extraction: %d sources (%d catalog-matched) at SNR≥%.0f",
+                len(sources), sum(1 for s in sources if s["matched"]), snr_min)
+    return sources, zero_point, zp_scatter
+
+
+def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
+    """
+    Target-less full-frame photometry for contributed frames.
+
+    Unlike run_pipeline, no OBJECT/RA/DEC is required: the frame anchors on its
+    own WCS center, the zero point self-calibrates from catalog-matched field
+    stars, and every detectable star is measured. Frames must either carry a
+    WCS already or have RA/DEC pointing headers a local solver can start from.
+    """
+    t0 = time.monotonic()
+    try:
+        from src.telescope_specs import enrich_config_with_telescope
+        config = enrich_config_with_telescope(config)
+    except Exception as exc:
+        logger.debug("Telescope enrichment skipped: %s", exc)
+    phot_cfg = config.get("photometry", {})
+    node_id = phot_cfg.get("node_id", "node_unknown")
+    filter_name = phot_cfg.get("filter_name", "CV")
+
+    try:
+        with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
+            header = dict(hdul[0].header)
+            data = np.array(hdul[0].data, dtype=np.float32)
+    except Exception as exc:
+        logger.error("Cannot open FITS %s: %s", fits_path, exc)
+        return None
+    if data is None or data.size == 0:
+        logger.error("FITS file has no image data: %s", fits_path)
+        return None
+    if data.ndim == 3:
+        caxis = int(np.argmin(data.shape))
+        data = data.mean(axis=caxis)
+    if data.ndim != 2:
+        logger.error("Unexpected data shape %s in %s", data.shape, fits_path)
+        return None
+
+    image_type = str(header.get("IMAGETYP", "LIGHT")).strip().upper()
+    if image_type not in ("LIGHT", "LIGHT FRAME", ""):
+        logger.info("Skipping non-LIGHT frame (IMAGETYP=%s): %s",
+                    image_type, os.path.basename(fits_path))
+        return None
+
+    hdr_gain = header.get("EGAIN") or header.get("CCDGAIN")
+    gain = float(hdr_gain) if hdr_gain is not None else float(phot_cfg.get("gain", 1.0))
+
+    # WCS: use one already present, else solve from the pointing headers.
+    hint_ra  = header.get("RA")
+    hint_dec = header.get("DEC")
+    has_wcs = "CRVAL1" in header and "CRVAL2" in header \
+        and ("CD1_1" in header or "CDELT1" in header)
+    if not has_wcs:
+        if hint_ra is None or hint_dec is None:
+            logger.warning("Frame has no WCS and no RA/DEC pointing headers — "
+                           "cannot survey %s", os.path.basename(fits_path))
+            return None
+        if not _ensure_wcs(
+            fits_path, float(hint_ra), float(hint_dec),
+            solver=str(phot_cfg.get("solver", "astap")).strip().lower(),
+            astap_path=phot_cfg.get("astap_path", "astap"),
+            solve_field_path=phot_cfg.get("solve_field_path", "solve-field"),
+            search_radius=float(phot_cfg.get("astap_search_radius", 10)),
+            pixel_scale=phot_cfg.get("pixel_scale"),
+        ):
+            logger.error("Plate solve failed — cannot survey without WCS")
+            return None
+
+    try:
+        with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
+            header = dict(hdul[0].header)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                wcs = WCS(hdul[0].header, naxis=2)
+    except Exception as exc:
+        logger.error("Cannot load WCS from %s: %s", fits_path, exc)
+        return None
+
+    h, w = data.shape
+    try:
+        center_ra, center_dec = (float(v) for v in
+                                 wcs.pixel_to_world_values(w / 2.0, h / 2.0))
+    except Exception as exc:
+        logger.error("Cannot derive frame center from WCS: %s", exc)
+        return None
+
+    # Contributed frames come from multi-band rigs: the frame's own FILTER
+    # header outranks the node-level default.
+    hdr_filter = str(header.get("FILTER") or "").strip()
+    if hdr_filter:
+        filter_name = hdr_filter[:8]
+
+    fwhm_px = _estimate_fwhm(data, fallback_px=float(phot_cfg.get("fwhm_fallback_px", 4.0)))
+    from astropy.stats import sigma_clipped_stats as _scs
+    _, bkg_med, bkg_std = _scs(data, sigma=3.0)
+
+    ap_factor   = float(phot_cfg.get("aperture_factor",  2.5))
+    ann_inner_f = float(phot_cfg.get("annulus_inner",    4.0))
+    ann_outer_f = float(phot_cfg.get("annulus_outer",    6.0))
+    ap_r    = max(3.0, fwhm_px * ap_factor)
+    ann_in  = max(ap_r + 1.0, fwhm_px * ann_inner_f)
+    ann_out = max(ann_in + 3.0, fwhm_px * ann_outer_f)
+    read_noise = float(phot_cfg.get("read_noise", header.get("RDNOISE", 5.0)))
+
+    scale = _wcs_pixel_scale(wcs) or float(phot_cfg.get("pixel_scale", 2.4))
+    half_diag_deg = 0.5 * math.hypot(w, h) * scale / 3600.0
+    survey_mag_limit = float(phot_cfg.get("survey_mag_limit",
+                                          float(phot_cfg.get("mag_limit", 15.0)) + 2.0))
+    catalog_stars = _load_survey_catalog(
+        center_ra, center_dec, half_diag_deg, survey_mag_limit,
+        n_max=int(phot_cfg.get("survey_catalog_max", 600)))
+    if not catalog_stars:
+        logger.error("No survey catalog stars for field (%.3f, %+.3f)",
+                     center_ra, center_dec)
+        return None
+
+    sources, zero_point, zp_scatter = _run_survey_extraction(
+        data, wcs, bkg_med, bkg_std, fwhm_px,
+        ap_r, ann_in, ann_out, read_noise, gain,
+        catalog_stars, phot_cfg)
+    if not sources or zero_point is None:
+        return None
+
+    max_zp_scatter = float(phot_cfg.get("survey_max_zp_scatter", 0.15))
+    if zp_scatter is not None and zp_scatter > max_zp_scatter:
+        logger.warning("Survey frame rejected: zp_scatter %.3f > %.3f",
+                       zp_scatter, max_zp_scatter)
+        return None
+
+    bjd = _compute_bjd(header, center_ra, center_dec, config)
+    airmass = _compute_airmass(header, config)
+
+    _record_characterization(wcs, w, h, fwhm_px, sources)
+
+    elapsed = time.monotonic() - t0
+    logger.info("Survey pipeline done in %.1f s — %d sources, ZP=%.3f±%.3f, "
+                "file=%s", elapsed, len(sources), zero_point, zp_scatter,
+                os.path.basename(fits_path))
+
+    return {
+        "kind":            "survey",
+        "node_id":         node_id,
+        "bjd":             round(bjd, 6),
+        "filter":          filter_name,
+        "center_ra":       round(center_ra, 5),
+        "center_dec":      round(center_dec, 5),
+        "zero_point":      round(zero_point, 3),
+        "zp_scatter":      round(zp_scatter, 3) if zp_scatter is not None else None,
+        "fwhm":            round(fwhm_px, 2),
+        "airmass":         round(airmass, 3),
+        "n_sources":       len(sources),
+        "fits_file":       os.path.basename(fits_path),
+        "survey_sources":  sources,
+    }

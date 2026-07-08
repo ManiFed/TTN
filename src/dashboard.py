@@ -37,6 +37,7 @@ from alpaca.autofocus import autofocus_device, AutofocusCancelled, AutofocusErro
 from alpaca.covercalibrator import CoverCalibrator, COVER_STATE_NAMES, COVER_NOT_PRESENT, COVER_MOVING, COVER_OPEN, COVER_CLOSED
 from src.image_watcher import ImageWatcher
 from src.photometry import run_pipeline as _run_photometry
+from src.photometry import run_survey_pipeline as _run_survey_pipeline
 from src.aavso_submission import submit as _aavso_submit
 from src.fits_export import export_enhanced_fits as _export_fits
 from src.geolocation import enrich_config_with_location
@@ -664,13 +665,65 @@ def _maybe_aavso_submit(result: dict, cfg: dict) -> dict:
     return sub
 
 
+def _frame_has_target(fits_path: str, cfg: dict) -> bool:
+    """True when the frame (or config) names a target for differential
+    photometry. Contributor-mode frames from NINA/ASIAIR capture dirs
+    usually don't — they go down the full-frame survey path instead."""
+    if str(cfg.get("photometry", {}).get("target", {}).get("name") or "").strip():
+        return True
+    try:
+        from astropy.io import fits as _fits
+        with _fits.open(fits_path, memmap=False,
+                        ignore_missing_simple=True) as hdul:
+            return bool(str(hdul[0].header.get("OBJECT", "")).strip())
+    except Exception:
+        return False
+
+
+def _maybe_report_characterization() -> None:
+    """Ship the rolling measured-optics medians to the registry when due."""
+    if _cloud is None:
+        return
+    try:
+        from src import self_characterization
+        report = self_characterization.maybe_report()
+        if report:
+            _cloud.submit_characterization(report)
+    except Exception as exc:
+        logger.debug("Characterization report skipped: %s", exc)
+
+
+def _run_survey_only(fits_path: str, cfg: dict) -> None:
+    """Contributor path: no telescope, no plan, no target — just harvest
+    every star in the frame and ship the source list to the cloud."""
+    result = _run_survey_pipeline(fits_path, cfg)
+    if not result:
+        logger.info("Survey pipeline produced no result for %s",
+                    os.path.basename(fits_path))
+        return
+    sources = result.pop("survey_sources", [])
+    logger.info("Survey-only frame: %d sources from %s",
+                len(sources), result.get("fits_file"))
+    if _cloud is not None and sources:
+        _cloud.submit_survey(result, sources)
+    _maybe_report_characterization()
+
+
 def _run_photometry_bg(fits_path: str) -> None:
     """Run the photometry pipeline in a background thread and store the result."""
     with _state_lock:
         _state["photometry"]["running"] = True
     try:
         cfg = _load_config()
+        if (cfg.get("photometry", {}).get("survey_enabled", False)
+                and not _frame_has_target(fits_path, cfg)):
+            _run_survey_only(fits_path, cfg)
+            return
         result = _run_photometry(fits_path, cfg)
+        # Survey sources ride the result out of the pipeline but travel to the
+        # cloud on their own endpoint — pop them before the result is stored in
+        # dashboard state or the measurement payload (up to ~800 entries).
+        survey_sources = result.pop("survey_sources", []) if result else []
         with _state_lock:
             _state["photometry"]["last_result"] = result
             if result:
@@ -711,6 +764,20 @@ def _run_photometry_bg(fits_path: str) -> None:
             if _cloud is not None:
                 _cloud.submit_measurement(
                     result, conditions=_cloud_conditions(), fits_path=fits_path)
+                if survey_sources:
+                    _cloud.submit_survey(
+                        {
+                            "bjd":        result.get("bjd"),
+                            "filter":     result.get("filter"),
+                            "zero_point": result.get("zero_point"),
+                            "zp_scatter": result.get("zp_scatter"),
+                            "fwhm":       result.get("fwhm"),
+                            "airmass":    result.get("airmass"),
+                            "fits_file":  result.get("fits_file"),
+                        },
+                        survey_sources,
+                    )
+                _maybe_report_characterization()
         else:
             logger.warning("Photometry pipeline returned no result for %s",
                            os.path.basename(fits_path))
@@ -796,6 +863,48 @@ def _cloud_telescope_specs() -> dict:
     from src.telescope_specs import detect_telescope_specs
     model = _load_config().get("observatory", {}).get("telescope", "")
     return detect_telescope_specs(_tel, _cam, fallback_model=model)
+
+
+def _cloud_state() -> dict:
+    """Second-scale live phase for THE ORGANISM fleet map + fast heartbeat.
+
+    Maps the scheduler's internal phase to the cloud's live-state vocabulary and
+    reports darkness/sky so the cloud knows, in seconds, which nodes are dark
+    and observable (the pool reflow/reflex draw from). Read-only snapshot — never
+    touches scheduler or safety state.
+    """
+    _PHASE_MAP = {
+        "slewing": "slewing", "exposing": "exposing",
+        "stacking": "stacking", "waiting": "idle",
+        "done": "idle", "cancelled": "idle", "": "idle",
+    }
+    out: dict = {"phase": "idle"}
+    is_dark = False
+    if _safety_mgr is not None:
+        try:
+            s = _safety_mgr.status()
+            sun = s.get("sun_elevation")
+            thr = s.get("dawn_threshold")
+            if isinstance(sun, (int, float)) and isinstance(thr, (int, float)):
+                is_dark = sun < thr
+            out["sky_clear"] = 1.0 if s.get("safe") else 0.0
+            if s.get("safe") is False and "cloud" in str(s.get("reason", "")).lower():
+                out["phase"] = "clouded"
+        except Exception:
+            pass
+    out["is_dark"] = is_dark
+    with _sched_lock:
+        running = _sched_state.get("running")
+        phase = _sched_state.get("current_phase", "")
+        if running:
+            out["phase"] = _PHASE_MAP.get(phase, "idle")
+            out["target_name"] = _sched_state.get("current_target", "")
+            idx = _sched_state.get("current_idx")
+            if isinstance(idx, int) and idx >= 0:
+                out["plan_item_idx"] = idx
+    if out["phase"] == "idle" and not is_dark:
+        out["phase"] = "daylight"
+    return out
 
 
 _cloud_disconnect_since: Optional[float] = None
@@ -9480,6 +9589,7 @@ def launch(port: int = 5173) -> None:
             on_plan=_on_cloud_plan,
             on_interrupt=_on_cloud_interrupt,
             get_telescope_specs=_cloud_telescope_specs,
+            get_state=_cloud_state,
         )
         _cloud.start()
         threading.Thread(

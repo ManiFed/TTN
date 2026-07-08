@@ -401,6 +401,27 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # Network optimizer: all AI-tuned parameter groups live in one JSON blob,
     # superseding the observability-only tuning_state.obs_weights column.
     ("tuning_state",     "params",    "TEXT NOT NULL DEFAULT '{}'"),
+    # Open Aperture: contributor activation codes create tier-0 virtual nodes
+    # that upload survey frames but are never scheduled.
+    ("activation_codes", "code_type", "TEXT DEFAULT 'node'"),
+    # Self-characterization provenance: which capability columns hold values
+    # the node *measured* from its own plate solves (vs. spec-sheet entries).
+    ("nodes", "measured_specs", "TEXT DEFAULT '{}'"),
+    ("nodes", "measured_at",    "TEXT DEFAULT ''"),
+    # EVERY LENS ON EARTH: universal ingestion. Contributions are no longer
+    # required to arrive with a WCS — the cloud solver adds one. These columns
+    # carry the staged pipeline's progress and results.
+    ("contributions", "stage",              "TEXT DEFAULT ''"),      # triage|solve|extract|ingest
+    ("contributions", "solved",             "INTEGER DEFAULT 0"),
+    ("contributions", "pixel_scale_arcsec", "DOUBLE PRECISION"),
+    ("contributions", "date_obs",           "TEXT DEFAULT ''"),
+    ("contributions", "storage_key",        "TEXT DEFAULT ''"),      # object-store key
+    ("contributions", "triage",             "TEXT DEFAULT '{}'"),
+    ("contributions", "historical",         "INTEGER DEFAULT 0"),
+    # Provenance: which human/contribution produced a survey measurement, so a
+    # confirmed discovery can credit the person who caught it.
+    ("survey_measurements", "contribution_id", "INTEGER"),
+    ("survey_measurements", "user_id",         "TEXT DEFAULT ''"),
 ]
 
 # Tables added after initial schema — created idempotently in init().
@@ -538,6 +559,173 @@ _LATE_TABLES: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_science_suggestions_time ON science_program_suggestions(created_at)",
+    # ── Open Aperture: full-frame survey store ────────────────────────────────
+    # One row per (star, filter): running Welford aggregates are the permanent
+    # science product; raw survey_measurements carry a retention window.
+    """
+    CREATE TABLE IF NOT EXISTS survey_sources (
+        source_key    TEXT NOT NULL,
+        filter        TEXT NOT NULL DEFAULT 'CV',
+        ra_deg        DOUBLE PRECISION NOT NULL,
+        dec_deg       DOUBLE PRECISION NOT NULL,
+        catalog_mag   DOUBLE PRECISION,
+        catalog_err   DOUBLE PRECISION,
+        catalog_src   TEXT DEFAULT '',
+        n_obs         INTEGER DEFAULT 0,
+        mean_mag      DOUBLE PRECISION,
+        m2            DOUBLE PRECISION DEFAULT 0,
+        last_bjd      DOUBLE PRECISION,
+        last_mag      DOUBLE PRECISION,
+        vsx_name      TEXT DEFAULT '',
+        vsx_checked_at TEXT DEFAULT '',
+        variability_flag TEXT DEFAULT 'none',
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (source_key, filter)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_survey_sources_coords ON survey_sources(ra_deg, dec_deg)",
+    """
+    CREATE TABLE IF NOT EXISTS survey_measurements (
+        id          BIGSERIAL PRIMARY KEY,
+        source_key  TEXT NOT NULL,
+        node_id     TEXT NOT NULL,
+        bjd         DOUBLE PRECISION NOT NULL,
+        mag         DOUBLE PRECISION NOT NULL,
+        mag_err     DOUBLE PRECISION,
+        snr         DOUBLE PRECISION,
+        filter      TEXT DEFAULT 'CV',
+        frame_id    TEXT DEFAULT '',
+        received_at TEXT NOT NULL,
+        UNIQUE (source_key, node_id, bjd)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_survey_meas_source ON survey_measurements(source_key, bjd)",
+    "CREATE INDEX IF NOT EXISTS idx_survey_meas_received ON survey_measurements USING BRIN (received_at)",
+    """
+    CREATE TABLE IF NOT EXISTS discovery_candidates (
+        id             SERIAL PRIMARY KEY,
+        source_key     TEXT NOT NULL,
+        ra_deg         DOUBLE PRECISION NOT NULL,
+        dec_deg        DOUBLE PRECISION NOT NULL,
+        kind           TEXT NOT NULL,
+        filter         TEXT DEFAULT 'CV',
+        first_bjd      DOUBLE PRECISION,
+        last_bjd       DOUBLE PRECISION,
+        n_detections   INTEGER DEFAULT 1,
+        n_nodes        INTEGER DEFAULT 1,
+        node_ids       TEXT DEFAULT '[]',
+        peak_delta_mag DOUBLE PRECISION,
+        last_mag       DOUBLE PRECISION,
+        state          TEXT DEFAULT 'detected',
+        vsx_name       TEXT DEFAULT '',
+        tns_name       TEXT DEFAULT '',
+        target_id      TEXT DEFAULT '',
+        detail         TEXT DEFAULT '{}',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_candidates_state ON discovery_candidates(state, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_candidates_source ON discovery_candidates(source_key)",
+    "CREATE INDEX IF NOT EXISTS idx_candidates_coords ON discovery_candidates(ra_deg, dec_deg)",
+    """
+    CREATE TABLE IF NOT EXISTS contributions (
+        id           SERIAL PRIMARY KEY,
+        user_id      TEXT NOT NULL REFERENCES users(user_id),
+        node_id      TEXT NOT NULL,
+        filename     TEXT NOT NULL,
+        sha256       TEXT NOT NULL UNIQUE,
+        size_bytes   INTEGER DEFAULT 0,
+        status       TEXT DEFAULT 'pending',
+        wcs_present  INTEGER DEFAULT 0,
+        n_sources    INTEGER DEFAULT 0,
+        error        TEXT DEFAULT '',
+        stored_path  TEXT DEFAULT '',
+        created_at   TEXT NOT NULL,
+        processed_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_contributions_status ON contributions(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_contributions_user ON contributions(user_id, created_at)",
+    # ── THE ORGANISM: live fleet state + server→node dispatch bus ──────────────
+    # node_live_state carries second-scale phase for every node (one row/node,
+    # upserted on each heartbeat). 'offline' is derived at read time from
+    # updated_at age, never written by a reaper.
+    """
+    CREATE TABLE IF NOT EXISTS node_live_state (
+        node_id        TEXT PRIMARY KEY,
+        phase          TEXT DEFAULT 'idle',
+        target_name    TEXT DEFAULT '',
+        plan_item_idx  INTEGER,
+        exposure_ends_at TEXT DEFAULT '',
+        sky_clear      DOUBLE PRECISION,
+        is_dark        INTEGER DEFAULT 0,
+        heartbeat_s    DOUBLE PRECISION DEFAULT 60,
+        updated_at     TEXT NOT NULL,
+        detail         TEXT DEFAULT '{}'
+    )
+    """,
+    # dispatch_events is the append-only push log the realtime SSE service tails
+    # (via LISTEN/NOTIFY) and replays from on Last-Event-ID reconnect. Rows are
+    # short-lived signals ("wake up and fetch"), pruned by the maintenance loop.
+    """
+    CREATE TABLE IF NOT EXISTS dispatch_events (
+        id          BIGSERIAL PRIMARY KEY,
+        node_id     TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        payload     TEXT DEFAULT '{}',
+        created_at  TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_node ON dispatch_events(node_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_created ON dispatch_events USING BRIN (created_at)",
+    # reflow_log: audit of mid-night work reassignments (dropped node → new
+    # node), one row per reflow. outcome is filled by the nightly ledger join.
+    """
+    CREATE TABLE IF NOT EXISTS reflow_log (
+        id            SERIAL PRIMARY KEY,
+        night         TEXT NOT NULL,
+        from_node     TEXT NOT NULL,
+        to_node       TEXT NOT NULL,
+        target_id     TEXT NOT NULL,
+        target_name   TEXT DEFAULT '',
+        expected_info DOUBLE PRECISION DEFAULT 0,
+        interrupt_id  INTEGER,
+        reason        TEXT DEFAULT 'dropout',
+        outcome       TEXT DEFAULT 'dispatched',
+        created_at    TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_reflow_night ON reflow_log(night)",
+    # EVERY LENS ON EARTH: retrospective discovery. Deviations found in
+    # historical (archive) frames land here, NOT in the live candidate flow —
+    # a nova in a 2023 image is a real find but must never fire a live interrupt
+    # or pollute the baseline it is compared against.
+    """
+    CREATE TABLE IF NOT EXISTS retro_discoveries (
+        id             SERIAL PRIMARY KEY,
+        source_key     TEXT NOT NULL,
+        ra_deg         DOUBLE PRECISION NOT NULL,
+        dec_deg        DOUBLE PRECISION NOT NULL,
+        kind           TEXT NOT NULL,
+        filter         TEXT DEFAULT 'CV',
+        bjd            DOUBLE PRECISION,
+        mag            DOUBLE PRECISION,
+        delta_mag      DOUBLE PRECISION,
+        node_id        TEXT DEFAULT '',
+        contribution_id INTEGER,
+        user_id        TEXT DEFAULT '',
+        state          TEXT DEFAULT 'detected',
+        vsx_name       TEXT DEFAULT '',
+        tns_name       TEXT DEFAULT '',
+        detail         TEXT DEFAULT '{}',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_retro_state ON retro_discoveries(state, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_retro_coords ON retro_discoveries(ra_deg, dec_deg)",
+    "CREATE INDEX IF NOT EXISTS idx_retro_user ON retro_discoveries(user_id)",
 ]
 
 
@@ -571,11 +759,13 @@ def init(url: str = "") -> None:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
-            _run_migrations(conn)
             for stmt in _LATE_TABLES:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+            # Migrations run after both base and late tables exist so column
+            # additions can target either group (e.g. contributions columns).
+            _run_migrations(conn)
             for stmt in _SEEDS:
                 cur.execute(stmt)
             conn.commit()
