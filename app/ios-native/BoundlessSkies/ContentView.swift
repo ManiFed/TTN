@@ -2,6 +2,8 @@ import AVFoundation
 import Charts
 import CoreLocation
 import Foundation
+import Observation
+import Security
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -50,16 +52,16 @@ enum AppConfig {
 }
 
 enum AppTheme {
-    static let night = Color(red: 0.010, green: 0.012, blue: 0.014)
-    static let surface = Color(red: 0.045, green: 0.050, blue: 0.052)
-    static let surface2 = Color(red: 0.080, green: 0.086, blue: 0.086)
-    static let ink = Color(red: 0.955, green: 0.935, blue: 0.850)
+    static let night = Color(red: 15 / 255, green: 17 / 255, blue: 20 / 255)
+    static let surface = Color(red: 23 / 255, green: 26 / 255, blue: 30 / 255)
+    static let surface2 = Color(red: 29 / 255, green: 33 / 255, blue: 38 / 255)
+    static let ink = Color(red: 235 / 255, green: 236 / 255, blue: 238 / 255)
     static let ink2 = ink.opacity(0.68)
     static let ink3 = ink.opacity(0.42)
-    static let accent = Color(red: 0.145, green: 0.910, blue: 0.625)
-    static let sky = Color(red: 0.270, green: 0.720, blue: 1.0)
-    static let warm = Color(red: 1.0, green: 0.555, blue: 0.220)
-    static let danger = Color(red: 1.0, green: 0.240, blue: 0.260)
+    static let accent = Color(red: 127 / 255, green: 166 / 255, blue: 199 / 255)
+    static let sky = accent
+    static let warm = Color(red: 170 / 255, green: 163 / 255, blue: 143 / 255)
+    static let danger = Color(red: 192 / 255, green: 140 / 255, blue: 140 / 255)
 }
 
 // MARK: - JSON Helpers
@@ -417,22 +419,58 @@ final class AuthStore {
     var isLoggedIn: Bool { token?.isEmpty == false }
 
     func load() {
-        token = UserDefaults.standard.string(forKey: tokenKey)
-        userId = UserDefaults.standard.string(forKey: userIdKey)
+        token = read(tokenKey)
+        userId = read(userIdKey)
     }
 
     func save(token: String, userId: String) {
         self.token = token
         self.userId = userId
-        UserDefaults.standard.set(token, forKey: tokenKey)
-        UserDefaults.standard.set(userId, forKey: userIdKey)
+        write(token, for: tokenKey)
+        write(userId, for: userIdKey)
     }
 
     func clear() {
         token = nil
         userId = nil
-        UserDefaults.standard.removeObject(forKey: tokenKey)
-        UserDefaults.standard.removeObject(forKey: userIdKey)
+        remove(tokenKey)
+        remove(userIdKey)
+    }
+
+    private func read(_ key: String) -> String? {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: "net.thetelescope.node",
+            kSecAttrAccount: key,
+            kSecReturnData: true,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func write(_ value: String, for key: String) {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: "net.thetelescope.node",
+            kSecAttrAccount: key,
+        ]
+        let attributes = [kSecValueData: Data(value.utf8)] as CFDictionary
+        if SecItemUpdate(query as CFDictionary, attributes) == errSecItemNotFound {
+            var insert = query
+            insert[kSecValueData] = Data(value.utf8)
+            SecItemAdd(insert as CFDictionary, nil)
+        }
+    }
+
+    private func remove(_ key: String) {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: "net.thetelescope.node",
+            kSecAttrAccount: key,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 

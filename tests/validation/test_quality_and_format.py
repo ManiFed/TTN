@@ -20,7 +20,8 @@ _CFG = {}   # gate defaults: snr 20, unc 0.3, min_comp 3, airmass 3.0,
 
 def _m(**over):
     base = {"snr": 45.0, "uncertainty": 0.08, "n_comparison_stars": 6,
-            "airmass": 1.3, "zp_scatter": 0.05, "target_saturated": False}
+            "airmass": 1.3, "zp_scatter": 0.05, "target_saturated": False,
+            "target_blended": False}
     base.update(over)
     return base
 
@@ -43,6 +44,8 @@ def test_clean_measurement_is_good_with_no_reasons():
     (_m(zp_scatter=0.20), "acceptable", "zp_scatter"),
     (_m(zp_scatter=0.35), "poor", "zp_scatter"),
     (_m(target_saturated=True), "poor", "target_saturated"),
+    (_m(target_blended=True), "poor", "target_blended"),
+    (_m(airmass=None), "acceptable", "airmass"),
 ])
 def test_gate_matrix(metrics, expected, check):
     flag, reasons = evaluate_quality(metrics, _CFG)

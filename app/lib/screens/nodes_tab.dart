@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:geolocator/geolocator.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +9,17 @@ import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+
+/// Parses a desktop-friendly `latitude, longitude` entry.
+(double, double)? _coordinatesFrom(String value) {
+  final match = RegExp(r'^\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*$')
+      .firstMatch(value);
+  if (match == null) return null;
+  final lat = double.tryParse(match.group(1)!);
+  final lon = double.tryParse(match.group(2)!);
+  if (lat == null || lon == null || lat.abs() > 90 || lon.abs() > 180) return null;
+  return (lat, lon);
+}
 
 /// Opens the connect-telescope sheet from any screen.
 /// Returns true if a node was successfully claimed.
@@ -1118,40 +1128,21 @@ class _StartTonightSheetState extends State<_StartTonightSheet> {
     _fetchSky();
   }
 
-  Future<void> _detectGps() async {
-    setState(() { _locating = true; _error = null; });
-    try {
-      await Geolocator.requestPermission();
-      final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-      final lat = pos.latitude;
-      final lon = pos.longitude;
-      if (!mounted) return;
-      setState(() {
-        _lat = lat;
-        _lon = lon;
-        _city = '';
-        _locating = false;
-        if (_locationCtrl.text.trim().isEmpty) {
-          _locationCtrl.text =
-              '${lat.toStringAsFixed(4)}°, ${lon.toStringAsFixed(4)}°';
-        }
-        _locStep = _LocStep.confirmed;
-      });
-      _fetchSky();
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _locating = false;
-          _error = 'Location access denied. Enter a location name instead.';
-        });
-      }
-    }
-  }
-
   Future<void> _lookup() async {
     final q = _locationCtrl.text.trim();
     if (q.isEmpty) return;
+    final coordinates = _coordinatesFrom(q);
+    if (coordinates != null) {
+      setState(() {
+        _lat = coordinates.$1;
+        _lon = coordinates.$2;
+        _city = '';
+        _resolved = '${coordinates.$1.toStringAsFixed(4)}°, ${coordinates.$2.toStringAsFixed(4)}°';
+        _locStep = _LocStep.confirmed;
+      });
+      _fetchSky();
+      return;
+    }
     setState(() { _locStep = _LocStep.geocoding; _error = null; });
     try {
       final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
@@ -1193,14 +1184,14 @@ class _StartTonightSheetState extends State<_StartTonightSheet> {
       } else {
         setState(() {
           _locStep = _LocStep.idle;
-          _error = 'Location lookup failed. Try again or use the GPS button.';
+          _error = 'Location lookup failed. Try a place name or latitude, longitude.';
         });
       }
     } catch (_) {
       if (mounted) {
         setState(() {
           _locStep = _LocStep.idle;
-          _error = 'Location lookup failed. Try again or use the GPS button.';
+          _error = 'Location lookup failed. Try a place name or latitude, longitude.';
         });
       }
     }
@@ -1391,28 +1382,12 @@ class _StartTonightSheetState extends State<_StartTonightSheet> {
                       autofocus: widget.node.previousLocations.isEmpty,
                       decoration: const InputDecoration(
                         labelText: "Tonight's location",
-                        hintText: 'e.g. Cherry Springs State Park',
+                        hintText: 'Place name or 41.6500, -77.8160',
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.location_on_outlined),
                       ),
                       textInputAction: TextInputAction.search,
                       onSubmitted: (_) => _lookup(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Tooltip(
-                    message: 'Use device GPS',
-                    child: FilledButton.tonal(
-                      onPressed: _locating ? null : _detectGps,
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(48, 56),
-                        padding: EdgeInsets.zero,
-                      ),
-                      child: _locating
-                          ? const SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.my_location),
                     ),
                   ),
                 ],
@@ -1972,63 +1947,19 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     _error = null;
   }
 
-  Future<void> _tryPortableGps() async {
-    setState(() => _locating = true);
-    try {
-      await Geolocator.requestPermission();
-      final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.low));
-      final lat = pos.latitude;
-      final lon = pos.longitude;
-      if (mounted) {
-        setState(() {
-          _lat = lat;
-          _lon = lon;
-          _locating = false;
-          _locationCtrl.text =
-              '${lat.toStringAsFixed(3)}°, ${lon.toStringAsFixed(3)}°';
-          _step = _LocStep.confirmed;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _locating = false);
-    }
-  }
-
-  Future<void> _detectLocation() async {
-    setState(() { _locating = true; _error = null; });
-    try {
-      await Geolocator.requestPermission();
-      final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-      final lat = pos.latitude;
-      final lon = pos.longitude;
-      if (mounted) {
-        setState(() {
-          _lat = lat;
-          _lon = lon;
-          _locating = false;
-          if (_locationCtrl.text.trim().isEmpty) {
-            _locationCtrl.text =
-                '${lat.toStringAsFixed(4)}°, ${lon.toStringAsFixed(4)}°';
-          }
-          _step = _LocStep.confirmed;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _locating = false;
-          _error =
-              'Location access denied. Enter a location name instead.';
-        });
-      }
-    }
-  }
-
   Future<void> _lookupLocation() async {
     final query = _locationCtrl.text.trim();
     if (query.isEmpty) return;
+    final coordinates = _coordinatesFrom(query);
+    if (coordinates != null) {
+      setState(() {
+        _lat = coordinates.$1;
+        _lon = coordinates.$2;
+        _resolvedLocation = '${coordinates.$1.toStringAsFixed(4)}°, ${coordinates.$2.toStringAsFixed(4)}°';
+        _step = _LocStep.confirmed;
+      });
+      return;
+    }
     setState(() { _step = _LocStep.geocoding; _error = null; });
     try {
       final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
@@ -2071,14 +2002,14 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       } else {
         setState(() {
           _step = _LocStep.idle;
-          _error = 'Location lookup failed. Try again or use the GPS button.';
+          _error = 'Location lookup failed. Try a place name or latitude, longitude.';
         });
       }
     } catch (_) {
       if (mounted) {
         setState(() {
           _step = _LocStep.idle;
-          _error = 'Location lookup failed. Try again or use the GPS button.';
+          _error = 'Location lookup failed. Try a place name or latitude, longitude.';
         });
       }
     }
@@ -2243,10 +2174,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         icon: Icons.backpack_outlined,
         title: 'Portable — I move it to different sites',
         subtitle: 'Star parties, dark sky reserves, travelling.',
-        onTap: () async {
-          setState(() => _portable = true);
-          await _tryPortableGps();
-        },
+        onTap: () => setState(() => _portable = true),
       ),
     ];
   }
@@ -2469,30 +2397,13 @@ class _ClaimSheetState extends State<_ClaimSheet> {
                   autofocus: true,
                   decoration: InputDecoration(
                     labelText: isPortable ? 'Home base' : 'Location',
-                    hintText: 'e.g. Larchmont, NY or Dark Sky Ranch, TX',
+                    hintText: 'Place name or 41.6500, -77.8160',
                     border: const OutlineInputBorder(),
                     prefixIcon:
                         const Icon(Icons.location_on_outlined),
                   ),
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _lookupLocation(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Tooltip(
-                message: 'Use device GPS instead',
-                child: FilledButton.tonal(
-                  onPressed: _locating ? null : _detectLocation,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(48, 56),
-                    padding: EdgeInsets.zero,
-                  ),
-                  child: _locating
-                      ? const SizedBox(
-                          width: 18, height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2))
-                      : const Icon(Icons.my_location),
                 ),
               ),
             ],

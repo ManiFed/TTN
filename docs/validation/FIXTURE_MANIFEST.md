@@ -91,6 +91,33 @@ illumination profile → position-dependent zero-point systematic bound.
 
 ## Running validation on a corpus
 
+## One-command collection workflow
+
+Create the campaign folders and reproducibility manifests:
+
+```bash
+make beta-init
+python3 scripts/beta_capture.py add C1 /path/to/stack.fits \
+  --node-id node042 \
+  --started-utc 2026-07-12T02:10:00Z \
+  --ended-utc 2026-07-12T02:15:00Z
+make beta-audit
+```
+
+`add` copies the original FITS without modifying it, records the important
+header values and independent wall-clock times, and pins the file with a
+SHA-256 digest. Use C1–C7 to match the campaigns above.
+
+Before leaving a node unattended, run:
+
+```bash
+make preflight
+```
+
+This read-only check fails unless configuration, scientific dependencies,
+free disk, observer location, cloud identity/DNS, image watch path, and plate
+solver are ready. Add `--json` when collecting the result remotely.
+
 ```bash
 python3 scripts/validate_photometry.py \
     --fits-dir validation_corpus/fits \
