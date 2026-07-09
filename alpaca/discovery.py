@@ -7,6 +7,7 @@ field giving the HTTP port the server listens on.
 """
 
 import json
+import ipaddress
 import logging
 import socket
 
@@ -20,6 +21,14 @@ BROADCAST_ADDR = "255.255.255.255"
 
 def _fetch_device_info(address: str, port: int) -> dict:
     """Query the ALPACA management API for device name and serial (UniqueID)."""
+    # Discovery replies are unauthenticated UDP packets.  Do not let a reply
+    # turn this LAN-only helper into a request proxy.
+    try:
+        address = str(ipaddress.ip_address(address))
+    except ValueError:
+        return {}
+    if not ipaddress.ip_address(address).is_private or not 1 <= port <= 65535:
+        return {}
     try:
         url = f"http://{address}:{port}/management/v1/configureddevices"
         r = requests.get(url, timeout=3)
@@ -57,6 +66,8 @@ def discover_servers(port: int = 32227, timeout: float = 5.0) -> list[dict]:
                     data, addr = sock.recvfrom(1024)
                     payload = json.loads(data.decode("utf-8"))
                     alpaca_port = int(payload.get("AlpacaPort", 11111))
+                    if not 1 <= alpaca_port <= 65535:
+                        continue
                     entry = {"address": addr[0], "port": alpaca_port}
                     logger.info("Discovered ALPACA server at %s:%d", entry["address"], entry["port"])
                     found.append(entry)

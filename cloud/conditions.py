@@ -105,8 +105,8 @@ def _fetch_lpm_info(lat: float, lon: float, api_key: str, requests) -> Optional[
             mpsas = _radiance_to_mpsas(radiance)
             bortle = mpsas_to_bortle(mpsas)
             source = "lightpollutionmap.info (keyed)" if api_key else "lightpollutionmap.info (public)"
-            logger.info("LP %s at %.3f,%.3f: %.2f mpsas (Bortle %d) [%s]",
-                        "keyed" if api_key else "public", lat, lon, mpsas, bortle, source)
+            logger.info("LP %s lookup returned %.2f mpsas (Bortle %d) [%s]",
+                        "keyed" if api_key else "public", mpsas, bortle, source)
             return {"mpsas": mpsas, "bortle": bortle, "source": source, "radiance": radiance}
         logger.debug("lightpollutionmap.info returned HTTP %d%s",
                      resp.status_code, " (key required?)" if resp.status_code == 401 else "")
@@ -129,7 +129,7 @@ def _fetch_clear_outside_lp(lat: float, lon: float, requests) -> Optional[dict]:
             headers={"User-Agent": "BoundlessSkies/1.0 (+https://boundlessskies.org)"},
         )
         if resp.status_code == 429:
-            logger.warning("Clear Outside rate-limited (429) for %.3f,%.3f", lat, lon)
+            logger.warning("Clear Outside rate-limited (429)")
             return None
         if resp.status_code != 200:
             logger.debug("Clear Outside returned HTTP %d", resp.status_code)
@@ -140,8 +140,7 @@ def _fetch_clear_outside_lp(lat: float, lon: float, requests) -> Optional[dict]:
         if m_mpsas and m_bortle:
             mpsas = float(m_mpsas.group(1))
             bortle = int(m_bortle.group(1))
-            logger.info("LP Clear Outside at %.3f,%.3f: %.2f mpsas (Bortle %d)",
-                        lat, lon, mpsas, bortle)
+            logger.info("LP Clear Outside returned %.2f mpsas (Bortle %d)", mpsas, bortle)
             return {"mpsas": mpsas, "bortle": bortle,
                     "source": "Clear Outside", "radiance": None}
         logger.debug("Clear Outside: could not parse MPSAS/Bortle from page")
@@ -151,7 +150,7 @@ def _fetch_clear_outside_lp(lat: float, lon: float, requests) -> Optional[dict]:
 
 
 def _lp_default(lat: float, lon: float) -> dict:
-    logger.info("Light pollution defaulting to 20.0 mpsas (Bortle 5) for %.3f,%.3f", lat, lon)
+    logger.info("Light pollution defaulting to 20.0 mpsas (Bortle 5)")
     return {"mpsas": 20.0, "bortle": 5, "source": "default", "radiance": None}
 
 
@@ -223,15 +222,14 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             timeout=20,
         )
         if resp.status_code != 200:
-            logger.warning("7timer returned HTTP %d for %.2f,%.2f",
-                           resp.status_code, lat, lon)
+            logger.warning("7timer returned HTTP %d", resp.status_code)
             return cached[1] if cached else None
 
         data = resp.json()
         init_str = data.get("init", "")          # e.g. "2024062612"
         dataseries = data.get("dataseries", [])
         if not dataseries:
-            logger.warning("7timer returned empty dataseries for %.2f,%.2f", lat, lon)
+            logger.warning("7timer returned empty dataseries")
             return cached[1] if cached else None
 
         try:
@@ -267,11 +265,11 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             "humidity":     humidity,
         }
         _astro_wx_cache[key] = (time.monotonic(), forecast)
-        logger.info("7timer ASTRO fetched for %.2f,%.2f: %d slots", lat, lon, len(times))
+        logger.info("7timer ASTRO fetched %d slots", len(times))
         return forecast
 
     except Exception as exc:
-        logger.warning("7timer fetch failed for %.2f,%.2f: %s", lat, lon, exc)
+        logger.warning("7timer fetch failed: %s", exc)
         return cached[1] if cached else None
 
 
@@ -363,7 +361,7 @@ def fetch_weather(lat: float, lon: float) -> Optional[dict]:
         _weather_cache[key] = (time.monotonic(), forecast)
         return forecast
     except Exception as exc:
-        logger.warning("Weather fetch failed for %.2f,%.2f: %s", lat, lon, exc)
+        logger.warning("Weather fetch failed: %s", exc)
         return cached[1] if cached else None
 
 
