@@ -18,6 +18,7 @@ import os
 import pathlib
 import platform
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -2486,8 +2487,8 @@ def api_tracking():
         with _device_lock:
             _tel.set_tracking(enabled)
     except Exception as exc:
-        logger.error("Set tracking failed: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Set tracking failed")
+        return jsonify({"error": "Unable to set telescope tracking"}), 500
     logger.info("Tracking %s", "enabled" if enabled else "disabled")
     return jsonify({"ok": True})
 
@@ -2560,7 +2561,8 @@ def api_slew():
                 logger.info("Alt-Az fallback slew: RA=%.4f h  Dec=%.4f °", ra_h, dec_d)
             except Exception as exc2:
                 logger.error("Alt-Az fallback slew failed: %s", exc2)
-                return jsonify({"error": str(exc2)}), 500
+                logger.exception("Alt-Az coordinate conversion failed")
+                return jsonify({"error": "Unable to slew to the requested position"}), 500
     else:
         try:
             ra  = float(data["ra"])
@@ -2589,7 +2591,8 @@ def api_slew():
                 _tel.begin_slew(ra, dec)
         except Exception as exc:
             logger.error("Slew failed: %s", exc)
-            return jsonify({"error": str(exc)}), 500
+            logger.exception("Telescope slew failed")
+            return jsonify({"error": "Telescope slew failed"}), 500
 
     return jsonify({"ok": True})
 
@@ -2614,7 +2617,8 @@ def api_nudge():
         cur_ra  = _tel.ra()
         cur_dec = _tel.dec()
     except Exception as exc:
-        return jsonify({"error": f"Could not read position: {exc}"}), 500
+        logger.exception("Could not read telescope position")
+        return jsonify({"error": "Could not read telescope position"}), 500
 
     step_deg = step_arcsec / 3600.0
     cos_dec  = math.cos(math.radians(cur_dec)) or 1e-9
@@ -2643,7 +2647,8 @@ def api_nudge():
             _tel.begin_slew(new_ra, new_dec)
     except Exception as exc:
         logger.error("Nudge slew failed: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Nudge slew failed")
+        return jsonify({"error": "Nudge slew failed"}), 500
 
     logger.info("Nudge %s %.0f\" → RA=%.4f h  Dec=%.4f °", direction, step_arcsec, new_ra, new_dec)
     return jsonify({"ok": True})
@@ -2666,7 +2671,8 @@ def api_move_axis():
         return jsonify({"ok": True})
     except Exception as exc:
         logger.error("MoveAxis failed: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Move-axis command failed")
+        return jsonify({"error": "Move-axis command failed"}), 500
 
 
 @app.route("/api/camera/expose", methods=["POST"])
@@ -2740,7 +2746,8 @@ def api_abort_exposure():
             _state["camera"]["exposing"] = False
     except Exception as exc:
         logger.error("Abort exposure failed: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Exposure abort failed")
+        return jsonify({"error": "Exposure abort failed"}), 500
     return jsonify({"ok": True})
 
 
@@ -2904,7 +2911,8 @@ def api_config_post():
         with open("config.yaml", "w") as fh:
             fh.write(raw)
     except OSError as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Writing config.yaml failed")
+        return jsonify({"error": "Could not save configuration"}), 500
     logger.info("config.yaml updated via dashboard")
     return jsonify({"ok": True})
 
@@ -2924,7 +2932,8 @@ def api_config_parsed_post():
         with open("config.yaml", "w") as fh:
             fh.write(raw)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Writing parsed configuration failed")
+        return jsonify({"error": "Could not save configuration"}), 500
     logger.info("config.yaml updated via dashboard (form)")
     return jsonify({"ok": True})
 
@@ -2959,7 +2968,8 @@ def api_horizon_mask_post():
         with open("config.yaml", "w") as fh:
             yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
     except OSError as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Writing horizon mask failed")
+        return jsonify({"error": "Could not save horizon mask"}), 500
     logger.info("Horizon mask updated in config.yaml: %d vertices", len(polygon))
     return jsonify({"ok": True})
 
@@ -3752,6 +3762,10 @@ def api_history():
 
 @app.route("/api/history/<img_id>", methods=["GET"])
 def api_history_image(img_id: str):
+    # Image identifiers are generated locally.  Reject path syntax before an
+    # identifier is ever used to construct the on-disk cache filename.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", img_id):
+        return jsonify({"error": "Image not found"}), 404
     with _img_full_lock:
         b64 = _img_full.get(img_id)
     if not b64:
@@ -3811,7 +3825,8 @@ def api_geocode():
             "display_name": r.get("display_name", q),
         })
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.exception("Location search failed")
+        return jsonify({"error": "Location search failed"}), 500
 
 
 # ── HTML template ──────────────────────────────────────────────────────────────

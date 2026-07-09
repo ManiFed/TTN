@@ -45,6 +45,7 @@ from urllib.parse import quote
 
 from defusedxml import ElementTree as ET
 from flask import Flask, jsonify, make_response, redirect as _redirect, request, send_from_directory
+from werkzeug.utils import safe_join
 
 from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
@@ -81,8 +82,8 @@ def serve_dashboard():
 
 @app.route("/dashboard/<path:filename>")
 def serve_dashboard_asset(filename):
-    full = os.path.join(_DASHBOARD_DIR, filename)
-    if os.path.isfile(full):
+    full = safe_join(_DASHBOARD_DIR, filename)
+    if full and os.path.isfile(full):
         return send_from_directory(_DASHBOARD_DIR, filename)
     return send_from_directory(_DASHBOARD_DIR, "index.html")
 
@@ -95,8 +96,8 @@ def serve_app():
 
 @app.route("/app/<path:filename>")
 def serve_app_asset(filename):
-    full = os.path.join(_APP_DIR, filename)
-    if os.path.isfile(full):
+    full = safe_join(_APP_DIR, filename)
+    if full and os.path.isfile(full):
         return send_from_directory(_APP_DIR, filename)
     return _serve_app_index()
 
@@ -118,11 +119,11 @@ def serve_website(filename):
     # still has a chance to route them, and so debugging is obvious.
     if filename.startswith("api/"):
         return jsonify({"error": "not found"}), 404
-    full = os.path.join(_WEBSITE_DIR, filename)
-    if os.path.isfile(full):
+    full = safe_join(_WEBSITE_DIR, filename)
+    if full and os.path.isfile(full):
         return send_from_directory(_WEBSITE_DIR, filename)
-    app_asset = os.path.join(_APP_DIR, filename)
-    if os.path.isfile(app_asset):
+    app_asset = safe_join(_APP_DIR, filename)
+    if app_asset and os.path.isfile(app_asset):
         return send_from_directory(_APP_DIR, filename)
     return send_from_directory(_WEBSITE_DIR, "tour.html")
 
@@ -597,13 +598,11 @@ def api_aavso_files_list():
 def api_aavso_files_download(rel):
     from pathlib import Path
     # Guard against path traversal
-    if ".." in rel or rel.startswith("/"):
-        return jsonify({"error": "invalid path"}), 400
     root = _aavso_file_dir()
-    abs_path = (root / rel).resolve()
-    if not str(abs_path).startswith(str(root.resolve())):
+    abs_path = safe_join(str(root.resolve()), rel)
+    if abs_path is None:
         return jsonify({"error": "invalid path"}), 400
-    if not abs_path.exists():
+    if not Path(abs_path).is_file():
         return jsonify({"error": "not found"}), 404
     return send_from_directory(str(root.resolve()), rel, as_attachment=True,
                                download_name=Path(rel).name)
@@ -862,7 +861,9 @@ def api_object_details(object_name: str):
             data = fetcher(object_name)
         except Exception as exc:
             logger.info("Object lookup failed for %s: %s", object_name, exc)
-            details["errors"].append(str(exc))
+            # Provider exceptions can include URLs, credentials, or library
+            # internals.  Keep diagnostics in the server log only.
+            details["errors"].append("A catalogue source was unavailable")
             continue
         if not data:
             continue

@@ -28,6 +28,7 @@ node behaves exactly as before.
 """
 
 import json
+import keyring
 import logging
 import random
 import threading
@@ -62,6 +63,8 @@ def _utc_offset_hours() -> float:
 
 
 _STATE_FILE = Path("data") / "cloud_state.json"
+_KEYRING_SERVICE = "the-telescope-node"
+_KEYRING_ACCOUNT = "cloud-api-key"
 _QUEUE_FILE = Path("data") / "cloud_upload_queue.json"
 _QUEUE_MAX = 500
 # Survey source lists are ~10-50 KB each, so this queue is capped by bytes
@@ -285,14 +288,23 @@ class CloudCommunicator:
     def _load_state(self) -> None:
         """Credentials persisted from a previous auto-registration win over
         blank config values, never over explicit ones."""
+        migrated_legacy_secret = False
         try:
             state = json.loads(_STATE_FILE.read_text())
             if not (self._node_id and self._api_key):
                 self._node_id = state.get("node_id", "")
-                self._api_key = state.get("api_key", "")
+                self._api_key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT) or ""
+                # Migrate credentials written by earlier releases, then remove
+                # the clear-text key from the state file on the next save.
+                if not self._api_key and state.get("api_key"):
+                    keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, state["api_key"])
+                    self._api_key = state["api_key"]
+                    migrated_legacy_secret = True
             self._pair_token = state.get("pair_token", "")
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError, keyring.errors.KeyringError) as exc:
+            logger.warning("Could not load cloud credentials from the system keyring: %s", exc)
+        if migrated_legacy_secret:
+            self._save_state()
         if not self._pair_token:
             self._pair_token = _make_pair_token()
             self._save_state()
@@ -300,11 +312,12 @@ class CloudCommunicator:
     def _save_state(self) -> None:
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
+            if self._api_key:
+                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, self._api_key)
             _STATE_FILE.write_text(json.dumps(
-                {"node_id": self._node_id, "api_key": self._api_key,
-                 "pair_token": self._pair_token}, indent=2))
-        except OSError as exc:
-            logger.warning("Could not persist cloud credentials: %s", exc)
+                {"node_id": self._node_id, "pair_token": self._pair_token}, indent=2))
+        except (OSError, keyring.errors.KeyringError) as exc:
+            logger.warning("Could not persist cloud state securely: %s", exc)
 
     # ── HTTP helpers ───────────────────────────────────────────────────────────
 

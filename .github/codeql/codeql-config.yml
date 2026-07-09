@@ -1,0 +1,4 @@
+# Flutter's compiled web bundle contains third-party/minified JavaScript.
+# Scan authored application code; the bundle is regenerated from app/ source.
+paths-ignore:
+  - app/build/**

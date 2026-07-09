@@ -70,7 +70,7 @@ def enrich_config_with_location(config: Dict[str, Any]) -> Dict[str, Any]:
     has_lon = lon is not None and lon != 0.0
 
     if has_lat and has_lon:
-        logger.debug("Observatory location already configured: %.4f°, %.4f°", lat, lon)
+        logger.debug("Observatory location already configured")
         return config
 
     # Try to auto-detect
