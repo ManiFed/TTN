@@ -13,9 +13,9 @@ Usage:
     python build/build.py --download-astap   # only download ASTAP binary, then exit
 
 Output:
-    Windows  → dist/BoundlessSkiesNode-Setup.exe  (via NSIS)
-    macOS    → dist/BoundlessSkiesNode-X.Y.Z-macOS.pkg
-    Linux    → dist/BoundlessSkiesNode-linux-x86_64
+    Windows  → dist/TelescopeNetNode-Setup.exe  (via NSIS)
+    macOS    → dist/TelescopeNetNode-X.Y.Z-macOS.pkg
+    Linux    → dist/TelescopeNetNode-linux-x86_64
 
 Requirements:
     pip install pyinstaller
@@ -27,8 +27,10 @@ ASTAP bundling:
     The build automatically downloads the ASTAP plate-solver binary from
     hnsky.org into build/binaries/ before running PyInstaller.  The binary
     is then bundled inside the installer so end users don't need to install
-    anything separately.  The star catalog (~6 GB) is NOT bundled — the
-    Node Agent downloads it on first run via the dashboard setup wizard.
+    anything separately.  The star database is NOT bundled — it's a separate,
+    much larger download (D50 ~200 MB, D80 ~1.25 GB) that the user picks and
+    installs themselves via ASTAP's own installer.  The dashboard's Settings
+    → Plate Solving panel explains the D50/D80 tradeoff and links there.
 """
 
 import argparse
@@ -184,7 +186,7 @@ def run(cmd: list, **kwargs):
 
 def clean():
     print("Cleaning build artifacts...")
-    for path in [DIST, ROOT / "build" / "BoundlessSkiesNode"]:
+    for path in [DIST, ROOT / "build" / "TelescopeNetNode"]:
         if path.exists():
             shutil.rmtree(path)
             print(f"  removed {path}")
@@ -208,7 +210,7 @@ def build_windows():
         return
     nsi_script = ROOT / "build" / "windows" / "install.nsi"
     run([nsis, str(nsi_script)], cwd=ROOT)
-    installer = DIST / "BoundlessSkiesNode-Setup.exe"
+    installer = DIST / "TelescopeNetNode-Setup.exe"
     if installer.exists():
         print(f"\n  Installer: {installer}")
 
@@ -223,8 +225,8 @@ def build_macos():
 def build_linux():
     """Rename / package the Linux binary."""
     print("\n=== Linux binary ===")
-    src = DIST / "BoundlessSkiesNode"
-    dest = DIST / "BoundlessSkiesNode-linux-x86_64"
+    src = DIST / "TelescopeNetNode"
+    dest = DIST / "TelescopeNetNode-linux-x86_64"
     if src.exists():
         shutil.copy2(src, dest)
         dest.chmod(0o755)
@@ -238,31 +240,31 @@ def build_linux():
             print("  (appimagetool not found — skipping AppImage)")
             print("  Install: https://appimage.github.io/appimagetool/")
     else:
-        print("  ERROR: PyInstaller output not found at dist/BoundlessSkiesNode")
+        print("  ERROR: PyInstaller output not found at dist/TelescopeNetNode")
 
 
 def _build_appimage(binary: Path):
     """Wrap the binary in an AppImage."""
     print("\n  Building AppImage...")
-    appdir = DIST / "BoundlessSkiesNode.AppDir"
+    appdir = DIST / "TelescopeNetNode.AppDir"
     appdir.mkdir(exist_ok=True)
 
     usr_bin = appdir / "usr" / "bin"
     usr_bin.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary, usr_bin / "BoundlessSkiesNode")
+    shutil.copy2(binary, usr_bin / "TelescopeNetNode")
 
     # AppRun symlink
     apprun = appdir / "AppRun"
     apprun.write_text(
-        '#!/bin/bash\nexec "$(dirname "$0")/usr/bin/BoundlessSkiesNode" "$@"\n')
+        '#!/bin/bash\nexec "$(dirname "$0")/usr/bin/TelescopeNetNode" "$@"\n')
     apprun.chmod(0o755)
 
     # Minimal .desktop file
-    (appdir / "BoundlessSkiesNode.desktop").write_text(
+    (appdir / "TelescopeNetNode.desktop").write_text(
         "[Desktop Entry]\n"
         "Name=The Telescope Net Node Agent\n"
-        "Exec=BoundlessSkiesNode\n"
-        "Icon=BoundlessSkiesNode\n"
+        "Exec=TelescopeNetNode\n"
+        "Icon=TelescopeNetNode\n"
         "Type=Application\n"
         "Categories=Science;\n"
     )
@@ -270,11 +272,11 @@ def _build_appimage(binary: Path):
     # Placeholder icon (1×1 PNG if none exists)
     icon_src = ROOT / "build" / "icon.png"
     if icon_src.exists():
-        shutil.copy2(icon_src, appdir / "BoundlessSkiesNode.png")
+        shutil.copy2(icon_src, appdir / "TelescopeNetNode.png")
 
     appimagetool = shutil.which("appimagetool")
     run([appimagetool, str(appdir),
-         str(DIST / "BoundlessSkiesNode-linux-x86_64.AppImage")])
+         str(DIST / "TelescopeNetNode-linux-x86_64.AppImage")])
 
 
 def verify_deps():

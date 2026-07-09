@@ -1,6 +1,6 @@
-# The Telescope Net — Member App (Flutter)
+# The Telescope Net — Desktop Member App (Flutter)
 
-The mobile app for the The Telescope Net automated
+The desktop app for the The Telescope Net automated
 telescope network. It talks to the cloud layer's member API (`cloud/server.py`,
 routes under `/api/v1/*`).
 
@@ -36,9 +36,9 @@ runnable project:
 # 1. Install Flutter: https://docs.flutter.dev/get-started/install
 flutter --version          # confirm >= 3.27
 
-# 2. Generate the platform folders in place (keeps lib/, pubspec.yaml)
+# 2. Generate the committed desktop platform folders in place.
 cd app
-flutter create .
+flutter create . --platforms=macos,windows,linux
 
 # 3. Fetch dependencies
 flutter pub get
@@ -46,12 +46,15 @@ flutter pub get
 # 4. Run against a local cloud (python -m cloud.main on :8800).
 #    cloud/config.yaml expects PostgreSQL at:
 #    postgresql://boundless@/boundless?host=/tmp
-flutter run --dart-define=BS_API_BASE=http://localhost:8800
+flutter run -d macos --dart-define=BS_API_BASE=http://localhost:8800
 ```
 
-> On a physical phone, `localhost` points at the phone. Use your computer's LAN
-> IP (e.g. `--dart-define=BS_API_BASE=http://192.168.1.20:8800`). Android also
-> needs cleartext HTTP allowed for local testing, or use HTTPS in production.
+> For another computer on the LAN, use the cloud host's LAN IP instead of
+> `localhost` (for example `--dart-define=BS_API_BASE=http://192.168.1.20:8800`).
+
+Build release artifacts with `flutter build macos`, `flutter build windows`, or
+`flutter build linux`. Raspberry Pi OS with a desktop environment uses the Linux
+target; a separate embedder is not required.
 
 ## Accessibility notes
 

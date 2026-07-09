@@ -63,7 +63,7 @@ logger = logging.getLogger("photometry")
 
 # Version stamp recorded in every measurement's provenance block, so a stored
 # measurement can always be traced to the algorithm that produced it.
-PIPELINE_VERSION = "1.1.0"
+PIPELINE_VERSION = "1.2.0"
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -407,8 +407,17 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         return float(data[y0:y1, x0:x1].max())
 
     peaks = [_local_peak(x, y) for (x, y) in refined]
+    blend_flags = [
+        _source_has_bright_neighbour(
+            data, x, y, fwhm_px, float(bkg_med), float(bkg_std),
+            flux_fraction=float(phot_cfg.get("blend_flux_fraction", 0.20)),
+            separation_fwhm=float(phot_cfg.get("blend_separation_fwhm", 1.25)),
+        )
+        for (x, y) in refined
+    ]
     target_peak_adu  = peaks[0]
     target_saturated = target_peak_adu >= sat_adu
+    target_blended = blend_flags[0]
     if target_saturated:
         logger.warning("Target peak %.0f ADU ≥ saturation limit %.0f ADU — "
                        "magnitude will be biased faint; flagging poor",
@@ -434,6 +443,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             "x_px":     round(float(refined[i + 1][0]), 2),
             "y_px":     round(float(refined[i + 1][1]), 2),
             "peak_adu": round(peaks[i + 1], 1),
+            "blended":  blend_flags[i + 1],
             "flux":     round(float(comp_fluxes[i]), 2),
             "used":     False,
             "reject_reason": None,
@@ -444,6 +454,11 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             entry["reject_reason"] = "saturated"
             logger.info("Comp star %s peak %.0f ADU ≥ %.0f — excluded from ensemble",
                         entry["auid"] or entry["source"], peaks[i + 1], sat_adu)
+            continue
+        if blend_flags[i + 1]:
+            entry["reject_reason"] = "bright_neighbour"
+            logger.info("Comp star %s has a bright nearby source — excluded from ensemble",
+                        entry["auid"] or entry["source"])
             continue
         if comp_fluxes[i] <= 0:
             entry["reject_reason"] = "nonpositive_flux"
@@ -507,7 +522,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
 
     # ── Step 7: Ancillary quantities ──────────────────────────────────────────
     snr     = float(target_flux / target_flux_err) if target_flux_err > 0 else 0.0
-    airmass = _compute_airmass(header, config)
+    airmass, airmass_prov = _compute_airmass_ex(header, config)
     bjd, time_prov = _compute_bjd_ex(header, ra_deg, dec_deg, config)
 
     # ── Step 8: Quality flag ──────────────────────────────────────────────────
@@ -520,6 +535,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             "airmass":          airmass,
             "zp_scatter":       zp_scatter,
             "target_saturated": target_saturated,
+            "target_blended":   target_blended,
         },
         phot_cfg,
     )
@@ -527,9 +543,10 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     elapsed = time.monotonic() - t0
     logger.info(
         "Pipeline done in %.1f s — %s  mag=%.3f±%.3f  SNR=%.1f  "
-        "comp=%d  airmass=%.2f  quality=%s",
+        "comp=%d  airmass=%s  quality=%s",
         elapsed, target_name, target_mag, uncertainty,
-        snr, n_comp_used, airmass, quality_flag,
+        snr, n_comp_used,
+        f"{airmass:.2f}" if airmass is not None else "unknown", quality_flag,
     )
 
     # ── Step 8b: Sky surface brightness ──────────────────────────────────────
@@ -593,6 +610,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "pipeline_version":  PIPELINE_VERSION,
         "wcs_source":        wcs_source if isinstance(wcs_source, str) else "unknown",
         "time":              time_prov,
+        "airmass":           airmass_prov,
         "aperture_px": {
             "radius":        round(ap_r, 2),
             "annulus_inner": round(ann_in, 2),
@@ -605,6 +623,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "target_xy_px":      [round(tx, 2), round(ty, 2)],
         "target_peak_adu":   round(target_peak_adu, 1),
         "target_saturated":  target_saturated,
+        "target_blended":    target_blended,
         "sky_median_adu":    round(float(bkg_med), 2),
         "sky_std_adu":       round(float(bkg_std), 2),
         "catalogs_queried":  [str(c) for c in catalogs],
@@ -620,7 +639,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "magnitude":        round(target_mag, 4),
         "uncertainty":      round(uncertainty, 4),
         "filter":           filter_name,
-        "airmass":          round(airmass, 3),
+        "airmass":          round(airmass, 3) if airmass is not None else None,
         "fwhm":             round(fwhm_px, 2),
         "snr":              round(snr, 1),
         "comparison_stars": n_comp_used,
@@ -644,7 +663,7 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
     Pure quality-gate evaluation for one measurement.
 
     metrics keys: snr, uncertainty, n_comparison_stars, airmass, zp_scatter,
-    target_saturated.
+    target_saturated, target_blended.
 
     Returns (flag, reasons):
         flag     – "good" | "acceptable" | "poor"
@@ -656,6 +675,7 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
 
     Gate semantics (thresholds from phot_cfg, defaults in parentheses):
         target_saturated              → poor            (hard fail)
+        target_blended                → poor            (hard fail)
         zp_scatter > zp_scatter_max   → poor            (0.30 mag)
         zp_scatter > zp_scatter_warn  → not good        (0.15 mag)
         snr < snr_threshold           → not good  (20); < half → poor
@@ -666,9 +686,11 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
     snr        = float(metrics.get("snr", 0.0))
     unc        = float(metrics.get("uncertainty", 9.99))
     n_comp     = int(metrics.get("n_comparison_stars", 0))
-    airmass    = float(metrics.get("airmass", 9.9))
+    raw_airmass = metrics.get("airmass")
+    airmass = float(raw_airmass) if raw_airmass is not None else None
     zp_scatter = float(metrics.get("zp_scatter", 0.0))
     saturated  = bool(metrics.get("target_saturated", False))
+    blended    = bool(metrics.get("target_blended", False))
 
     min_comp      = int(phot_cfg.get("min_comparison_stars", 3))
     snr_threshold = float(phot_cfg.get("snr_threshold", 20))
@@ -689,6 +711,8 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
 
     if saturated:
         _flag("target_saturated", True, False, "fail")
+    if blended:
+        _flag("target_blended", True, False, "fail")
     if zp_scatter > zp_max:
         _flag("zp_scatter", zp_scatter, zp_max, "fail")
     elif zp_scatter > zp_warn:
@@ -709,7 +733,9 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
     elif n_comp < min_comp:
         _flag("comparison_stars", n_comp, min_comp, "warn")
 
-    if airmass >= max_airmass:
+    if airmass is None:
+        _flag("airmass", None, max_airmass, "warn")
+    elif airmass >= max_airmass:
         _flag("airmass", airmass, max_airmass, "warn")
 
     if any(r["outcome"] == "fail" for r in reasons):
@@ -1742,19 +1768,59 @@ def _observer_location(config: dict) -> EarthLocation:
         return EarthLocation.from_geocentric(0.0 * u.m, 0.0 * u.m, 0.0 * u.m)
 
 
+# ── Helper: crowded-field blend detection ────────────────────────────────────
+
+def _source_has_bright_neighbour(
+    data: np.ndarray,
+    x: float,
+    y: float,
+    fwhm_px: float,
+    sky_median: float,
+    sky_std: float,
+    *,
+    flux_fraction: float = 0.20,
+    separation_fwhm: float = 1.25,
+) -> bool:
+    """Detect a second bright peak close enough to contaminate an aperture.
+
+    The central PSF core is masked, then the brightest pixel in the surrounding
+    aperture is tested against both the central peak and the sky noise.  This
+    deliberately catches uncatalogued neighbours as well as catalogued stars.
+    """
+    h, w = data.shape
+    radius = max(5, int(math.ceil(3.0 * fwhm_px)))
+    ix, iy = int(round(x)), int(round(y))
+    x0, x1 = max(0, ix - radius), min(w, ix + radius + 1)
+    y0, y1 = max(0, iy - radius), min(h, iy + radius + 1)
+    stamp = np.asarray(data[y0:y1, x0:x1], dtype=float) - sky_median
+    if stamp.size == 0:
+        return False
+
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    distance = np.hypot(xx - x, yy - y)
+    core_radius = max(2.0, separation_fwhm * fwhm_px)
+    central = float(np.max(stamp[distance <= max(1.0, 0.6 * fwhm_px)]))
+    outer = stamp[distance >= core_radius]
+    if central <= 0 or outer.size == 0:
+        return False
+    neighbour = float(np.max(outer))
+    return neighbour >= max(8.0 * max(sky_std, 1e-6), flux_fraction * central)
+
+
 # ── Helper: airmass ────────────────────────────────────────────────────────────
 
-def _compute_airmass(header: dict, config: dict) -> float:
+def _compute_airmass_ex(header: dict, config: dict) -> tuple:
     """
-    Return airmass.  Priority:
+    Return ``(airmass, provenance)``.  Priority:
       1. AIRMASS keyword in FITS header
       2. Compute from target RA/Dec, DATE-OBS, and observer location in config
-      3. Return 1.5 (moderate airmass fallback)
+      3. Return ``None``.  Unknown geometry must never masquerade as a
+         measured value in an AAVSO record.
     """
     am = header.get("AIRMASS")
     if am is not None:
         try:
-            return float(am)
+            return float(am), {"source": "fits_header", "known": True}
         except (TypeError, ValueError):
             pass
 
@@ -1763,14 +1829,22 @@ def _compute_airmass(header: dict, config: dict) -> float:
     date_obs = header.get("DATE-OBS", "")
 
     if not (ra_deg and dec_deg and date_obs):
-        return 1.5
+        return None, {
+            "source": "unknown",
+            "known": False,
+            "reason": "missing_target_coordinates_or_date_obs",
+        }
 
     obs_cfg = config.get("safety", {}).get("observer", {})
     lat = float(obs_cfg.get("latitude", 0.0))
     lon = float(obs_cfg.get("longitude", 0.0))
     if lat == 0.0 and lon == 0.0:
-        logger.debug("Observer lat/lon not configured — airmass defaulting to 1.5")
-        return 1.5
+        logger.debug("Observer lat/lon not configured — airmass unknown")
+        return None, {
+            "source": "unknown",
+            "known": False,
+            "reason": "observer_location_not_configured",
+        }
 
     try:
         location = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
@@ -1779,11 +1853,26 @@ def _compute_airmass(header: dict, config: dict) -> float:
         altaz    = coord.transform_to(AltAz(obstime=t, location=location))
         alt_deg  = float(altaz.alt.deg)
         if alt_deg <= 5.0:
-            return 5.76   # sec(85°)
-        return float(1.0 / math.cos(math.radians(90.0 - alt_deg)))
+            value = 5.76   # sec(85°)
+        else:
+            value = float(1.0 / math.cos(math.radians(90.0 - alt_deg)))
+        return value, {
+            "source": "computed_geometry",
+            "known": True,
+            "altitude_deg": round(alt_deg, 3),
+        }
     except Exception as exc:
         logger.warning("Airmass computation failed: %s", exc)
-        return 1.5
+        return None, {
+            "source": "unknown",
+            "known": False,
+            "reason": "geometry_computation_failed",
+        }
+
+
+def _compute_airmass(header: dict, config: dict):
+    """Compatibility wrapper returning only the value (which may be ``None``)."""
+    return _compute_airmass_ex(header, config)[0]
 
 
 # ── Patrol check ───────────────────────────────────────────────────────────────

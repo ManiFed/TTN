@@ -7,7 +7,6 @@ on:
       - 'cloud/**'
       - 'src/**'
       - 'website/**'
-      - 'app/build/web/**'
       - 'Dockerfile.cloud'
       - 'railway.toml'
       - '.github/workflows/deploy-api.yml'

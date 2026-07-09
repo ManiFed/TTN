@@ -1,0 +1,37 @@
+name: Build desktop app
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-desktop-app.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-desktop-app.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos
+          - os: windows-latest
+            target: windows
+          - os: ubuntu-latest
+            target: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.x'
+          channel: stable
+      - working-directory: app
+        run: flutter pub get
+      - working-directory: app
+        run: flutter build ${{ matrix.target }} --release

@@ -80,6 +80,9 @@ photometry:
   survey_max_sources: 800
   survey_max_zp_scatter: 0.15
   survey_match_radius_arcsec: 5
+  saturation_adu: 60000
+  blend_flux_fraction: 0.2
+  blend_separation_fwhm: 1.25
   fits_export:
     enabled: true
     export_dir: fits_export
@@ -106,6 +109,10 @@ cloud:
   auto_run_plans: true    # execute cloud observation plans automatically
   upload_images: false
   disconnect_park_timeout: 1800  # park if cloud heartbeat fails this long (0 = disabled)
+
+commissioning:
+  enabled: true                 # starts automatically after cloud signup
+  interval_s: 10
 
 image_watcher:
   enabled: true

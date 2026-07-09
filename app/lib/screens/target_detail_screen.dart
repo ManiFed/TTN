@@ -1,10 +1,7 @@
-import 'dart:math' as math;
-
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:provider/provider.dart';
-import 'package:vibration/vibration.dart';
 
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -34,7 +31,6 @@ class _TargetDetailScreenState extends State<TargetDetailScreen> {
 
   final FlutterTts _tts = FlutterTts();
   bool _speaking = false;
-  bool _hapticPlaying = false;
 
   @override
   void initState() {
@@ -55,7 +51,6 @@ class _TargetDetailScreenState extends State<TargetDetailScreen> {
   @override
   void dispose() {
     _tts.stop();
-    Vibration.cancel();
     super.dispose();
   }
 
@@ -126,58 +121,10 @@ class _TargetDetailScreenState extends State<TargetDetailScreen> {
   // ── Haptic light curve ─────────────────────────────────────────────────────
 
   Future<void> _playHaptic(List<LightCurvePoint> points) async {
-    if (_hapticPlaying) {
-      await Vibration.cancel();
-      if (mounted) setState(() => _hapticPlaying = false);
-      return;
-    }
-
-    final bool? canVibrate = await Vibration.hasVibrator();
-    if (canVibrate != true) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Haptic feedback is not available on this device.')),
-        );
-      }
-      return;
-    }
-
-    final sorted = [...points]..sort((a, b) => a.bjd.compareTo(b.bjd));
-    if (sorted.isEmpty) return;
-
-    final mags = sorted.map((p) => p.magnitude).toList();
-    final minMag = mags.reduce(math.min);
-    final maxMag = mags.reduce(math.max);
-    final magRange = maxMag - minMag;
-
-    // Build pattern: alternating gap (no vibration) and pulse.
-    // Brightness (inverted magnitude) drives pulse intensity.
-    final List<int> pattern = [];
-    final List<int> intensities = [];
-    for (final pt in sorted) {
-      final brightness =
-          magRange > 0.01 ? (maxMag - pt.magnitude) / magRange : 0.5;
-      final intensity = (60 + (brightness * 195).round()).clamp(60, 255);
-      pattern.addAll([100, 220]); // gap ms, pulse ms
-      intensities.addAll([0, intensity]);
-    }
-
-    setState(() => _hapticPlaying = true);
-    final bool? hasAmplitude = await Vibration.hasAmplitudeControl();
-    if (hasAmplitude == true) {
-      await Vibration.vibrate(pattern: pattern, intensities: intensities);
-    } else {
-      // Fallback: encode brightness as pulse duration (longer = brighter).
-      final fallback = <int>[];
-      for (int i = 0; i < sorted.length; i++) {
-        final brightness =
-            magRange > 0.01 ? (maxMag - sorted[i].magnitude) / magRange : 0.5;
-        fallback.addAll([100, 60 + (brightness * 340).round()]);
-      }
-      await Vibration.vibrate(pattern: fallback);
-    }
-    if (mounted) setState(() => _hapticPlaying = false);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Haptic playback is available in the native iOS app.'),
+    ));
   }
 
   // ── Chart ──────────────────────────────────────────────────────────────────
@@ -553,7 +500,7 @@ class _TargetDetailScreenState extends State<TargetDetailScreen> {
             if (_mode != _ViewMode.audio)
               _AccessibilityBar(
                 speaking: _speaking,
-                hapticPlaying: _hapticPlaying,
+                hapticPlaying: false,
                 onHear: () => _toggleSpeech(points),
                 onHaptic: () => _playHaptic(points),
               ),

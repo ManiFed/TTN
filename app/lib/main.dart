@@ -1,28 +1,16 @@
-import 'package:firebase_core/firebase_core.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'api/auth_store.dart';
-import 'firebase_options.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
-import 'services/push_service.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Firebase initialises with values from firebase_options.dart.
-  // If the file still has TODO placeholders the init throws — caught here so
-  // the app runs normally without push notifications until Firebase is set up.
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (_) {
-    // Firebase not yet configured — push notifications will be unavailable.
-  }
 
   final appState = AppState(AuthStore());
   await appState.bootstrap();
@@ -39,29 +27,32 @@ class TelescopeNetApp extends StatefulWidget {
   State<TelescopeNetApp> createState() => _TelescopeNetAppState();
 }
 
-class _TelescopeNetAppState extends State<TelescopeNetApp> {
+class _TelescopeNetAppState extends State<TelescopeNetApp>
+    with WidgetsBindingObserver {
+  Timer? _notificationPoller;
+
   @override
   void initState() {
     super.initState();
-    // Defer until the first frame so context.read can resolve the Provider.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initPush());
+    WidgetsBinding.instance.addObserver(this);
+    _notificationPoller = Timer.periodic(
+      const Duration(minutes: 2),
+      (_) => context.read<AppState>().refreshUnreadNotifications(),
+    );
   }
 
-  Future<void> _initPush() async {
-    if (!mounted) return;
-    final state = context.read<AppState>();
-    await PushService.initialize(
-      onToken: (token) =>
-          state.api.setNotificationPrefs(push: true, pushToken: token),
-      onNotificationTap: (data) {
-        // A night_summary notification tap navigates the user to Alerts tab.
-        // The AppState exposes a setter that HomeScreen listens to.
-        if (data['type'] == 'night_summary') {
-          // Index past the tab bar opens the alerts sheet (see HomeScreen).
-          state.setPendingTab(99);
-        }
-      },
-    );
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      context.read<AppState>().refreshUnreadNotifications();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _notificationPoller?.cancel();
+    super.dispose();
   }
 
   @override

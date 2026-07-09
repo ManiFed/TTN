@@ -28,6 +28,33 @@ python -m pytest tests/test_sim.py          # CI-safe smoke tests (~8 s)
 See `SIMULATION.md` (model + assumptions + how to run) and
 `docs/FLEET_DIGITAL_TWIN_REPORT.md` (partner-facing results).
 
+## Beta-node readiness
+
+```bash
+make preflight    # read-only node/config/cloud/storage readiness check
+make beta-init    # create the C1–C7 real-data capture corpus
+make beta-audit   # verify captured FITS checksums and campaign coverage
+```
+
+Add a frame with
+`python3 scripts/beta_capture.py add C1 frame.fits --node-id node042`.
+See `docs/validation/FIXTURE_MANIFEST.md` for campaign-specific collection
+instructions.
+
+### Automatic commissioning after signup
+
+When a node successfully consumes its activation code, commissioning starts
+without another member action. It persists in `data/commissioning.json`,
+checks location, disk, plate solving, telescope/camera connectivity and FITS
+ingest, and resumes after restarts or temporarily disconnected hardware.
+The first ordinary science FITS adds checksum-pinned timing, WCS, image-shape,
+and detector-range evidence. Progress appears in the local web UI and travels
+in cloud heartbeat conditions for remote support.
+
+Commissioning is deliberately non-invasive: it never slews or exposes a
+telescope outside the scheduler and safety system. `POST
+/api/commissioning/restart` re-runs it after hardware changes.
+
 ## Repository Contents
 
 ```
@@ -83,7 +110,7 @@ node_v1-main/
 │   ├── README.md         Website documentation and API integration guide
 │   └── future/           Phase 2+ portal and future interfaces
 │
-├── app/                 Flutter cross-platform member app (iOS, Android, web/PWA)
+├── app/                 Flutter desktop member app (macOS, Windows, Linux, Raspberry Pi OS)
 │   ├── lib/              Screens (dashboard, observations, help/AI chat, nodes, notifications, more), API client, state, Aladin widgets
 │   ├── pubspec.yaml
 │   └── README.md         App build and accessibility notes
@@ -158,8 +185,8 @@ Two structural additions on top of CHORUS and Open Aperture — see
   - Push notifications (Firebase) + night summary alerts
   - Aladin Lite sky visualization integrated into the operational dashboard
 - **Dashboard iterations**: institutional/no-scroll layouts, workbench-style IDE UI, mission control previews (see `app/archive/`)
-- **Deployment**: Railway one-command deploys (`scripts/deploy-api.sh`), GitHub Actions workflows, watch patterns for api/app/website services; Flutter web builds included in deploys
-- **Native experiments**: iOS-native SwiftUI shell (haptics, TTS accessibility) and parallel macOS explorations
+- **Deployment**: Railway one-command API deploys (`scripts/deploy-api.sh`) and GitHub Actions desktop builds
+- **Native iOS app**: SwiftUI member app under `app/ios-native/`, using the canonical `net.thetelescope.node` Firebase configuration
 
 ### Marketing Site Launch (`website/tour.html`)
 - **Interactive founding network experience** — single-page scrollytelling site
@@ -386,7 +413,10 @@ python3 -m venv venv && source venv/bin/activate
 pip install flask pyyaml numpy astropy pillow requests watchdog photutils astroquery pyongc
 
 # 2. Install ASTAP (required for plate-solving and photometry)
-#    https://www.hnsky.org/astap.htm — install binary + G18 star catalogue
+#    https://www.hnsky.org/astap.htm — install the binary, then a star
+#    database: D50 (~200 MB, general purpose) or D80 (~1.25 GB, denser —
+#    use it for narrow-field/long-focal-length setups). See "Plate Solving"
+#    in the Node Agent's Settings panel for the tradeoffs.
 
 # 3. Configure (for a dry run, only these are required)
 nano config.yaml
@@ -534,7 +564,7 @@ flutter run --dart-define=BS_API_BASE=http://localhost:8800
 # For a real device on same LAN: use your host IP instead of localhost
 ```
 
-**Web build:** `flutter build web` (output in `app/build/web`).
+**Desktop builds:** `flutter build macos`, `flutter build windows`, or `flutter build linux`.
 
 See `app/README.md` for full setup, accessibility notes, and API contract details.
 
@@ -1022,7 +1052,7 @@ The ALPACA server responded but the device isn't initialised inside the Seestar 
 
 ### Plate solve fails
 - ASTAP not in PATH — set `photometry.astap_path` to the full binary path
-- G18 star catalogue not installed — download from the ASTAP site
+- Star database not installed — download D50 or D80 from the ASTAP site (see the "Plate Solving" section of Settings for which to pick)
 - Increase `astap_search_radius` if the image is very wide field
 
 ### AAVSO submission rejected
@@ -1076,7 +1106,7 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 |-------|-----------|-------|
 | Node Agent | Python 3.10+ / Flask | Runs Windows, macOS, Linux; pip only |
 | Telescope control | ALPACA REST via seestar_alp | Vendor-neutral; replaceable in Phase 4 |
-| Plate solving | ASTAP + G18 catalogue | Fast, offline, accurate on Seestar images |
+| Plate solving | ASTAP + D50/D80 catalogue | Fast, offline, accurate on Seestar images |
 | Image stacking | NumPy + RANSAC | Sub-pixel alignment, no external binaries |
 | Photometry | astropy + custom aperture code | Differential against AAVSO/Gaia comp stars |
 | Cloud server | Python / Flask | Upgrade to FastAPI + async at Phase 2 scale |
@@ -1086,7 +1116,7 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 | Sleep prevention | OS-native APIs | `SetThreadExecutionState` (Win), `caffeinate` (Mac), `systemd-inhibit` (Linux) |
 | Packaging | PyInstaller one-file | NSIS (Win), pkgbuild/productbuild (Mac), systemd install.sh (Linux) |
 | Marketing site | HTML/CSS/JavaScript (static) | `tour.html` — interactive scrollytelling, Aladin Lite sky vis, live API data |
-| Member app | Flutter / Dart (iOS, Android, web) | Real backend integration, AI Help assistant, haptics/TTS, Aladin sky, push notifications; strong accessibility focus |
+| Member app | Flutter / Dart (macOS, Windows, Linux, Raspberry Pi OS) | Real backend integration, AI Help assistant, TTS, and strong accessibility focus |
 | AI member support | OpenRouter (Claude Haiku) | Rate-limited chat in-app; queues safe config patches for node agents |
 
 ---

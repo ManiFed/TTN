@@ -8,7 +8,6 @@ watchPatterns = [
   "cloud/**",
   "src/**",
   "website/**",
-  "app/build/web/**",
   "Dockerfile.cloud",
   "railway.toml",
 ]

@@ -60,7 +60,6 @@ _config: dict = {}   # set by create_app()
 
 _WEBSITE_DIR = os.path.join(os.path.dirname(__file__), "..", "website")
 _DASHBOARD_DIR = os.path.join(_WEBSITE_DIR, "dashboard")
-_APP_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "build", "web")
 
 
 def create_app(config: dict) -> Flask:

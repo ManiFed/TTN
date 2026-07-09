@@ -47,6 +47,7 @@ from src.stacking import LiveStacker
 from src.cloud_communicator import CloudCommunicator
 from src import telemetry as _telemetry
 from src.node_supervisor import NodeSupervisor
+from src.commissioning import CommissioningManager
 
 
 app = Flask(__name__)
@@ -627,6 +628,11 @@ def _on_new_fits(info: dict) -> None:
     with _state_lock:
         _state["image_watcher"]["last_file"]  = os.path.basename(path)
         _state["image_watcher"]["last_header"] = header
+    if _commissioning is not None:
+        threading.Thread(
+            target=_commissioning.observe_fits, args=(path,),
+            daemon=True, name="commissioning-fits",
+        ).start()
 
     # Optionally run photometry pipeline in background thread
     with _state_lock:
@@ -804,6 +810,7 @@ def _run_photometry_bg(fits_path: str) -> None:
 # ── Cloud communicator ─────────────────────────────────────────────────────────
 
 _cloud: Optional[CloudCommunicator] = None
+_commissioning: Optional[CommissioningManager] = None
 _interrupt_queue: queue.Queue = queue.Queue()
 
 
@@ -855,6 +862,11 @@ def _cloud_conditions() -> dict:
         # lands in the cloud's nodes.last_conditions so a remote operator can
         # see *why* a night failed without touching the member's machine.
         out["events"] = _telemetry.heartbeat_summary()
+    except Exception:
+        pass
+    try:
+        if _commissioning is not None:
+            out["commissioning"] = _commissioning.status()
     except Exception:
         pass
     return out
@@ -2071,7 +2083,24 @@ def index():
 def api_status():
     with _state_lock:
         snapshot = copy.deepcopy(_state)
+    if _commissioning is not None:
+        snapshot["commissioning"] = _commissioning.status()
     return jsonify(snapshot)
+
+
+@app.route("/api/commissioning")
+def api_commissioning():
+    if _commissioning is None:
+        return jsonify({"status": "unavailable"}), 503
+    return jsonify(_commissioning.status())
+
+
+@app.route("/api/commissioning/restart", methods=["POST"])
+def api_commissioning_restart():
+    if _commissioning is None:
+        return jsonify({"error": "commissioning unavailable"}), 503
+    _commissioning.restart()
+    return jsonify({"ok": True, **_commissioning.evaluate()})
 
 
 @app.route("/api/logs")
@@ -4955,6 +4984,18 @@ html[data-night] img, html[data-night] video { filter: none; }
   </button>
 </div>
 
+<!-- Automatic post-signup commissioning status -->
+<div id="commissionBanner" style="display:none;background:rgba(62,207,142,.08);
+     border-bottom:1px solid rgba(62,207,142,.22);padding:9px 20px;
+     align-items:center;gap:12px;font-size:12px;">
+  <span id="commissionIcon">◌</span>
+  <span style="flex:1">
+    <strong id="commissionTitle">Commissioning telescope…</strong>
+    <span id="commissionDetail" style="color:var(--dim);margin-left:8px;"></span>
+  </span>
+  <button class="btn btn-dim" onclick="restartCommissioning()">Run again</button>
+</div>
+
 <!-- Main grid -->
 <div class="main" id="mainGrid">
 
@@ -5339,7 +5380,7 @@ html[data-night] img, html[data-night] video { filter: none; }
       <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
     </div>
     <input id="welcomeCodeInput" class="inp" type="text"
-      placeholder="BS-2024-XXXXXXXX"
+      placeholder="BS-2026-XXXXXXXX"
       autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
       style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase;width:100%;box-sizing:border-box;margin-bottom:14px;"
       oninput="this.value=this.value.toUpperCase()"
@@ -5355,6 +5396,13 @@ html[data-night] img, html[data-night] video { filter: none; }
         Skip for now
       </button>
     </div>
+  </div>
+</div>
+
+<!-- Star catalog chooser modal (shown after activation, and reopenable from Settings) -->
+<div class="modal hidden" id="catalogModal" onclick="if(event.target===this)closeCatalogChooser()">
+  <div class="modal-content" style="max-width:460px;width:90%;padding:32px;text-align:center;">
+    <div id="catalogChooserBody"></div>
   </div>
 </div>
 
@@ -5507,6 +5555,9 @@ html[data-night] img, html[data-night] video { filter: none; }
             <div class="inp-label">Search Radius (°) <span class="help-tip" data-tip="How far from the expected position ASTAP will search. Larger is slower but more forgiving of pointing errors.">?</span></div>
             <input class="inp" type="number" id="cfgPhotAstapRadius" min="1" max="90" step="1">
           </div>
+        </div>
+        <div style="font-size:11px;color:var(--dim);margin-top:6px;">
+          Star database (D50/D80): <a href="#" onclick="openCatalogChooser();return false;">switch which one you're using</a>
         </div>
         <div class="cfg-section-hdr">Aperture Geometry <span style="font-size:9px;color:var(--dim);letter-spacing:0;text-transform:none;">(multiples of FWHM)</span></div>
         <div class="cfg-field-grid" style="grid-template-columns:1fr 1fr 1fr;">
@@ -5948,6 +5999,32 @@ function render(s) {
   renderImage(s);
   renderPierCam(s.pier_cam || {});
   renderNowObserving(s);
+  renderCommissioning(s.commissioning || {});
+}
+
+function renderCommissioning(c) {
+  const banner = document.getElementById("commissionBanner");
+  if (!banner || !c.status || c.status === "waiting_for_signup") {
+    if (banner) banner.style.display = "none";
+    return;
+  }
+  banner.style.display = "flex";
+  const checks = Object.values(c.checks || {});
+  const passed = checks.filter(x => x.ok).length;
+  const total = checks.length;
+  const complete = c.status === "complete";
+  document.getElementById("commissionIcon").textContent = complete ? "✓" : "◌";
+  document.getElementById("commissionTitle").textContent =
+    complete ? "Telescope commissioned" : "Commissioning automatically";
+  const failed = Object.entries(c.checks || {})
+    .filter(([,v]) => v.blocking && !v.ok).map(([k]) => k.replaceAll("_", " "));
+  document.getElementById("commissionDetail").textContent =
+    `${passed}/${total} checks passed` + (failed.length ? ` · waiting for ${failed.join(", ")}` : "");
+}
+
+async function restartCommissioning() {
+  await fetch("/api/commissioning/restart", {method: "POST"});
+  poll();
 }
 
 // ── Now Observing widget ─────────────────────────────────────────────────────
@@ -9441,6 +9518,44 @@ setInterval(async () => {
   });
 })();
 
+// ── Star catalog chooser (D50/D80) ──────────────────────────────────────────────
+// Shared between the first-run flow (after activation) and Settings ("switch later").
+
+function _catalogChooserHTML(opts) {
+  const onClose = opts.onClose; // JS expression string run when the user is done
+  return `
+    <div style="font-size:40px;margin-bottom:10px;">🔭</div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:8px;color:#fff;">Pick a star database</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:18px;line-height:1.5;">
+      ASTAP needs this installed to plate-solve your images. It's a separate download from ASTAP itself, since it's much bigger.
+    </div>
+    <div style="display:flex;gap:10px;text-align:left;margin-bottom:14px;">
+      <div style="flex:1;border:1px solid var(--border);border-radius:6px;padding:12px;">
+        <div style="font-weight:700;margin-bottom:4px;">D50 <span style="font-weight:400;color:var(--dim);font-size:11px;">~200 MB</span></div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.5;">Recommended default. Enough stars for most Seestar fields of view — faster download, solves just as reliably.</div>
+      </div>
+      <div style="flex:1;border:1px solid var(--border);border-radius:6px;padding:12px;">
+        <div style="font-weight:700;margin-bottom:4px;">D80 <span style="font-weight:400;color:var(--dim);font-size:11px;">~1.25 GB</span></div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.5;">Only worth it for narrow field of view / long focal length setups, or if D50 fails to solve. Denser star coverage for tight, crowded fields.</div>
+      </div>
+    </div>
+    <a href="https://www.hnsky.org/astap.htm" target="_blank" rel="noopener"
+       style="display:block;font-size:12px;margin-bottom:16px;">Download D50 or D80 from the ASTAP site →</a>
+    <button class="btn btn-green" style="width:100%;font-size:13px;padding:10px 0;" onclick="${onClose}">
+      Done
+    </button>`;
+}
+
+function openCatalogChooser() {
+  document.getElementById('catalogChooserBody').innerHTML =
+    _catalogChooserHTML({ onClose: "closeCatalogChooser()" });
+  document.getElementById('catalogModal').classList.remove('hidden');
+}
+
+function closeCatalogChooser() {
+  document.getElementById('catalogModal').classList.add('hidden');
+}
+
 // ── First-run activation modal ────────────────────────────────────────────────
 
 function closeWelcomeModal() {
@@ -9521,10 +9636,10 @@ async function submitActivationCode() {
         content.innerHTML = `
           <div style="font-size:56px;margin-bottom:12px;">✅</div>
           <div style="font-size:18px;font-weight:700;margin-bottom:8px;color:#fff;">Connected!</div>
-          <div style="font-size:13px;color:var(--dim);line-height:1.6;">
+          <div style="font-size:13px;color:var(--dim);line-height:1.6;margin-bottom:20px;">
             Your node is registered with The Telescope Net.
-          </div>`;
-        setTimeout(() => window.close(), 1800);
+          </div>
+          ${_catalogChooserHTML({ onClose: "closeWelcomeModal()" })}`;
         return;
       }
       errEl.textContent = rd.error || 'Registration failed — check your code and try again.';
@@ -9547,7 +9662,7 @@ document.addEventListener('DOMContentLoaded', _checkFirstRun);
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def launch(port: int = 5173) -> None:
-    global _safety_mgr, _image_watcher, _cloud
+    global _safety_mgr, _image_watcher, _cloud, _commissioning
 
     import urllib.request
 
@@ -9624,6 +9739,23 @@ def launch(port: int = 5173) -> None:
             name="cloud-disco-monitor",
         ).start()
 
+    def _commission_runtime() -> dict:
+        with _state_lock:
+            return {
+                "telescope_connected": _state["telescope"].get("connected", False),
+                "camera_connected": _state["camera"].get("connected", False),
+            }
+
+    _commissioning = CommissioningManager(
+        load_config=_load_config,
+        is_registered=lambda: bool(_cloud and _cloud.status.get("registered")),
+        runtime_status=_commission_runtime,
+        telescope_specs=_cloud_telescope_specs,
+        interval_s=float(cfg.get("commissioning", {}).get("interval_s", 10)),
+    )
+    if cfg.get("commissioning", {}).get("enabled", True):
+        _commissioning.start()
+
     pc_cfg = cfg.get("pier_cam", {})
     if pc_cfg.get("enabled", False):
         _pier_cam_stop.clear()
@@ -9680,6 +9812,8 @@ def launch(port: int = 5173) -> None:
         _pier_cam_stop.set()
         if _cloud is not None:
             _cloud.stop()
+        if _commissioning is not None:
+            _commissioning.stop()
         if _safety_mgr is not None:
             _safety_mgr.stop()
         if _image_watcher is not None:
