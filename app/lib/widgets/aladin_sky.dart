@@ -1,2 +1,2 @@
-export 'aladin_sky_stub.dart'
-    if (dart.library.html) 'aladin_sky_web.dart';
+// The desktop app intentionally ships without the web-only Aladin integration.
+export 'aladin_sky_stub.dart';

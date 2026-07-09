@@ -1,18 +1,3 @@
-API_BASE   := https://api.thetelescope.net
-BASE_HREF  := /
-
-# Build the Flutter PWA locally for verification.
-.PHONY: build-web
-build-web:
-	cd app && flutter build web --release \
-		--base-href=$(BASE_HREF) \
-		--dart-define=API_BASE=$(API_BASE)
-
-# Railway now builds the Flutter PWA from source via Dockerfile.app.
-.PHONY: deploy-web
-deploy-web:
-	git push origin main
-
 # Deploy the cloud server to Railway
 .PHONY: deploy-cloud
 deploy-cloud:
@@ -20,7 +5,7 @@ deploy-cloud:
 
 # Deploy everything
 .PHONY: deploy
-deploy: deploy-web deploy-cloud
+deploy: deploy-cloud
 
 # ── Testing & scientific validation ───────────────────────────────────────────
 # Offline, deterministic, network-free.  See docs/validation/VALIDATION_REPORT.md
@@ -42,3 +27,15 @@ gauntlet:
 validate:
 	$(PYTHON) -m pytest tests/validation tests/test_photometry_features.py -q
 	$(PYTHON) scripts/validate_photometry.py --synthetic --out cloud_data/validation
+
+# Read-only readiness audit for a beta node.
+.PHONY: preflight
+preflight:
+	$(PYTHON) scripts/node_preflight.py
+
+# Create/check the real-data corpus described in docs/validation/FIXTURE_MANIFEST.md.
+.PHONY: beta-init beta-audit
+beta-init:
+	$(PYTHON) scripts/beta_capture.py init
+beta-audit:
+	$(PYTHON) scripts/beta_capture.py audit

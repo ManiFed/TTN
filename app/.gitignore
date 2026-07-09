@@ -2,17 +2,12 @@
 .dart_tool/
 .packages
 build/*
-!build/web/
 .flutter-plugins
 .flutter-plugins-dependencies
 pubspec.lock
 
-# Generated platform folders (run `flutter create .` to regenerate)
-# Comment these out if you commit platform code.
+# Generated mobile platform folder (run `flutter create .` to regenerate).
 android/
-linux/
-macos/
-windows/
 
 # IDE
 .idea/

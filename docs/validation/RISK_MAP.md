@@ -78,15 +78,17 @@ doubled and SNR halved. Now a Gaussian PSF fit (`photutils.psf.fit_fwhm`) is
 preferred, recovering 3.9/4.0 px; the moment method remains as fallback for
 older photutils. Test: `test_fwhm_estimate_tracks_truth` (2.5–8 px, ±15%).
 
-### 6. WCS error and centroid mis-lock — TESTED
+### 6. WCS error, centroid mis-lock, and blending — GATED
 Small pointing errors (≈10 px, Seestar-typical) are absorbed by centroid
 refinement (`test_wcs_offset_recovered_by_centroiding`). Gross WCS errors
 (≥ the centroid search box) produce a rejection, never a quiet measurement of
 blank sky (`test_gross_wcs_error_rejected_not_mismeasured`) — the 5σ local
 peak guard prevents locking onto noise.
 *Residual risk:* a blended neighbour of comparable brightness inside the
-search box can still capture the centroid in crowded low-latitude fields.
-No crowding test yet; needs a real crowded-field fixture.
+search box is now detected from image morphology. A blended target is forced
+to `quality=poor`; blended comparison stars are excluded with
+`reject_reason="bright_neighbour"`. C5 real crowded-field fixtures remain
+necessary to tune the flux/separation thresholds.
 
 ### 7. Pointing-WCS fallback — BOUNDED
 Without a plate solver the pipeline constructs a TAN WCS from reported
@@ -122,9 +124,10 @@ this. Needs real stacks with sub-counts to characterise.
 
 ## Tier 3 — bounded or operational
 
-11. **Airmass fallback** — when neither header `AIRMASS` nor observer
-    location is available, 1.5 is reported and lands in the AAVSO `AMASS`
-    field indistinguishable from a computed value. Should become `na`.
+11. **Airmass provenance — GATED** — header and geometry-derived values are
+identified in provenance. Missing geometry produces `airmass=null`, blocks a
+`good` quality flag, and exports AAVSO `AMASS=na`; no synthetic fallback is
+reported.
 12. **Gaia G→V transformation** — Evans et al. (2018) coefficients verified;
     out-of-range colours (BP−RP ∉ [−0.5, 2.75]) fall back to G with
     `mag_err=0.20`, so inverse-variance weighting suppresses them.

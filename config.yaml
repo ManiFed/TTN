@@ -42,6 +42,9 @@ cloud:
   realtime_url: https://realtime.thetelescope.net
   upload_images: false
   url: https://api.thetelescope.net
+commissioning:
+  enabled: true
+  interval_s: 10
 devices:
   camera:
     device_number: 0
@@ -111,6 +114,10 @@ photometry:
   # Peak-ADU level treated as saturated: target → quality poor, comparison
   # stars → excluded from the zero-point ensemble.
   saturation_adu: 60000
+  # Reject targets/comparison stars with a nearby peak at least 20% as bright.
+  # This protects crowded fields from centroid mis-lock and aperture blending.
+  blend_flux_fraction: 0.2
+  blend_separation_fwhm: 1.25
   snr_threshold: 20
   solve_field_path: /opt/homebrew/bin/solve-field
   solver: astrometry

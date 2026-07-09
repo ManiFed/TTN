@@ -172,7 +172,29 @@ def test_airmass_computed_from_geometry_is_physical():
 
 def test_airmass_fallback_without_observer():
     hdr = {"RA": 150.0, "DEC": 20.0, "DATE-OBS": "2026-01-15T06:30:00"}
-    assert P._compute_airmass(hdr, {}) == 1.5
+    assert P._compute_airmass(hdr, {}) is None
+    value, provenance = P._compute_airmass_ex(hdr, {})
+    assert value is None
+    assert provenance == {
+        "source": "unknown",
+        "known": False,
+        "reason": "observer_location_not_configured",
+    }
+
+
+def test_blend_detector_finds_bright_neighbour():
+    yy, xx = np.mgrid[:80, :80]
+    image = np.full((80, 80), 100.0)
+    image += 1000 * np.exp(-((xx - 40) ** 2 + (yy - 40) ** 2) / (2 * 2.0 ** 2))
+    image += 400 * np.exp(-((xx - 48) ** 2 + (yy - 40) ** 2) / (2 * 2.0 ** 2))
+    assert P._source_has_bright_neighbour(image, 40, 40, 4.7, 100, 2)
+
+
+def test_blend_detector_accepts_isolated_psf():
+    yy, xx = np.mgrid[:80, :80]
+    image = np.full((80, 80), 100.0)
+    image += 1000 * np.exp(-((xx - 40) ** 2 + (yy - 40) ** 2) / (2 * 2.0 ** 2))
+    assert not P._source_has_bright_neighbour(image, 40, 40, 4.7, 100, 2)
 
 
 # ── Offline file catalog backend ───────────────────────────────────────────────
