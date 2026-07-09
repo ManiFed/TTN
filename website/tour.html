@@ -265,7 +265,7 @@
           <h1 style="margin-top:20px">Each member watches a patch of sky. <span class="a">Together we cover what no observatory can.</span></h1>
           <p class="sub">The Telescope Net connects self-driving telescopes in members' homes across the planet. Each one runs automatically every clear night — picking targets, photographing them, and uploading data to a scientific database used by professional astronomers. <em>No experience. No nights outside. Just a balcony or yard.</em></p>
           <div class="cta-row">
-            <a class="btn btn-p" href="https://app.thetelescope.net">Open the member app</a>
+            <a class="btn btn-p" href="#join">Download node software</a>
             <a class="btn btn-g" href="#why">Watch the sky lift off ↓</a>
           </div>
           <p style="margin-top:16px; font-size:12.5px; color:var(--ink-3)">A handful of people are already on watch · join them at the very start</p>
@@ -810,7 +810,9 @@
       cur.ra=tgt.ra; cur.dec=tgt.dec; cur.fov=tgt.fov;
       if(sky && (force || i!==activeSkySection)){
         sky.gotoRaDec(tgt.ra, tgt.dec);
-        sky.setFov(tgt.fov);
+        // Aladin Lite v3 spells this setFoV (capital V). Calling the old casing
+        // throws on the first scroll update and leaves the tour view frozen.
+        sky.setFoV(tgt.fov);
       }
       activeSkySection=i;
       window.__tourState = {section:i, ra:tgt.ra, dec:tgt.dec, fov:tgt.fov, aladinActive:!!sky};
