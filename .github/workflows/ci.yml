@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt pytest
+      - run: pip install -r requirements.txt -r cloud/requirements.txt pytest
       - name: Unit and reliability gauntlet
         run: make test
       - name: Scientific validation gates

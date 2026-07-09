@@ -31,6 +31,9 @@ jobs:
         with:
           flutter-version: '3.27.x'
           channel: stable
+      - name: Generate target desktop runner
+        working-directory: app
+        run: flutter create . --platforms=${{ matrix.target }}
       - working-directory: app
         run: flutter pub get
       - working-directory: app
