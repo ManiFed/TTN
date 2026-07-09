@@ -54,7 +54,7 @@ class CloudCommGauntletTest(TempCwdTestCase):
         self.assertTrue(comm._ensure_registered())
         state = json.loads(pathlib.Path("data", "cloud_state.json").read_text())
         self.assertEqual(state["node_id"], "node_test01")
-        self.assertEqual(state["api_key"], "key_test01")
+        self.assertNotIn("api_key", state)
         # A second instance (simulated restart) reuses them without re-registering.
         self.fake.clear()
         comm2 = self._comm()
