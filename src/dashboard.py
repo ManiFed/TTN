@@ -5324,7 +5324,7 @@ html[data-night] img, html[data-night] video { filter: none; }
       <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
     </div>
     <input id="welcomeCodeInput" class="inp" type="text"
-      placeholder="BS-2024-XXXXXXXX"
+      placeholder="BS-2026-XXXXXXXX"
       autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
       style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase;width:100%;box-sizing:border-box;margin-bottom:14px;"
       oninput="this.value=this.value.toUpperCase()"
