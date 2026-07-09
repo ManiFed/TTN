@@ -22,8 +22,45 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      # Build and upload fresh code — redeploy alone only restarts the old image.
-      - name: Deploy API service
-        run: railway up --service api --detach --ci -y
+      # Upload fresh code, then wait for Railway's health check. `up --detach`
+      # alone only confirms the upload and previously let failed deploys appear
+      # green in GitHub Actions.
+      - name: Deploy API service and wait for health
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway up --service api --detach --ci -y
+          sleep 3
+
+          deployment_id="$(
+            railway deployment list --service api --limit 1 --json |
+              python -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])'
+          )"
+          echo "Waiting for Railway deployment ${deployment_id}"
+
+          for attempt in $(seq 1 90); do
+            status="$(
+              railway deployment list --service api --limit 20 --json |
+                python -c 'import json,sys; target=sys.argv[1]; print(next(d["status"] for d in json.load(sys.stdin) if d["id"] == target))' \
+                "${deployment_id}"
+            )"
+            echo "Attempt ${attempt}: ${status}"
+            case "${status}" in
+              SUCCESS)
+                curl --fail --silent --show-error \
+                  https://api.thetelescope.net/api/v1/health
+                exit 0
+                ;;
+              FAILED|CRASHED|REMOVED)
+                railway logs "${deployment_id}" --deployment --lines 200 || true
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+
+          echo "Timed out waiting for Railway deployment ${deployment_id}"
+          railway logs "${deployment_id}" --deployment --lines 200 || true
+          exit 1
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
