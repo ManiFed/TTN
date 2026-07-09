@@ -31,7 +31,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.x'
+          flutter-version: '3.35.x'
           channel: stable
       # The repository retains the Flutter iOS runner for parity comparison
       # while desktop project runners are generated deterministically in CI.
