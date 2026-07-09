@@ -37,6 +37,11 @@ jobs:
       # while desktop project runners are generated deterministically in CI.
       - working-directory: app
         run: flutter create . --platforms=${{ matrix.target }}
+      - if: matrix.target == 'macos'
+        working-directory: app/macos
+        run: |
+          sed -i.bak "s/platform :osx, '.*'/platform :osx, '10.15'/" Podfile
+          sed -i.bak -E 's/MACOSX_DEPLOYMENT_TARGET = [0-9.]+/MACOSX_DEPLOYMENT_TARGET = 10.15/g' Runner.xcodeproj/project.pbxproj
       - working-directory: app
         run: flutter pub get
       - working-directory: app
