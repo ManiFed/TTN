@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 import psycopg2.errors
+from werkzeug.utils import secure_filename
 
 from cloud import db, incidents
 from src.shared_models import Measurement
@@ -474,9 +475,13 @@ def store_raw_image(node_id: str, filename: str, data: bytes,
             detail={"filename": filename, "size_mb": len(data) / 1e6, "max_mb": max_mb},
         )
         return None
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).name) or "image.fits"
+    safe = secure_filename(filename) or "image.fits"
+    safe_node_id = secure_filename(node_id)
+    if not safe_node_id:
+        logger.warning("Rejected raw image with invalid node identifier")
+        return None
     root = Path(config.get("storage", {}).get("raw_image_dir", "cloud_data/raw_images"))
-    day_dir = root / node_id / datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day_dir = root / safe_node_id / datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         day_dir.mkdir(parents=True, exist_ok=True)
         path = day_dir / safe

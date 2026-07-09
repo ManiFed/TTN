@@ -12,6 +12,11 @@ on:
       - '.github/workflows/deploy-api.yml'
   workflow_dispatch:
 
+# The deploy only needs to read the checked-out source.  Keep the implicit
+# GITHUB_TOKEN from gaining write access if a third-party action is added later.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

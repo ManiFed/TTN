@@ -172,10 +172,10 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
         ),
     )
     logger.info(
-        "Node %s %s: Tier %d %s @ %.4f,%.4f  (%.1f mpsas, Bortle %d)",
+        "Node %s %s: Tier %d %s (%.1f mpsas, Bortle %d)",
         node_id, "updated" if existing else "registered",
         tier, node.telescope_model,
-        node.latitude, node.longitude, mpsas, bortle,
+        mpsas, bortle,
     )
     return {"node_id": node_id, "api_key": api_key}
 
