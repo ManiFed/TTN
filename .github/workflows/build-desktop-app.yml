@@ -31,6 +31,10 @@ jobs:
         with:
           flutter-version: '3.27.x'
           channel: stable
+      # The repository retains the Flutter iOS runner for parity comparison
+      # while desktop project runners are generated deterministically in CI.
+      - working-directory: app
+        run: flutter create . --platforms=${{ matrix.target }}
       - working-directory: app
         run: flutter pub get
       - working-directory: app
