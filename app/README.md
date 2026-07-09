@@ -66,6 +66,9 @@ and opens the former for the logged-in user.
 ```bash
 cd app
 flutter create . --platforms=macos
+# flutter_tts requires macOS 10.15 or newer.
+sed -i '' "s/platform :osx, '10.14'/platform :osx, '10.15'/" macos/Podfile
+sed -i '' 's/MACOSX_DEPLOYMENT_TARGET = 10.14/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
 flutter build macos --release
 cd ..
 python3 build/build.py --skip-astap

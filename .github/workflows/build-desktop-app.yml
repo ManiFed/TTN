@@ -37,6 +37,17 @@ jobs:
       - name: Generate target desktop runner
         working-directory: app
         run: flutter create . --platforms=${{ matrix.target }}
+      - name: Set macOS deployment target
+        if: matrix.target == 'macos'
+        working-directory: app
+        run: |
+          sed -i '' "s/platform :osx, '10.14'/platform :osx, '10.15'/" macos/Podfile
+          sed -i '' 's/MACOSX_DEPLOYMENT_TARGET = 10.14/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
+      - name: Use the hosted Windows toolchain
+        if: matrix.target == 'windows'
+        working-directory: app
+        shell: pwsh
+        run: (Get-Content windows/CMakeLists.txt) -replace 'Visual Studio 16 2019', 'Visual Studio 17 2022' | Set-Content windows/CMakeLists.txt
       - working-directory: app
         run: flutter pub get
       - working-directory: app
