@@ -1,8 +1,8 @@
 # The Telescope Net — Desktop Member App (Flutter)
 
-The desktop app for the The Telescope Net automated
-telescope network. It talks to the cloud layer's member API (`cloud/server.py`,
-routes under `/api/v1/*`).
+The desktop control surface for The Telescope Net automated telescope network.
+It talks to both the background local node service (`http://127.0.0.1:5173`)
+and the cloud member API (`cloud/server.py`, routes under `/api/v1/*`).
 
 ## What's here
 
@@ -55,6 +55,29 @@ flutter run -d macos --dart-define=BS_API_BASE=http://localhost:8800
 Build release artifacts with `flutter build macos`, `flutter build windows`, or
 `flutter build linux`. Raspberry Pi OS with a desktop environment uses the Linux
 target; a separate embedder is not required.
+
+## Shipping the unified macOS application
+
+The macOS installer packages two applications together: the visible Flutter
+window (`TelescopeNet.app`) and the hidden Python node agent
+(`TelescopeNetNode.app`). The installer starts the latter as a launchd service
+and opens the former for the logged-in user.
+
+```bash
+cd app
+flutter create . --platforms=macos
+# flutter_tts requires macOS 10.15 or newer.
+sed -i '' "s/platform :osx, '10.14'/platform :osx, '10.15'/" macos/Podfile
+sed -i '' 's/MACOSX_DEPLOYMENT_TARGET = 10.14/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
+flutter build macos --release
+cd ..
+python3 build/build.py --skip-astap
+bash build/macos/build_dmg.sh --sign 'Developer ID Application: Your Team'
+```
+
+The in-app Local Node screen is the migration path from the legacy browser
+dashboard. The browser dashboard remains available only for controls that have
+not yet been ported.
 
 ## Accessibility notes
 

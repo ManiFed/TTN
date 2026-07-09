@@ -12,6 +12,7 @@ import '../widgets/glass.dart' show GrainOverlay, LiveDot;
 import 'dashboard_tab.dart';
 import 'me_screen.dart';
 import 'more_tab.dart';
+import 'node_agent_tab.dart';
 import 'nodes_tab.dart';
 import 'notifications_tab.dart';
 import 'observations_tab.dart';
@@ -62,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   static const _tabs = [
+    (title: 'Node', icon: Icons.memory_outlined, sel: Icons.memory),
     (title: 'Tonight', icon: Icons.nightlight_outlined, sel: Icons.nightlight),
     (
       title: 'Telescopes',
@@ -102,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final name = state.member?.displayName ?? '';
 
     final pages = [
+      const NodeAgentTab(),
       DashboardTab(onNavigateToTab: (_) => _showAlertsSheet()),
       const NodesTab(),
       const ObservationsTab(),

@@ -9,11 +9,12 @@
 #   2. Writes config.yaml from the template (substituting the activation code)
 #   3. Installs the launchd plist and starts the service
 #   4. Configures system power settings to prevent sleep
-#   5. Opens the local dashboard for the logged-in user
+#   5. Opens the Flutter desktop app for the logged-in user
 
 set -e
 
 APP_DIR="/Applications/TelescopeNetNode.app"
+DESKTOP_APP="/Applications/TelescopeNet.app"
 DATA_DIR="/Library/Application Support/TelescopeNet/NodeAgent"
 LOG_DIR="/Library/Logs/TelescopeNet"
 PLIST_SRC="${APP_DIR}/Contents/Resources/com.telescopenet.nodeagent.plist"
@@ -67,9 +68,9 @@ chmod 644 "${PLIST_DEST}"
 launchctl load -w "${PLIST_DEST}"
 echo "Service installed and started: com.telescopenet.nodeagent"
 
-# ── Open dashboard for the logged-in desktop user ─────────────────────────────
-# Installer scripts run as root; open the URL inside the console user's GUI
-# session so the browser appears on their desktop. Headless installs simply skip.
+# ── Open the foreground app for the logged-in desktop user ─────────────────────
+# Installer scripts run as root; open the app inside the console user's GUI
+# session. The app reads local node status from the background service.
 DASHBOARD_URL="http://localhost:5173"
 CONSOLE_USER="$(stat -f %Su /dev/console 2>/dev/null || true)"
 if [ -n "${CONSOLE_USER}" ] && [ "${CONSOLE_USER}" != "root" ] && [ "${CONSOLE_USER}" != "loginwindow" ]; then
@@ -82,13 +83,20 @@ if [ -n "${CONSOLE_USER}" ] && [ "${CONSOLE_USER}" != "root" ] && [ "${CONSOLE_U
             fi
             sleep 1
         done
-        launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}" || true
-        echo "Dashboard opened for ${CONSOLE_USER}: ${DASHBOARD_URL}"
+        if [ -d "${DESKTOP_APP}" ]; then
+            launchctl asuser "${CONSOLE_UID}" /usr/bin/open -a "${DESKTOP_APP}" || true
+            echo "Desktop app opened for ${CONSOLE_USER}: ${DESKTOP_APP}"
+        else
+            # Preserve access for upgrades made with an older package.
+            launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}" || true
+            echo "Desktop app missing; legacy dashboard opened for ${CONSOLE_USER}"
+        fi
     fi
 fi
 
 echo ""
 echo "Installation complete!"
-echo "Dashboard: ${DASHBOARD_URL}"
+echo "Desktop app: ${DESKTOP_APP}"
+echo "Legacy dashboard: ${DASHBOARD_URL}"
 echo "Logs:      ${LOG_DIR}/node_agent.log"
 echo ""
