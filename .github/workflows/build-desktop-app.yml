@@ -21,7 +21,7 @@ jobs:
         include:
           - os: macos-latest
             target: macos
-          - os: windows-latest
+          - os: windows-2022
             target: windows
           - os: ubuntu-latest
             target: linux
@@ -29,9 +29,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.x'
+          flutter-version: '3.29.x'
           channel: stable
+      - name: Install Linux build dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      # The repository retains the Flutter iOS runner for parity comparison
+      # while desktop project runners are generated deterministically in CI.
+      - working-directory: app
+        run: flutter create . --platforms=${{ matrix.target }}
+      - name: Configure macOS deployment target
+        if: matrix.target == 'macos'
+        working-directory: app
+        run: |
+          if grep -q '^platform :osx' macos/Podfile; then
+            sed -i '' "s/^platform :osx.*/platform :osx, '10.15'/" macos/Podfile
+          else
+            printf "\nplatform :osx, '10.15'\n" >> macos/Podfile
+          fi
+          sed -i '' 's/MACOSX_DEPLOYMENT_TARGET = [^;]*;/MACOSX_DEPLOYMENT_TARGET = 10.15;/g' macos/Runner.xcodeproj/project.pbxproj
       - working-directory: app
         run: flutter pub get
       - working-directory: app
         run: flutter build ${{ matrix.target }} --release
+        if: matrix.target != 'windows'
+      - name: Build Windows application
+        if: matrix.target == 'windows'
+        working-directory: app
+        env:
+          CMAKE_GENERATOR: Visual Studio 17 2022
+        run: flutter build windows --release
