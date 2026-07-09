@@ -26,5 +26,6 @@ pyongc>=1.2
 anthropic>=0.92        # cloud weight-tuning monitor only (cloud/tuning.py)
 google-auth>=2.28.0    # cloud/push.py — FCM HTTP v1 API OAuth2 tokens
 defusedxml>=0.7.1      # safe XML parsing for public resolver responses
+keyrings.alt>=5.0      # headless fallback backend for CI and Linux nodes
 keyring>=25.0
 keyrings.alt>=5.0
