@@ -14,7 +14,7 @@
 set -e
 cd "$(dirname "$0")/../.."   # repo root
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 APP_NAME="TelescopeNetNode"
 DESKTOP_APP_NAME="TelescopeNet"
 BUNDLE_DIR="dist/${APP_NAME}.app"
