@@ -14,7 +14,7 @@
 set -e
 cd "$(dirname "$0")/../.."   # repo root
 
-VERSION="1.0.3"
+VERSION="1.0.4"
 APP_NAME="TelescopeNetNode"
 DESKTOP_APP_NAME="TelescopeNet"
 BUNDLE_DIR="dist/${APP_NAME}.app"
@@ -82,22 +82,42 @@ cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/com.teles
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-# ── Foreground UI app (Flutter preferred, else native WKWebView shell) ────────
+# ── Foreground UI = Flutter member app (NOT the Python node dashboard) ────────
+# The node agent HTML (dashboard.py) is a background service only.
+# Users must open TelescopeNet.app — the Flutter member control surface.
 HAS_DESKTOP_APP=0
 rm -rf "${DESKTOP_BUNDLE_DIR}"
+# Accept either product name from Flutter builds
+if [ ! -d "${FLUTTER_APP_SOURCE}" ]; then
+    for candidate in \
+        "app/build/macos/Build/Products/Release/TelescopeNet.app" \
+        "app/build/macos/Build/Products/Release/boundless_skies.app" \
+        "dist/TelescopeNet.app"
+    do
+        if [ -d "${candidate}" ]; then
+            FLUTTER_APP_SOURCE="${candidate}"
+            break
+        fi
+    done
+fi
 if [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" != "${DESKTOP_BUNDLE_DIR}" ]; then
-    echo "Using Flutter desktop app: ${FLUTTER_APP_SOURCE}"
+    echo "Using Flutter member app: ${FLUTTER_APP_SOURCE}"
     cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
+    # Normalize executable/display name expectations for open -a
+    HAS_DESKTOP_APP=1
+elif [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" = "${DESKTOP_BUNDLE_DIR}" ]; then
     HAS_DESKTOP_APP=1
 else
-    echo "Flutter app not at ${FLUTTER_APP_SOURCE} — building native WKWebView shell."
-    bash "${BUILD_DIR}/build_desktop_shell.sh" "${DESKTOP_BUNDLE_DIR}" "${VERSION}"
-    if [ -d "${DESKTOP_BUNDLE_DIR}" ]; then
-        HAS_DESKTOP_APP=1
-    else
-        echo "ERROR: failed to build TelescopeNet.app desktop shell"
-        exit 1
-    fi
+    echo "ERROR: Flutter member app not found."
+    echo "  Expected one of:"
+    echo "    app/build/macos/Build/Products/Release/TelescopeNet.app"
+    echo "    app/build/macos/Build/Products/Release/boundless_skies.app"
+    echo "    dist/TelescopeNet.app  (from CI artifact)"
+    echo "  Or set FLUTTER_APP_SOURCE=/path/to/TelescopeNet.app"
+    echo ""
+    echo "  Do NOT ship the Python dashboard HTML as the UI."
+    echo "  Build: cd app && flutter build macos --release --dart-define=API_BASE=https://api.thetelescope.net"
+    exit 1
 fi
 
 # ── Code signing ───────────────────────────────────────────────────────────────
