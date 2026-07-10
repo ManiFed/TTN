@@ -6,7 +6,6 @@ import '../models/models.dart';
 import '../models/node_status.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
-import '../widgets/aladin_sky.dart';
 import '../widgets/glass.dart';
 import 'target_detail_screen.dart';
 
@@ -244,14 +243,6 @@ class _DashboardViewState extends State<_DashboardView> {
                 setState(() => _selectedTargetName = name),
           ),
         );
-        final fieldPreview = _fadeUp(
-          2,
-          _FieldPreviewPanel(
-            plan: selectedPlan,
-            target: selectedTarget,
-            height: wide ? null : 300,
-          ),
-        );
         final targetPanel = _fadeUp(
           2,
           _SelectedTargetPanel(
@@ -300,8 +291,6 @@ class _DashboardViewState extends State<_DashboardView> {
                           const SizedBox(height: 10),
                           planPanel,
                           const SizedBox(height: 10),
-                          fieldPreview,
-                          const SizedBox(height: 10),
                           targetPanel,
                           const SizedBox(height: 10),
                           observations,
@@ -331,16 +320,7 @@ class _DashboardViewState extends State<_DashboardView> {
                   children: [
                     SizedBox(width: 258, child: telescopePanel),
                     const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(flex: 56, child: planPanel),
-                          const SizedBox(height: 10),
-                          Expanded(flex: 44, child: fieldPreview),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: planPanel),
                     const SizedBox(width: 10),
                     SizedBox(width: 326, child: targetPanel),
                   ],
@@ -636,120 +616,6 @@ class _ObservingPlanPanel extends StatelessWidget {
                 ),
               ),
       ),
-    );
-  }
-}
-
-class _FieldPreviewPanel extends StatelessWidget {
-  const _FieldPreviewPanel({
-    required this.plan,
-    required this.target,
-    this.height,
-  });
-
-  final TimelineItem? plan;
-  final Target? target;
-  final double? height;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasPointing = plan != null && (plan!.ra != 0 || plan!.dec != 0);
-    final label = plan?.target ?? target?.name ?? 'No target';
-    final body = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _WorkbenchHeader(
-          title: 'Field preview',
-          subtitle: hasPointing ? label : 'Waiting for pointing solution',
-          trailing: hasPointing ? '12° FoV · DSS2' : null,
-        ),
-        Expanded(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              AladinSky(
-                ra: hasPointing ? plan!.ra : null,
-                dec: hasPointing ? plan!.dec : null,
-                fov: 12,
-                targetLabel: label,
-                drift: !hasPointing,
-              ),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      BSTheme.night.withValues(alpha: 0.10),
-                      BSTheme.night.withValues(alpha: 0.55),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-              Center(
-                child: IgnorePointer(
-                  child: Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: BSTheme.accent.withValues(alpha: 0.64),
-                        width: 1.2,
-                      ),
-                    ),
-                    child: Center(
-                      child: Container(
-                        width: 5,
-                        height: 5,
-                        decoration: const BoxDecoration(
-                          color: BSTheme.accent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: 12,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        hasPointing
-                            ? 'RA ${_formatRa(plan!.ra)} · Dec ${_formatDec(plan!.dec)}'
-                            : 'Preview locks to active target when coordinates are available.',
-                        style: const TextStyle(
-                          fontFamily: 'Geist',
-                          fontSize: 11,
-                          color: BSTheme.ink2,
-                        ),
-                      ),
-                    ),
-                    if (hasPointing)
-                      const Text(
-                        'target overlay',
-                        style: TextStyle(
-                          fontFamily: 'Geist',
-                          fontSize: 10,
-                          color: BSTheme.ink3,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-
-    return _OpsPanel(
-      padding: EdgeInsets.zero,
-      child: height == null ? body : SizedBox(height: height, child: body),
     );
   }
 }
