@@ -6,6 +6,7 @@ dockerfilePath = "Dockerfile.website"
 watchPatterns = [
   "website/**",
   "Dockerfile.website",
+  "nginx.website.conf",
   "railway.website.toml",
 ]
 
