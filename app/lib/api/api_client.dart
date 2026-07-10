@@ -142,7 +142,9 @@ class ApiClient {
         .toList();
   }
 
-  Future<String> generateActivationCode({
+  /// Register/link a telescope to this member account (no activation codes).
+  /// Returns {node_id, api_key, linked}.
+  Future<Map<String, dynamic>> attachNode({
     String? locationName,
     double? lat,
     double? lon,
@@ -150,6 +152,8 @@ class ApiClient {
     String? telescopeDisplayName,
     Map<String, dynamic>? telescopeSpecs,
     bool portable = false,
+    String? existingNodeId,
+    String? existingApiKey,
   }) async {
     final body = <String, dynamic>{};
     if (lat != null && lon != null) {
@@ -169,8 +173,13 @@ class ApiClient {
       body['telescope_specs'] = telescopeSpecs;
     }
     if (portable) body['portable'] = true;
-    final json = await _post('/me/activation-code', body);
-    return json['code'] as String;
+    if (existingNodeId != null && existingNodeId.isNotEmpty) {
+      body['node_id'] = existingNodeId;
+    }
+    if (existingApiKey != null && existingApiKey.isNotEmpty) {
+      body['api_key'] = existingApiKey;
+    }
+    return _post('/me/nodes/attach', body);
   }
 
   /// Start tonight's observing session for a portable node.
@@ -210,10 +219,16 @@ class ApiClient {
   Future<Map<String, dynamic>> skyQuality(double lat, double lon) =>
       _get('/sky-quality', {'lat': lat, 'lon': lon});
 
-  Future<void> pushActivationCode(String pairingToken, String activationCode) =>
+  /// Push credentials to a local agent that is polling a pairing token.
+  Future<void> pushPairCredentials({
+    required String pairingToken,
+    required String nodeId,
+    required String apiKey,
+  }) =>
       _post('/nodes/pair', {
         'pairing_token': pairingToken.trim().toUpperCase(),
-        'activation_code': activationCode.trim().toUpperCase(),
+        'node_id': nodeId,
+        'api_key': apiKey,
       });
 
   Future<void> setNotificationPrefs({bool? email, bool? push, String? pushToken}) =>

@@ -253,160 +253,72 @@ def _pair_gc() -> None:
 @app.route("/api/v1/nodes/pair", methods=["POST"])
 @auth.require_member
 def api_pair_submit(user):
-    """App submits {pairing_token, activation_code} to push a code to a node."""
+    """App pushes node credentials to a pairing token the local agent is polling.
+
+    Body: {pairing_token, node_id, api_key}
+    (Activation codes are retired — credentials come from /me/nodes/attach.)
+    """
     body = request.get_json(force=True, silent=True) or {}
     token = str(body.get("pairing_token") or "").strip().upper()
-    code  = str(body.get("activation_code") or "").strip().upper()
-    if not token or not code:
-        return jsonify({"error": "pairing_token and activation_code required"}), 400
-    row = db.query_one("SELECT used_at FROM activation_codes WHERE code = %s", (code,))
-    if not row:
-        return jsonify({"error": "activation code not found"}), 404
-    if row.get("used_at"):
-        return jsonify({"error": "activation code already used"}), 409
+    node_id = str(body.get("node_id") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+    if not token or not node_id or not api_key:
+        return jsonify({"error": "pairing_token, node_id, and api_key required"}), 400
+    # Confirm the member owns this node (or just attached it).
+    if not db.query_one(
+        "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+        (node_id, user["user_id"]),
+    ):
+        return jsonify({"error": "not your node"}), 403
+    node = registry.authenticate(node_id, api_key)
+    if node is None:
+        return jsonify({"error": "invalid node credentials"}), 401
     _pair_gc()
     with _pair_lock:
-        _pair_store[token] = {"code": code, "expires_at": _time.time() + 1800}
-    logger.info("Pairing stored for token %s by member %s", token, user["user_id"])
+        _pair_store[token] = {
+            "node_id": node_id,
+            "api_key": api_key,
+            "expires_at": _time.time() + 1800,
+        }
+    logger.info("Pairing credentials stored for token %s by member %s → %s",
+                token, user["user_id"], node_id)
     return jsonify({"ok": True})
 
 @app.route("/api/v1/nodes/pair/<token>", methods=["GET"])
 def api_pair_claim(token):
-    """Node polls this to receive its activation code. Consumes the entry."""
+    """Node polls this to receive credentials. Consumes the entry."""
     token = token.strip().upper()
     _pair_gc()
     with _pair_lock:
         entry = _pair_store.pop(token, None)
     if not entry:
-        return jsonify({"code": None})
-    logger.info("Pairing claimed for token %s", token)
-    return jsonify({"code": entry["code"]})
+        return jsonify({"node_id": None, "api_key": None})
+    logger.info("Pairing claimed for token %s → %s", token, entry.get("node_id"))
+    return jsonify({"node_id": entry["node_id"], "api_key": entry["api_key"]})
 
 
 @app.route("/api/v1/nodes/register", methods=["POST"])
 def api_register():
+    """Anonymous/self registration for a node agent.
+
+    Does NOT link to a member account. Members link via POST /me/nodes/attach
+    (signed-in app) or POST /me/nodes/<id> (claim with credentials).
+    Activation codes are no longer accepted.
+    """
     info = request.get_json(force=True, silent=True) or {}
-    activation_code = str(info.pop("activation_code", "") or "").strip().upper()
-    code_row = None
-
-    # If the node hasn't set its own location/telescope, pull them from the
-    # activation code the member created in the app.
-    node_lat = float(info.get("latitude") or 0.0)
-    node_lon = float(info.get("longitude") or 0.0)
-    if activation_code:
-        code_row = db.query_one(
-            "SELECT *"
-            " FROM activation_codes WHERE code = %s",
-            (activation_code,),
-        )
-        if code_row is None:
-            return jsonify({"error": f"activation code not found: {activation_code}"}), 404
-        if code_row.get("used_at"):
-            # Idempotent retry window: when the code was consumed moments ago
-            # and is linked to a node, the registration response was most
-            # likely lost in transit (the node crashed or the connection
-            # dropped after the server committed).  Possession of the one-time
-            # code authorises recovering the same credentials; without this a
-            # lost response permanently bricks the member's activation.
-            retry = _activation_retry_credentials(code_row)
-            if retry is not None:
-                logger.warning(
-                    "Activation code %s re-presented within retry window — "
-                    "returning existing credentials for %s",
-                    activation_code, retry["node_id"])
-                return jsonify(retry)
-            return jsonify({"error": "activation code already used"}), 409
-        if code_row.get("expires_at") and code_row["expires_at"] < _now():
-            return jsonify({"error": "activation code expired"}), 410
-
-        if (node_lat == 0.0 and node_lon == 0.0
-                and code_row.get("latitude") and code_row.get("longitude")):
-            info["latitude"] = code_row["latitude"]
-            info["longitude"] = code_row["longitude"]
-            if not info.get("owner_name") and code_row.get("observatory_name"):
-                info["owner_name"] = code_row["observatory_name"]
-        # Backfill telescope specs only where the node left them unset, so a
-        # node that autodetected real ALPACA hardware always wins.
-        if code_row.get("telescope_model") and not info.get("telescope_model"):
-            info["telescope_model"] = code_row["telescope_model"]
-        if code_row.get("portable") and "portable" not in info:
-            info["portable"] = True
-        try:
-            specs = json.loads(code_row.get("telescope_specs") or "{}")
-        except (TypeError, ValueError):
-            specs = {}
-        for key, val in specs.items():
-            if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
-                continue
-            info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
-        # Contributor codes create tier-0 virtual nodes: survey uploads only,
-        # never scheduled by CHORUS.
-        if str(code_row.get("code_type") or "node") == "contributor":
-            info["contributor"] = True
+    if info.pop("activation_code", None):
+        return jsonify({
+            "error": "activation codes are retired — sign in to the app and "
+                     "use Connect telescope to link this computer",
+        }), 410
 
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
     except ValueError as exc:
-        # If a valid activation code is present and the only problem is that
-        # this node_id was previously registered with different credentials,
-        # hand back the existing credentials so the node can reconnect.
-        if activation_code and "different API key" in str(exc):
-            existing = db.query_one(
-                "SELECT node_id, api_key FROM nodes WHERE node_id = %s",
-                (info.get("node_id", ""),),
-            )
-            if existing:
-                creds = {"node_id": existing["node_id"], "api_key": existing["api_key"]}
-            else:
-                return jsonify({"error": str(exc)}), 400
-        else:
-            return jsonify({"error": str(exc)}), 400
-
-    # Consume the activation code and link the node to the member account
-    if activation_code:
-        try:
-            user_id = _validate_and_consume_code(activation_code, creds["node_id"])
-        except ValueError as exc:
-            logger.warning("Activation code race for %s: %s", creds["node_id"], exc)
-            return jsonify({"error": str(exc)}), 409
-        display_name = str(code_row.get("telescope_display_name") or "").strip() if code_row else ""
-        if user_id and not db.query_one(
-            "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
-            (creds["node_id"], user_id),
-        ):
-            db.execute(
-                "INSERT INTO node_members (node_id, user_id, claimed_at, display_name)"
-                " VALUES (%s,%s,%s,%s)",
-                (creds["node_id"], user_id, _now(), display_name),
-            )
-        logger.info("Activation code %s consumed — node %s linked to user %s",
-                    activation_code, creds["node_id"], user_id or "(generic)")
+        return jsonify({"error": str(exc)}), 400
 
     return jsonify(creds)
-
-
-_ACTIVATION_RETRY_WINDOW_S = 900
-
-
-def _activation_retry_credentials(code_row: dict) -> dict | None:
-    """Existing creds for a just-consumed activation code, or None."""
-    used_at = str(code_row.get("used_at") or "")
-    linked_node = str(code_row.get("node_id") or "")
-    if not used_at or not linked_node:
-        return None
-    try:
-        age = (datetime.now(timezone.utc)
-               - datetime.fromisoformat(used_at)).total_seconds()
-    except ValueError:
-        return None
-    if age < 0 or age > _ACTIVATION_RETRY_WINDOW_S:
-        return None
-    existing = db.query_one(
-        "SELECT node_id, api_key FROM nodes WHERE node_id = %s", (linked_node,))
-    if not existing:
-        return None
-    return {"node_id": existing["node_id"], "api_key": existing["api_key"]}
 
 
 @app.route("/api/v1/nodes/characterization", methods=["POST"])
@@ -1506,6 +1418,108 @@ def api_me_claim_node(user, node_id):
     return jsonify({"ok": True, "node_id": node_id})
 
 
+@app.route("/api/v1/me/nodes/attach", methods=["POST"])
+@auth.require_member
+def api_me_attach_node(user):
+    """Link a telescope to the signed-in member (replaces activation codes).
+
+    Body (same fields the old activation-code form collected):
+      latitude, longitude, location_name / owner_name,
+      telescope_model, telescope_display_name, telescope_specs, portable
+
+    Optionally pass existing node_id + api_key to claim an already-registered
+    agent without creating a new cloud row.
+
+    Returns {node_id, api_key} for the desktop app to install on the local agent.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+
+    existing_id = str(body.get("node_id") or "").strip()
+    existing_key = str(body.get("api_key") or "").strip()
+    if existing_id and existing_key:
+        node = registry.authenticate(existing_id, existing_key)
+        if node is None:
+            return jsonify({"error": "invalid node credentials"}), 401
+        display_name = str(body.get("telescope_display_name") or "").strip()[:80]
+        if not db.query_one(
+            "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+            (existing_id, user["user_id"]),
+        ):
+            db.execute(
+                "INSERT INTO node_members (node_id, user_id, claimed_at, display_name)"
+                " VALUES (%s,%s,%s,%s)",
+                (existing_id, user["user_id"], _now(), display_name),
+            )
+        elif display_name:
+            db.execute(
+                "UPDATE node_members SET display_name = %s"
+                " WHERE node_id = %s AND user_id = %s",
+                (display_name, existing_id, user["user_id"]),
+            )
+        logger.info("Member %s attached existing node %s", user["user_id"], existing_id)
+        return jsonify({"node_id": existing_id, "api_key": existing_key, "linked": True})
+
+    try:
+        lat = float(body.get("latitude"))
+        lon = float(body.get("longitude"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "latitude and longitude are required"}), 400
+    if lat == 0.0 and lon == 0.0:
+        return jsonify({"error": "latitude and longitude are required"}), 400
+
+    location_name = str(
+        body.get("location_name") or body.get("owner_name") or ""
+    ).strip()
+    telescope_model = str(body.get("telescope_model") or "").strip() or "Unknown"
+    telescope_display_name = str(body.get("telescope_display_name") or "").strip()[:80]
+    portable = bool(body.get("portable"))
+
+    info: dict = {
+        "latitude": lat,
+        "longitude": lon,
+        "owner_name": location_name,
+        "telescope_model": telescope_model,
+        "telescope_name": telescope_display_name or telescope_model,
+        "portable": portable,
+    }
+
+    specs = dict(body.get("telescope_specs") or {})
+    if telescope_model:
+        try:
+            from src import telescope_specs as _ts
+            spec = _ts.lookup(telescope_model)
+            if spec is not None:
+                info["telescope_model"] = spec.display_name
+                merged = _ts.derive_params(spec)
+                merged.update({k: v for k, v in specs.items() if v not in (None, "")})
+                specs = merged
+        except Exception as exc:
+            logger.debug("telescope_specs lookup skipped: %s", exc)
+    for key, val in specs.items():
+        if val in (None, "") or info.get(key) not in (None, "", 0, 0.0):
+            continue
+        info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
+
+    try:
+        creds = registry.register_node(
+            info, _config.get("light_pollution", {}).get("api_key", ""))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not db.query_one(
+        "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+        (creds["node_id"], user["user_id"]),
+    ):
+        db.execute(
+            "INSERT INTO node_members (node_id, user_id, claimed_at, display_name)"
+            " VALUES (%s,%s,%s,%s)",
+            (creds["node_id"], user["user_id"], _now(), telescope_display_name),
+        )
+    logger.info("Member %s attached new node %s (%s)",
+                user["user_id"], creds["node_id"], telescope_model)
+    return jsonify({**creds, "linked": True})
+
+
 def _assert_owns_node(user_id: str, node_id: str) -> bool:
     return bool(db.query_one(
         "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
@@ -1853,67 +1867,11 @@ def api_me_notification_read(user, notif_id):
 @app.route("/api/v1/me/activation-code", methods=["POST"])
 @auth.require_member
 def api_me_generate_activation_code(user):
-    """
-    Generate a personal activation code for the logged-in member.
-    Used during the installer flow to link a new node to the account.
-
-    Optional body: {"location_name": "Starfront Observatories, Rockwood TX"}
-    The location is geocoded and stored with the code so that the node
-    automatically gets coordinates at registration even if it hasn't set them.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    location_name = str(body.get("location_name") or "").strip()
-    body_lat = body.get("latitude")
-    body_lon = body.get("longitude")
-
-    lat, lon = None, None
-    if body_lat is not None and body_lon is not None:
-        try:
-            lat = float(body_lat)
-            lon = float(body_lon)
-        except (TypeError, ValueError):
-            return jsonify({"error": "Invalid latitude or longitude."}), 400
-    elif location_name:
-        lat, lon = _geocode_location(location_name)
-        if lat is None:
-            return jsonify({"error": f"Could not find location: {location_name}"}), 400
-
-    # Telescope chosen in the app's connect flow.  We store the model name and,
-    # when the model is in the catalog, the full derived spec set so the node
-    # registers with correct optics even if it can't autodetect them.
-    telescope_model = str(body.get("telescope_model") or "").strip()
-    telescope_specs_json = "{}"
-    if telescope_model:
-        from src import telescope_specs as _ts
-        spec = _ts.lookup(telescope_model)
-        specs = dict(body.get("telescope_specs") or {})
-        if spec is not None:
-            telescope_model = spec.display_name
-            # Catalog-derived params as the base; client-supplied custom specs win.
-            merged = _ts.derive_params(spec)
-            merged.update({k: v for k, v in specs.items() if v not in (None, "")})
-            specs = merged
-        telescope_specs_json = json.dumps(specs)
-
-    portable = 1 if body.get("portable") else 0
-    telescope_display_name = str(body.get("telescope_display_name") or "").strip()[:80]
-    code_type = ("contributor"
-                 if str(body.get("code_type") or "") == "contributor" else "node")
-
-    code = _generate_activation_code()
-    expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-    db.execute(
-        "INSERT INTO activation_codes"
-        " (code, user_id, created_at, expires_at, observatory_name, latitude, longitude,"
-        "  telescope_model, telescope_specs, portable, telescope_display_name, code_type)"
-        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        (code, user["user_id"], _now(), expires, location_name, lat, lon,
-         telescope_model, telescope_specs_json, portable, telescope_display_name,
-         code_type),
-    )
-    logger.info("Activation code generated for member %s: %s (location: %s, portable: %s)",
-                user["user_id"], code, location_name or "not set", bool(portable))
-    return jsonify({"code": code, "expires_at": expires})
+    """Retired. Use POST /api/v1/me/nodes/attach instead."""
+    return jsonify({
+        "error": "activation codes are retired — use Connect telescope in the app "
+                 "(POST /api/v1/me/nodes/attach)",
+    }), 410
 
 
 # ── Open contribution: browser FITS uploads ───────────────────────────────────
@@ -2117,22 +2075,10 @@ def api_me_contributions(user):
 @app.route("/api/v1/admin/activation-codes", methods=["POST"])
 @require_admin
 def api_admin_generate_code():
-    """Generate activation codes in bulk (admin). Optional user_id links them."""
-    body = request.get_json(force=True, silent=True) or {}
-    n = min(int(body.get("count", 1)), 100)
-    user_id = body.get("user_id")
-    days = int(body.get("expires_days", 90))
-    expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-    codes = []
-    for _ in range(n):
-        code = _generate_activation_code()
-        db.execute(
-            "INSERT INTO activation_codes (code, user_id, created_at, expires_at)"
-            " VALUES (%s,%s,%s,%s)",
-            (code, user_id, _now(), expires),
-        )
-        codes.append(code)
-    return jsonify({"codes": codes, "expires_at": expires})
+    """Retired — activation codes no longer exist."""
+    return jsonify({
+        "error": "activation codes are retired — members use POST /me/nodes/attach",
+    }), 410
 
 
 @app.route("/api/v1/me/science-program-suggestions", methods=["POST"])

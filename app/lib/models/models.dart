@@ -281,7 +281,7 @@ class TelescopeSpec {
         cameraModel: _asStr(j['camera_model']),
       );
 
-  /// The custom-spec payload sent with the activation code (only set fields).
+  /// The custom-spec payload sent with attach/register (only set fields).
   Map<String, dynamic> toSpecPayload() => {
         if (apertureMm > 0) 'aperture_mm': apertureMm,
         if (focalLengthMm > 0) 'focal_length_mm': focalLengthMm,

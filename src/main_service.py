@@ -83,7 +83,8 @@ def _prepare_data_dir(data_dir: pathlib.Path) -> None:
             "cloud:\n"
             "  enabled: true\n"
             "  url: 'https://api.thetelescope.net'\n"
-            "  activation_code: ''\n",
+            "  node_id: ''\n"
+            "  api_key: ''\n",
             encoding="utf-8",
         )
     try:

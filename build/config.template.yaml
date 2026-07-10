@@ -100,9 +100,10 @@ cloud:
   enabled: true
   url: 'https://api.thetelescope.net'
   realtime_url: 'https://realtime.thetelescope.net'  # SSE push gateway (blank = poll only)
-  activation_code: ''
-  node_id: ''             # set automatically after first registration
-  api_key: ''             # set automatically after first registration
+  # Credentials come from The Telescope Net app → Connect telescope
+  # (POST /api/v1/me/nodes/attach). No activation codes.
+  node_id: ''             # set automatically when linked
+  api_key: ''             # set automatically when linked
   heartbeat_interval: 60
   heartbeat_fast_interval: 5     # fast cadence while observing (dark/exposing)
   plan_poll_interval: 300

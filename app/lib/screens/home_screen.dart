@@ -609,7 +609,7 @@ class _SetupWallState extends State<_SetupWall> {
       icon: Icons.link_outlined,
       label: 'Connect your telescope',
       detail:
-          'Come back here and tap "Connect telescope" to link your account.',
+          'Tap Connect telescope — no activation code. Linking is one button.',
     ),
   ];
 
@@ -628,7 +628,7 @@ class _SetupWallState extends State<_SetupWall> {
       icon: Icons.link_outlined,
       label: 'Come back here and tap Connect',
       detail:
-          'Tap "Connect telescope" below to get a code, then enter it in the Node tab of this app.',
+          'Tap Connect telescope to link this computer to your account. No code to copy.',
     ),
   ];
 

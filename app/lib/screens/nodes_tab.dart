@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
+import '../api/node_agent_client.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
@@ -1848,7 +1849,6 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
   final _scopeCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
-  String? _code;
   bool _busy = false;
   bool _locating = false;
   String? _error;
@@ -1856,9 +1856,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   double? _lon;
   String? _resolvedLocation;
   List<Map<String, dynamic>> _locationResults = [];
-  bool _pushed = false;
-  bool _pushing = false;
-  bool _codeCopied = false;
+  bool _linked = false;
   _LocStep _step = _LocStep.idle;
 
   // Telescope
@@ -2015,13 +2013,14 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
   }
 
-  Future<void> _generate() async {
+  Future<void> _link() async {
     final location = _locationCtrl.text.trim();
-    setState(() { _busy = true; _error = null; _code = null; _codeCopied = false; });
+    setState(() { _busy = true; _error = null; _linked = false; });
     try {
       final scopeModel =
           _scopeIsCustom ? _scopeCtrl.text.trim() : _selectedScope?.displayName;
-      final code = await context.read<AppState>().api.generateActivationCode(
+      final api = context.read<AppState>().api;
+      final creds = await api.attachNode(
             locationName: location.isEmpty ? null : location,
             lat: _lat,
             lon: _lon,
@@ -2032,7 +2031,34 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             telescopeSpecs: _selectedScope?.toSpecPayload(),
             portable: _portable ?? false,
           );
-      if (mounted) setState(() { _busy = false; _code = code; });
+      final nodeId = creds['node_id'] as String? ?? '';
+      final apiKey = creds['api_key'] as String? ?? '';
+      if (nodeId.isEmpty || apiKey.isEmpty) {
+        throw Exception('Cloud did not return node credentials.');
+      }
+      // Install credentials on the local node agent when it's running.
+      try {
+        final agent = NodeAgentClient();
+        final status = await agent.status();
+        await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
+        final pair = status.pairToken;
+        if (pair != null && pair.isNotEmpty) {
+          // Also stash for any other agent polling this pair token.
+          try {
+            await api.pushPairCredentials(
+              pairingToken: pair,
+              nodeId: nodeId,
+              apiKey: apiKey,
+            );
+          } catch (_) {}
+        }
+      } on NodeAgentException {
+        // Local agent may not be running yet — credentials are still on the
+        // cloud account; user can reopen Connect later once the service is up.
+      }
+      if (!mounted) return;
+      await context.read<AppState>().refreshNodes();
+      if (mounted) setState(() { _busy = false; _linked = true; });
     } catch (e) {
       if (mounted) setState(() { _busy = false; _error = '$e'; });
     }
@@ -2062,7 +2088,24 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           ),
           Text('Connect a telescope', style: tt.headlineSmall),
           const SizedBox(height: 10),
-          if (_code == null) ...[
+          if (_linked) ...[
+            const Icon(Icons.check_circle_outline,
+                color: BSTheme.success, size: 48),
+            const SizedBox(height: 16),
+            Text('Telescope connected!', style: tt.titleLarge),
+            const SizedBox(height: 8),
+            Text(
+              'This telescope is linked to your account. '
+              'Credentials were installed on the local node service when available.',
+              style: tt.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Done'),
+            ),
+          ] else ...[
             ..._buildScopeSection(tt),
             if (_scopeStep == _ScopeStep.confirmed) ...[
               const SizedBox(height: 20),
@@ -2087,25 +2130,23 @@ class _ClaimSheetState extends State<_ClaimSheet> {
               const SizedBox(height: 20),
               ..._buildLocationSection(tt),
             ],
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!,
+                  style:
+                      const TextStyle(color: BSTheme.danger, fontSize: 13)),
+            ],
+            const SizedBox(height: 16),
+            if (_busy)
+              const Center(child: CircularProgressIndicator())
+            else if (_scopeStep == _ScopeStep.confirmed &&
+                _portable != null &&
+                _step == _LocStep.confirmed)
+              FilledButton(
+                onPressed: _link,
+                child: const Text('Link this computer'),
+              ),
           ],
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            Text(_error!,
-                style:
-                    const TextStyle(color: BSTheme.danger, fontSize: 13)),
-          ],
-          const SizedBox(height: 16),
-          if (_code != null)
-            ..._buildCodeSection(tt, context)
-          else if (_busy)
-            const Center(child: CircularProgressIndicator())
-          else if (_scopeStep == _ScopeStep.confirmed &&
-              _portable != null &&
-              _step == _LocStep.confirmed)
-            FilledButton(
-              onPressed: _generate,
-              child: const Text('Get activation code'),
-            ),
           const SizedBox(height: 8),
         ],
       ),
@@ -2556,128 +2597,8 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     }
   }
 
-  Future<void> _checkConnected() async {
-    setState(() { _pushing = true; _error = null; });
-    try {
-      final nodes = await context.read<AppState>().api.nodes();
-      if (!mounted) return;
-      if (nodes.isNotEmpty) {
-        setState(() { _pushed = true; _pushing = false; });
-      } else {
-        setState(() {
-          _pushing = false;
-          _error = 'Not linked yet. Enter the code in the node software, wait a moment, then try again.';
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() { _pushing = false; _error = '$e'; });
-    }
-  }
-
-  List<Widget> _buildCodeSection(TextTheme tt, BuildContext context) {
-    if (_pushed) {
-      return [
-        const Icon(Icons.check_circle_outline,
-            color: BSTheme.success, size: 48),
-        const SizedBox(height: 16),
-        Text('Telescope connected!', style: tt.titleLarge),
-        const SizedBox(height: 8),
-        Text(
-          'Your telescope is now linked to your account.',
-          style: tt.bodyMedium,
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 20),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Done'),
-        ),
-      ];
-    }
-
-    return [
-      Text('Your activation code', style: tt.titleMedium),
-      const SizedBox(height: 8),
-      Text(
-        'In The Telescope Net app on this computer, open the Node tab and tap '
-        '“Enter activation code”, then paste this code to link the telescope. '
-        'Nothing opens automatically until you request it.',
-        style: tt.bodyMedium,
-      ),
-      const SizedBox(height: 20),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: BSTheme.glassBg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: BSTheme.glassBorder),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _code!,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: BSTheme.accent,
-                  letterSpacing: 3,
-                ),
-              ),
-            ),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: IconButton(
-                key: ValueKey(_codeCopied),
-                onPressed: _codeCopied ? null : () {
-                  Clipboard.setData(ClipboardData(text: _code!));
-                  setState(() => _codeCopied = true);
-                },
-                icon: Icon(
-                  _codeCopied ? Icons.check_circle : Icons.copy_outlined,
-                  size: 18,
-                  color: _codeCopied ? BSTheme.success : null,
-                ),
-                tooltip: _codeCopied ? 'Copied!' : 'Copy',
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 6),
-      Text(
-        'Valid for 30 days. Keep it private.',
-        style: tt.bodySmall?.copyWith(color: BSTheme.ink3),
-      ),
-      const SizedBox(height: 20),
-      if (_pushing)
-        const Center(child: CircularProgressIndicator())
-      else
-        FilledButton.icon(
-          onPressed: _checkConnected,
-          icon: const Icon(Icons.refresh_outlined, size: 18),
-          label: const Text('I\'ve pasted it — check connection'),
-        ),
-      const SizedBox(height: 16),
-      OutlinedButton.icon(
-        onPressed: () => setState(() {
-          _code = null;
-          _error = null;
-          _pushed = false;
-          _pushing = false;
-          _codeCopied = false;
-          _resetLocation();
-          _locationCtrl.clear();
-          _resetScope();
-          _scopeCtrl.clear();
-          _nameCtrl.clear();
-        }),
-        icon: const Icon(Icons.arrow_back, size: 16),
-        label: const Text('Start over'),
-      ),
-    ];
-  }
 }
+
 
 // ── Shared small widgets ──────────────────────────────────────────────────────
 

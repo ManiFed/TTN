@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../api/node_agent_client.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
+import 'nodes_tab.dart' show showClaimSheet;
 
 /// The local control surface for the always-on Python node service.
 class NodeAgentTab extends StatefulWidget {
@@ -16,13 +18,9 @@ class NodeAgentTab extends StatefulWidget {
 
 class _NodeAgentTabState extends State<NodeAgentTab> {
   final _client = NodeAgentClient();
-  final _codeCtrl = TextEditingController();
   Timer? _poller;
   NodeAgentStatus? _status;
   String? _error;
-  String? _activateError;
-  bool _activating = false;
-  bool _showActivateForm = false;
 
   @override
   void initState() {
@@ -34,20 +32,13 @@ class _NodeAgentTabState extends State<NodeAgentTab> {
   @override
   void dispose() {
     _poller?.cancel();
-    _codeCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _refresh() async {
     try {
       final status = await _client.status();
-      if (mounted) {
-        setState(() {
-          _status = status;
-          _error = null;
-          if (status.cloudRegistered) _showActivateForm = false;
-        });
-      }
+      if (mounted) setState(() { _status = status; _error = null; });
     } on NodeAgentException catch (error) {
       if (mounted) setState(() { _error = error.message; _status = null; });
     } catch (_) {
@@ -60,39 +51,11 @@ class _NodeAgentTabState extends State<NodeAgentTab> {
     }
   }
 
-  Future<void> _activate() async {
-    setState(() {
-      _activating = true;
-      _activateError = null;
-    });
-    try {
-      await _client.activate(_codeCtrl.text);
-      if (!mounted) return;
-      setState(() {
-        _activating = false;
-        _showActivateForm = false;
-        _codeCtrl.clear();
-      });
+  Future<void> _connectTelescope() async {
+    final ok = await showClaimSheet(context);
+    if (ok && mounted) {
+      context.read<AppState>().refreshNodes();
       await _refresh();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Telescope linked to your account.')),
-        );
-      }
-    } on NodeAgentException catch (e) {
-      if (mounted) {
-        setState(() {
-          _activating = false;
-          _activateError = e.message;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _activating = false;
-          _activateError = '$e';
-        });
-      }
     }
   }
 
@@ -130,109 +93,20 @@ class _NodeAgentTabState extends State<NodeAgentTab> {
             _MetricGrid(status: status),
             if (!status.cloudRegistered) ...[
               const SizedBox(height: 20),
-              if (!_showActivateForm)
-                FilledButton.icon(
-                  onPressed: () => setState(() => _showActivateForm = true),
-                  icon: const Icon(Icons.key_outlined),
-                  label: const Text('Enter activation code'),
-                )
-              else
-                _ActivateCard(
-                  controller: _codeCtrl,
-                  busy: _activating,
-                  error: _activateError,
-                  onSubmit: _activate,
-                  onCancel: () => setState(() {
-                    _showActivateForm = false;
-                    _activateError = null;
-                  }),
-                ),
+              FilledButton.icon(
+                onPressed: _connectTelescope,
+                icon: const Icon(Icons.link),
+                label: const Text('Connect telescope'),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Sign-in is already done. Connect telescope links this computer '
+                'to your account — no activation code.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ],
         ],
-      ),
-    );
-  }
-}
-
-class _ActivateCard extends StatelessWidget {
-  const _ActivateCard({
-    required this.controller,
-    required this.busy,
-    required this.error,
-    required this.onSubmit,
-    required this.onCancel,
-  });
-
-  final TextEditingController controller;
-  final bool busy;
-  final String? error;
-  final VoidCallback onSubmit;
-  final VoidCallback onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Link this computer',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Paste the activation code from Telescopes → Connect telescope. '
-              'Only open this form when you are ready to enter a code.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              enabled: !busy,
-              textCapitalization: TextCapitalization.characters,
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9\-]')),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'Activation code',
-                hintText: 'BS-2024-XXXXXXXX',
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: (_) => onSubmit(),
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 10),
-              Text(error!, style: const TextStyle(color: BSTheme.danger)),
-            ],
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: busy ? null : onCancel,
-                    child: const Text('Cancel'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: busy ? null : onSubmit,
-                    child: busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Connect'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -285,7 +159,7 @@ class _StatusCard extends StatelessWidget {
         ? (online ? 'Node online' : 'Setup or reconnect needed')
         : 'Not linked to your account yet';
     final detail = !status.cloudRegistered
-        ? 'Tap “Enter activation code” when you have a code from Connect telescope.'
+        ? 'Tap Connect telescope to link this computer to your account.'
         : status.commissioningStatus == null
             ? 'Local service responding.'
             : 'Commissioning: ${status.commissioningStatus}.';

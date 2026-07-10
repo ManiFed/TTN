@@ -20,8 +20,6 @@ DATA_DIR="/Library/Application Support/TelescopeNet/NodeAgent"
 LOG_DIR="/Library/Logs/TelescopeNet"
 PLIST_SRC="${APP_DIR}/Contents/Resources/com.telescopenet.nodeagent.plist"
 PLIST_DEST="/Library/LaunchDaemons/com.telescopenet.nodeagent.plist"
-ACTIVATION_CODE="${BS_ACTIVATION_CODE:-}"    # Optional: supplied by scripted installs
-
 echo "=== The Telescope Net Node Agent — postinstall ==="
 
 # ── Create directories ─────────────────────────────────────────────────────────
@@ -48,17 +46,12 @@ if [ ! -f "${CONFIG}" ]; then
 cloud:
   enabled: true
   url: 'https://api.thetelescope.net'
-  activation_code: ''
 YAML
     else
         cp "${TEMPLATE}" "${CONFIG}"
-        if [ -n "${ACTIVATION_CODE}" ]; then
-            sed -i '' "s/ACTIVATION_CODE_PLACEHOLDER/${ACTIVATION_CODE}/g" "${CONFIG}"
-            echo "Activation code written to config.yaml"
-        else
-            sed -i '' "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}"
-            echo "No activation code supplied — dashboard setup will ask for one"
-        fi
+        # Strip any leftover legacy activation-code placeholders.
+        sed -i '' "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}" 2>/dev/null || true
+        echo "Config seeded — link from The Telescope Net app → Connect telescope"
     fi
     chmod 600 "${CONFIG}"
 fi

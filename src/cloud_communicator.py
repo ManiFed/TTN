@@ -155,10 +155,8 @@ class CloudCommunicator:
             print(
                 "\n  ┌─────────────────────────────────────────────┐\n"
                 "  │  Not yet linked to The Telescope Net.       │\n"
-                "  │  Open the app, create an activation         │\n"
-                "  │  code, then paste it into the dashboard:    │\n"
-                "  │                                             │\n"
-                "  │      http://localhost:5173                  │\n"
+                "  │  Open The Telescope Net app, sign in,       │\n"
+                f"  │  Connect telescope (pair: {self._pair_token:12s}) │\n"
                 "  └─────────────────────────────────────────────┘\n",
                 flush=True,
             )
@@ -241,10 +239,6 @@ class CloudCommunicator:
         # this node's optics & sensor.  Ground-truth order: live ALPACA device →
         # spec catalog (by model name) → leave to the cloud's column defaults.
         payload.update(self._telescope_payload())
-        # Include activation code on first boot if present in config
-        activation_code = str(cloud_cfg.get("activation_code", "") or "").strip()
-        if activation_code:
-            payload["activation_code"] = activation_code
         try:
             resp = self._post("/api/v1/nodes/register", payload, auth=False)
         except Exception as exc:
@@ -262,28 +256,22 @@ class CloudCommunicator:
             return False
         self._register_failures = 0
         self._register_next_attempt = 0.0
-        self._node_id = resp["node_id"]
-        self._api_key = resp["api_key"]
-        self._save_state()
-        self.status["registered"] = True
-        self.status["node_id"] = self._node_id
-        self.status["error"] = None
-        if activation_code:
-            self._clear_activation_code()
-        logger.info("Registered with cloud as %s", self._node_id)
+        self.install_credentials(resp["node_id"], resp["api_key"])
+        logger.info("Registered with cloud as %s (unlinked — use app Connect telescope)",
+                    self._node_id)
         self._telemetry_event("registered", "info", {"node_id": self._node_id})
         return True
 
-    def _clear_activation_code(self) -> None:
-        """Remove the one-time activation code after successful registration."""
-        try:
-            from src.config_patch import apply_config_patch
-            apply_config_patch({"cloud": {"activation_code": ""}})
-        except Exception as exc:
-            logger.warning("Could not clear activation code from config: %s", exc)
-            return
-        self._config.setdefault("cloud", {})["activation_code"] = ""
-        logger.info("Activation code cleared from config after successful registration")
+    def install_credentials(self, node_id: str, api_key: str) -> None:
+        """Install cloud credentials from the signed-in member app (or register)."""
+        self._node_id = str(node_id or "").strip()
+        self._api_key = str(api_key or "").strip()
+        self._save_state()
+        self.status["registered"] = bool(self._node_id and self._api_key)
+        self.status["node_id"] = self._node_id
+        self.status["error"] = None
+        self._register_failures = 0
+        self._register_next_attempt = 0.0
 
     def _load_state(self) -> None:
         """Credentials persisted from a previous auto-registration win over
@@ -310,14 +298,23 @@ class CloudCommunicator:
             self._save_state()
 
     def _save_state(self) -> None:
+        # Prefer keyring for api_key. If unavailable (CI / sandboxed install),
+        # fall back to cloud_state.json so a restart does not re-register.
+        key_in_keyring = False
+        if self._api_key:
+            try:
+                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, self._api_key)
+                key_in_keyring = True
+            except keyring.errors.KeyringError as exc:
+                logger.warning("Could not persist api_key to keyring: %s", exc)
+        payload = {"node_id": self._node_id, "pair_token": self._pair_token}
+        if self._api_key and not key_in_keyring:
+            payload["api_key"] = self._api_key
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
-            if self._api_key:
-                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, self._api_key)
-            _STATE_FILE.write_text(json.dumps(
-                {"node_id": self._node_id, "pair_token": self._pair_token}, indent=2))
-        except (OSError, keyring.errors.KeyringError) as exc:
-            logger.warning("Could not persist cloud state securely: %s", exc)
+            _STATE_FILE.write_text(json.dumps(payload, indent=2))
+        except OSError as exc:
+            logger.warning("Could not persist cloud_state.json: %s", exc)
 
     # ── HTTP helpers ───────────────────────────────────────────────────────────
 
@@ -472,7 +469,7 @@ class CloudCommunicator:
     # ── Pairing loop (pre-registration only) ──────────────────────────────────
 
     def _pair_loop(self) -> None:
-        """Poll the cloud for an activation code submitted by the app."""
+        """Poll the cloud for credentials pushed by the signed-in member app."""
         while not self._stop.is_set():
             if self._node_id and self._api_key:
                 break  # already registered — exit this loop
@@ -483,32 +480,16 @@ class CloudCommunicator:
                     timeout=15,
                 )
                 if resp.status_code == 200:
-                    code = resp.json().get("code")
-                    if code:
-                        self._apply_paired_code(code)
+                    data = resp.json()
+                    node_id = data.get("node_id")
+                    api_key = data.get("api_key")
+                    if node_id and api_key:
+                        self.install_credentials(node_id, api_key)
+                        logger.info("Credentials received via pairing → %s", node_id)
                         break
             except Exception as exc:
                 logger.debug("Pair poll failed: %s", exc)
             self._stop.wait(30)
-
-    def _apply_paired_code(self, code: str) -> None:
-        """Save the activation code to config and trigger immediate registration."""
-        patch = {"cloud": {"activation_code": code, "enabled": True}}
-        try:
-            existing = self._config.get("cloud", {}).get("url", "")
-            if not existing:
-                patch["cloud"]["url"] = self._url
-            from src.config_patch import apply_config_patch
-            apply_config_patch(patch)
-            logger.info("Activation code received via pairing and saved to config.yaml")
-        except Exception as exc:
-            logger.warning("Could not write activation code to config: %s", exc)
-        self._config.setdefault("cloud", {})["activation_code"] = code
-        self._config["cloud"]["enabled"] = True
-        # A fresh code means any previous failure/backoff no longer applies.
-        self._register_failures = 0
-        self._register_next_attempt = 0.0
-        self._ensure_registered()
 
     # ── Plan / interrupt polling ───────────────────────────────────────────────
 

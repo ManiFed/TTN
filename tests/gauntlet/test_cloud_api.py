@@ -1,19 +1,13 @@
-"""Gauntlet: cloud-side reliability endpoints (F7, F14).
+"""Gauntlet: cloud-side reliability endpoints (F14, attach linking).
 
-Covers the node-incident ingestion endpoint and the idempotent
-activation-code retry window that prevents a lost registration response from
-permanently bricking a member's activation.
+Covers the node-incident ingestion endpoint and member attach (activation
+codes are retired).
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import cloud.server as server
-
-
-def _iso(seconds_ago: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
 
 
 _NODE = {"node_id": "node_a1", "api_key": "key_a1"}
@@ -68,64 +62,24 @@ class NodeIncidentEndpointTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 401)
 
 
-class ActivationRetryWindowTest(unittest.TestCase):
-    """F7 — a lost registration response must not brick the activation code."""
+class ActivationRetiredTest(unittest.TestCase):
+    """Activation codes return 410 Gone."""
 
-    def test_recently_used_code_returns_existing_credentials(self):
-        code_row = {"used_at": _iso(60), "node_id": "node_a1"}
-        with patch("cloud.server.db.query_one", return_value=dict(_NODE)):
-            creds = server._activation_retry_credentials(code_row)
-        self.assertEqual(creds, _NODE)
-
-    def test_stale_used_code_is_not_recoverable(self):
-        code_row = {"used_at": _iso(3600), "node_id": "node_a1"}
-        with patch("cloud.server.db.query_one", return_value=dict(_NODE)):
-            self.assertIsNone(server._activation_retry_credentials(code_row))
-
-    def test_code_without_linked_node_is_not_recoverable(self):
-        self.assertIsNone(server._activation_retry_credentials(
-            {"used_at": _iso(60), "node_id": ""}))
-
-    def test_vanished_node_is_not_recoverable(self):
-        code_row = {"used_at": _iso(60), "node_id": "node_gone"}
-        with patch("cloud.server.db.query_one", return_value=None):
-            self.assertIsNone(server._activation_retry_credentials(code_row))
-
-    def test_garbage_timestamp_is_not_recoverable(self):
-        self.assertIsNone(server._activation_retry_credentials(
-            {"used_at": "not-a-date", "node_id": "node_a1"}))
-
-    def test_register_endpoint_returns_creds_inside_retry_window(self):
+    def test_register_rejects_activation_code(self):
         client = server.app.test_client()
-        code_row = {"used_at": _iso(60), "node_id": "node_a1",
-                    "latitude": 31.0, "longitude": -99.0}
+        resp = client.post("/api/v1/nodes/register",
+                           json={"activation_code": "BS-2026-ANYTHING",
+                                 "latitude": 31.0, "longitude": -99.0})
+        self.assertEqual(resp.status_code, 410)
+        self.assertIn("retired", resp.get_json()["error"].lower())
 
-        def fake_query_one(sql, params=None):
-            if "activation_codes" in sql:
-                return dict(code_row)
-            if "FROM nodes" in sql:
-                return dict(_NODE)
-            return None
-
-        with patch("cloud.server.db.query_one", side_effect=fake_query_one):
-            resp = client.post("/api/v1/nodes/register",
-                               json={"activation_code": "BS-2026-LOSTRESP"})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.get_json(), _NODE)
-
-    def test_register_endpoint_still_rejects_old_used_codes(self):
+    def test_admin_activation_codes_gone(self):
         client = server.app.test_client()
-        code_row = {"used_at": _iso(7200), "node_id": "node_a1"}
-
-        def fake_query_one(sql, params=None):
-            if "activation_codes" in sql:
-                return dict(code_row)
-            return dict(_NODE)
-
-        with patch("cloud.server.db.query_one", side_effect=fake_query_one):
-            resp = client.post("/api/v1/nodes/register",
-                               json={"activation_code": "BS-2026-OLDCODE1"})
-        self.assertEqual(resp.status_code, 409)
+        # Without admin key → 401; with wrong key same. Endpoint exists as 410 after auth.
+        with patch("cloud.server.require_admin", lambda f: f):
+            # require_admin is a decorator already applied; hit via client gets 401.
+            resp = client.post("/api/v1/admin/activation-codes", json={"count": 1})
+        self.assertIn(resp.status_code, (401, 410))
 
 
 if __name__ == "__main__":

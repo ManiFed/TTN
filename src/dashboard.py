@@ -2791,7 +2791,10 @@ def api_cloud():
 
 @app.route("/api/cloud/connect", methods=["POST"])
 def api_cloud_connect():
-    """Re-read config and attempt registration immediately (no restart needed)."""
+    """Re-read config and attempt anonymous registration (no account link).
+
+    Prefer POST /api/cloud/credentials from the signed-in member app.
+    """
     if _cloud is None:
         return jsonify({"ok": False, "error": "cloud communicator not running"}), 503
     import yaml
@@ -2806,6 +2809,26 @@ def api_cloud_connect():
         return jsonify({"ok": True, "registered": True, "node_id": _cloud._node_id})
     return jsonify({"ok": False, "registered": False,
                     "error": _cloud.status.get("error", "registration failed")}), 400
+
+
+@app.route("/api/cloud/credentials", methods=["POST"])
+def api_cloud_credentials():
+    """Install cloud credentials from the signed-in desktop app (localhost only)."""
+    if request.remote_addr not in ("127.0.0.1", "::1", "localhost"):
+        return jsonify({"error": "local only"}), 403
+    if _cloud is None:
+        return jsonify({"ok": False, "error": "cloud communicator not running"}), 503
+    body = request.get_json(force=True, silent=True) or {}
+    node_id = str(body.get("node_id") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+    if not node_id or not api_key:
+        return jsonify({"ok": False, "error": "node_id and api_key required"}), 400
+    try:
+        _cloud.install_credentials(node_id, api_key)
+    except Exception as exc:
+        logger.exception("install_credentials failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, "registered": True, "node_id": node_id})
 
 
 @app.route("/api/safety")
@@ -4968,22 +4991,16 @@ html[data-night] img, html[data-night] video { filter: none; }
   </div>
 </div>
 
-<!-- Setup banner — visible until activation code is entered or node is registered -->
+<!-- Setup banner — visible until this agent has cloud credentials -->
 <div id="setupBanner" style="display:none;flex-direction:row;background:linear-gradient(90deg,rgba(160,185,255,0.12),rgba(160,185,255,0.06));
      border-bottom:1px solid rgba(160,185,255,0.2);padding:10px 20px;
      align-items:center;gap:12px;font-size:13px;">
   <span style="color:rgba(160,185,255,0.9);">&#9679;</span>
   <span style="color:#c8d8ff;flex:1;">
-    <strong style="color:#fff;">Not connected to The Telescope Net.</strong>
-    &nbsp;Get your activation code from <a href="https://app.thetelescope.net" target="_blank" style="color:#a0b9ff;">app.thetelescope.net</a>
-    → Connect telescope, then paste it here.
+    <strong style="color:#fff;">Not linked to a member account.</strong>
+    &nbsp;Open <strong>The Telescope Net</strong> app, sign in, and tap
+    <strong>Connect telescope</strong> — no activation code needed.
   </span>
-  <button onclick="openWelcomeModal()"
-    style="background:#a0b9ff;color:#000814;border:none;border-radius:6px;
-           padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;
-           letter-spacing:0.3px;white-space:nowrap;">
-    Enter code
-  </button>
 </div>
 
 <!-- Automatic post-signup commissioning status -->
@@ -5372,36 +5389,7 @@ html[data-night] img, html[data-night] video { filter: none; }
   </div>
 </div>
 
-<!-- Welcome / activation modal -->
-<div class="modal hidden" id="welcomeModal">
-  <div class="modal-content" style="max-width:420px;width:90%;padding:36px 32px 28px;text-align:center;">
-    <div style="font-size:48px;margin-bottom:12px;">🌌</div>
-    <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;margin-bottom:8px;">Connect to The Telescope Net</div>
-    <div style="font-size:13px;color:var(--dim);margin-bottom:28px;line-height:1.5;">
-      Paste the activation code from The Telescope Net app to link this telescope to the network.
-      <br><span style="font-size:11px;opacity:0.6;">App → Telescopes → Connect telescope</span>
-    </div>
-    <input id="welcomeCodeInput" class="inp" type="text"
-      placeholder="BS-2026-XXXXXXXX"
-      autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
-      style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase;width:100%;box-sizing:border-box;margin-bottom:14px;"
-      oninput="this.value=this.value.toUpperCase()"
-      onkeydown="if(event.key==='Enter')submitActivationCode()">
-    <div id="welcomeErr" style="font-size:12px;color:var(--red,#e05252);min-height:18px;margin-bottom:10px;"></div>
-    <button class="btn btn-green" id="btnWelcomeConnect"
-      onclick="submitActivationCode()"
-      style="width:100%;font-size:14px;padding:11px 0;letter-spacing:1px;">
-      Connect
-    </button>
-    <div style="margin-top:18px;">
-      <button onclick="closeWelcomeModal()" style="background:none;border:none;color:var(--dim);font-size:11px;cursor:pointer;text-decoration:underline;">
-        Skip for now
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- Star catalog chooser modal (shown after activation, and reopenable from Settings) -->
+<!-- Star catalog chooser modal (reopenable from Settings) -->
 <div class="modal hidden" id="catalogModal" onclick="if(event.target===this)closeCatalogChooser()">
   <div class="modal-content" style="max-width:460px;width:90%;padding:32px;text-align:center;">
     <div id="catalogChooserBody"></div>
@@ -5786,10 +5774,9 @@ html[data-night] img, html[data-night] video { filter: none; }
             <div class="inp-label">Cloud URL <span class="help-tip" data-tip="The URL of The Telescope Net cloud server. Leave as the default unless you are running a private instance.">?</span></div>
             <input class="inp" type="text" id="cfgCloudUrl" placeholder="https://api.thetelescope.net">
           </div>
-          <div class="inp-group" id="cfgCloudCodeGroup">
-            <div class="inp-label">Activation Code <span class="help-tip" data-tip="Your personal activation code from The Telescope Net app. Generate one under Telescopes → Connect telescope. Paste it here, save, then restart the node software to register.">?</span></div>
-            <input class="inp" type="text" id="cfgCloudCode" placeholder="BS-2024-XXXXXXXX" style="text-transform:uppercase;letter-spacing:1px;">
-            <div style="font-size:11px;color:var(--dim);margin-top:4px;">Get this code from The Telescope Net app → Telescopes → Connect telescope. After saving and restarting, this field will clear once registered.</div>
+          <div style="font-size:12px;color:var(--dim);line-height:1.5;">
+            Link this computer from <strong>The Telescope Net</strong> app →
+            <strong>Connect telescope</strong>. Activation codes are no longer used.
           </div>
         </div>
         <div class="cfg-section-hdr">Behavior</div>
@@ -7994,21 +7981,15 @@ function switchCfgTab(tab) {
 
 async function _loadCloudRegistrationStatus() {
   const bar = document.getElementById('cfgCloudStatusBar');
-  const codeGroup = document.getElementById('cfgCloudCodeGroup');
   if (!bar) return;
   try {
-    const [cloudResp, cfgResp] = await Promise.all([
-      fetch('/api/cloud'),
-      fetch('/api/config/parsed').catch(() => null),
-    ]);
+    const cloudResp = await fetch('/api/cloud');
     if (!cloudResp.ok) { bar.style.display = 'none'; return; }
     const d = await cloudResp.json();
-    const cfg = cfgResp && cfgResp.ok ? await cfgResp.json() : {};
-    const savedCode = !_isPlaceholderCode(((cfg.cloud || {}).activation_code || '').trim());
     bar.style.display = '';
     if (d.registered) {
       bar.style.borderColor = 'var(--green)';
-      bar.innerHTML = '<span style="color:var(--green-hi)">&#9679; Registered</span>'
+      bar.innerHTML = '<span style="color:var(--green-hi)">&#9679; Linked</span>'
         + ' &mdash; Node ID: <code style="font-size:11px">' + (d.node_id || '') + '</code>'
         + (d.last_heartbeat_ok ? ' &mdash; <span style="color:var(--green-hi)">heartbeat OK</span>' : '');
       if (d.plan_pending_review) {
@@ -8017,22 +7998,14 @@ async function _loadCloudRegistrationStatus() {
           + ' targets) arrived from the cloud but "Auto-run plans" is OFF &mdash; '
           + 'the node will NOT observe tonight unless you enable it or start the plan manually.</span>';
       }
-      if (codeGroup) codeGroup.style.display = 'none';
     } else if (d.error) {
       bar.style.borderColor = 'var(--red)';
-      bar.innerHTML = '<span style="color:var(--red)">&#9679; Registration failed</span>'
+      bar.innerHTML = '<span style="color:var(--red)">&#9679; Not linked</span>'
         + ' &mdash; <span style="color:var(--dim)">' + String(d.error).replace(/[<>&]/g, '') + '</span>';
-      if (codeGroup) codeGroup.style.display = '';
-    } else if (savedCode) {
-      bar.style.borderColor = 'var(--warn, #f5a623)';
-      bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Activation code saved</span>'
-        + ' &mdash; restart the node software to complete registration.';
-      if (codeGroup) codeGroup.style.display = '';
     } else {
       bar.style.borderColor = 'var(--warn, #f5a623)';
-      bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Not registered</span>'
-        + ' &mdash; paste your activation code from The Telescope Net app below.';
-      if (codeGroup) codeGroup.style.display = '';
+      bar.innerHTML = '<span style="color:var(--warn, #f5a623)">&#9679; Not linked</span>'
+        + ' &mdash; open The Telescope Net app → Connect telescope.';
     }
   } catch (_) { bar.style.display = 'none'; }
 }
@@ -8121,7 +8094,6 @@ function renderCfgForm(c) {
   setVal('cfgLogLevel',        _cfgGet(c, 'logging.level', 'INFO'));
   setVal('cfgCloudEnabled', _cfgGet(c, 'cloud.enabled',           false));
   setVal('cfgCloudUrl',     _cfgGet(c, 'cloud.url',               ''));
-  setVal('cfgCloudCode',    _cfgGet(c, 'cloud.activation_code',   ''));
   setVal('cfgCloudAutoRun', _cfgGet(c, 'cloud.auto_run_plans',    false));
 }
 
@@ -8219,8 +8191,6 @@ function collectCfgForm() {
   set('logging.level', sel('cfgLogLevel'));
   set('cloud.enabled',          chk('cfgCloudEnabled'));
   set('cloud.url',              txt('cfgCloudUrl').trim());
-  const _code = txt('cfgCloudCode').trim().toUpperCase();
-  if (_code) set('cloud.activation_code', _code);
   set('cloud.auto_run_plans',   chk('cfgCloudAutoRun'));
   return c;
 }
@@ -9558,102 +9528,17 @@ function closeCatalogChooser() {
   document.getElementById('catalogModal').classList.add('hidden');
 }
 
-// ── First-run activation modal ────────────────────────────────────────────────
-
-function closeWelcomeModal() {
-  document.getElementById('welcomeModal').classList.add('hidden');
-}
-
-function _isPlaceholderCode(code) {
-  return !code || code === 'ACTIVATION_CODE_PLACEHOLDER' || code.trim() === '';
-}
-
-function openWelcomeModal() {
-  document.getElementById('welcomeModal').classList.remove('hidden');
-  setTimeout(() => document.getElementById('welcomeCodeInput').focus(), 80);
-}
+// ── First-run banner (no activation codes) ───────────────────────────────────
 
 async function _checkFirstRun() {
   try {
-    const [cfgR, cloudR] = await Promise.all([
-      fetch('/api/config/parsed'),
-      fetch('/api/cloud').catch(() => null),
-    ]);
-    if (!cfgR.ok) return;
-    const cfg = await cfgR.json();
-    const cloudCfg = cfg.cloud || {};
+    const cloudR = await fetch('/api/cloud').catch(() => null);
     const registered = cloudR && cloudR.ok && (await cloudR.json()).registered;
     const setupBanner = document.getElementById('setupBanner');
-    if (registered) {
-      if (setupBanner) setupBanner.style.display = 'none';
-      return;
-    }
-    if (setupBanner) setupBanner.style.display = 'flex';
-    // Do NOT auto-open the activation modal — only when the user clicks
-    // "Enter code" (or the desktop app submits a code to the local API).
-    const savedCode = (cloudCfg.activation_code || '').trim();
-    if (savedCode && !_isPlaceholderCode(savedCode)) {
-      const inp = document.getElementById('welcomeCodeInput');
-      if (inp && !inp.value) inp.value = savedCode;
-    }
+    if (setupBanner) setupBanner.style.display = registered ? 'none' : 'flex';
   } catch (_) {}
 }
 
-async function submitActivationCode() {
-  const input  = document.getElementById('welcomeCodeInput');
-  const errEl  = document.getElementById('welcomeErr');
-  const btn    = document.getElementById('btnWelcomeConnect');
-  const code   = input.value.trim().toUpperCase();
-  errEl.textContent = '';
-  if (!code) { errEl.textContent = 'Please enter your activation code.'; return; }
-  if (!/^BS-\d{4}-[A-Z0-9]{8}$/.test(code)) {
-    errEl.textContent = 'Code should look like BS-2024-XXXXXXXX.'; return;
-  }
-  btn.disabled = true; btn.textContent = 'Connecting…';
-  try {
-    const cfgR = await fetch('/api/config/parsed');
-    const cfg  = cfgR.ok ? await cfgR.json() : {};
-    if (!cfg.cloud) cfg.cloud = {};
-    cfg.cloud.activation_code = code;
-    cfg.cloud.enabled = true;
-    if (!cfg.cloud.url) cfg.cloud.url = 'https://api.thetelescope.net';
-    const r = await fetch('/api/config/parsed', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg),
-    });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      errEl.textContent = 'Save failed: ' + (d.error || r.statusText);
-      btn.disabled = false; btn.textContent = 'Connect';
-      return;
-    }
-    // Trigger immediate registration — no restart needed
-    btn.textContent = 'Registering…';
-    try {
-      const reg = await fetch('/api/cloud/connect', { method: 'POST' });
-      const rd  = await reg.json().catch(() => ({}));
-      if (reg.ok && rd.ok) {
-        const content = document.querySelector('#welcomeModal .modal-content');
-        content.innerHTML = `
-          <div style="font-size:56px;margin-bottom:12px;">✅</div>
-          <div style="font-size:18px;font-weight:700;margin-bottom:8px;color:#fff;">Connected!</div>
-          <div style="font-size:13px;color:var(--dim);line-height:1.6;margin-bottom:20px;">
-            Your node is registered with The Telescope Net.
-          </div>
-          ${_catalogChooserHTML({ onClose: "closeWelcomeModal()" })}`;
-        return;
-      }
-      errEl.textContent = rd.error || 'Registration failed — check your code and try again.';
-    } catch (_) {
-      errEl.textContent = 'Could not reach cloud — check your internet connection.';
-    }
-    btn.disabled = false; btn.textContent = 'Connect';
-  } catch (e) {
-    errEl.textContent = 'Request failed: ' + e.message;
-    btn.disabled = false; btn.textContent = 'Connect';
-  }
-}
 
 document.addEventListener('DOMContentLoaded', _checkFirstRun);
 </script>
