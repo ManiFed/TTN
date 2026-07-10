@@ -19,7 +19,11 @@ import os
 import pathlib
 import shutil
 import signal
+import socket
+import subprocess
 import sys
+import time
+import webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
@@ -87,6 +91,71 @@ def _prepare_data_dir(data_dir: pathlib.Path) -> None:
         pass
 
 
+def _port_open(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
+def _open_dashboard(port: int) -> None:
+    url = f"http://localhost:{port}"
+    try:
+        webbrowser.open(url)
+    except Exception as exc:
+        logger.warning("Could not open browser for %s: %s", url, exc)
+
+
+def _macos_gui_launch(port: int, data_dir: pathlib.Path) -> bool:
+    """Handle double-click / Finder launch of the .app bundle.
+
+    A PyInstaller binary is not a Cocoa app, so if it stays in the foreground
+    Launch Services marks it "Application Not Responding" forever and the
+    process holds a lock that blocks deleting the .app.
+
+    Strategy: if the dashboard is not up, spawn a detached daemon child, wait
+    for the port, open the browser, then exit the GUI-tracked process.
+    """
+    if sys.platform != "darwin":
+        return False
+    if not getattr(sys, "frozen", False):
+        return False
+    if os.environ.get("TTN_NODE_DAEMON") == "1":
+        return False
+
+    if not _port_open(port):
+        env = os.environ.copy()
+        env["TTN_NODE_DAEMON"] = "1"
+        cmd = [
+            sys.executable,
+            "--no-browser",
+            "--port", str(port),
+            "--data-dir", str(data_dir),
+        ]
+        try:
+            subprocess.Popen(
+                cmd,
+                env=env,
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+        except OSError as exc:
+            logger.error("Failed to start background node agent: %s", exc)
+            return False
+
+        for _ in range(60):
+            if _port_open(port):
+                break
+            time.sleep(0.25)
+
+    _open_dashboard(port)
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="The Telescope Net Node Agent")
     parser.add_argument("--port", type=int, default=5173,
@@ -111,10 +180,22 @@ def main() -> None:
     # On Windows as a service, stdout may not exist — redirect to a log file
     _setup_service_logging()
 
-    if args.no_browser:
-        # Monkey-patch webbrowser so the service doesn't try to open a tab
-        import webbrowser
-        webbrowser.open = lambda *a, **kw: None  # type: ignore[assignment]
+    # Finder double-click: detach daemon + open browser + exit (no ANR).
+    if not args.no_browser and _macos_gui_launch(args.port, data_dir):
+        return
+
+    # Already running (e.g. launchd service up, second click / second start).
+    if _port_open(args.port):
+        logger.info("Dashboard already listening on port %d", args.port)
+        if not args.no_browser:
+            _open_dashboard(args.port)
+            return
+        # Headless/service restarts should not stack a second server.
+        logger.error(
+            "Port %d is already in use — refusing second headless instance",
+            args.port,
+        )
+        sys.exit(0)
 
     # Install a SIGTERM handler so systemd / launchd can shut us down cleanly
     def _sigterm(signum, frame):
@@ -124,7 +205,7 @@ def main() -> None:
 
     # Import and run the dashboard (this blocks until Ctrl-C / SIGTERM)
     import src.dashboard as dashboard
-    dashboard.launch(port=args.port)
+    dashboard.launch(port=args.port, open_browser=not args.no_browser)
 
 
 def _setup_service_logging() -> None:

@@ -9661,7 +9661,7 @@ document.addEventListener('DOMContentLoaded', _checkFirstRun);
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
-def launch(port: int = 5173) -> None:
+def launch(port: int = 5173, open_browser: bool = True) -> None:
     global _safety_mgr, _image_watcher, _cloud, _commissioning
 
     import urllib.request
@@ -9801,7 +9801,14 @@ def launch(port: int = 5173) -> None:
         except Exception:
             time.sleep(0.25)
 
-    print("\n  NODE v1 running\n", file=sys.__stdout__)
+    if open_browser:
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception as exc:
+            logger.warning("Could not open browser for %s: %s", url, exc)
+
+    print(f"\n  NODE v1 running at {url}\n", file=sys.__stdout__)
 
     try:
         while True:

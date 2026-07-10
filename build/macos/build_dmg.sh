@@ -39,11 +39,13 @@ if [ ! -f "${DIST_DIR}/${APP_NAME}" ]; then
     echo "Run first:  python -m PyInstaller build/node_agent.spec --clean --noconfirm"
     exit 1
 fi
-if [ ! -d "${FLUTTER_APP_SOURCE}" ]; then
-    echo "ERROR: Flutter desktop app not found at ${FLUTTER_APP_SOURCE}"
-    echo "Run: cd app && flutter create . --platforms=macos && flutter build macos --release"
-    echo "Or set FLUTTER_APP_SOURCE to a pre-built .app bundle."
-    exit 1
+HAS_DESKTOP_APP=0
+if [ -d "${FLUTTER_APP_SOURCE}" ]; then
+    HAS_DESKTOP_APP=1
+else
+    echo "WARNING: Flutter desktop app not found at ${FLUTTER_APP_SOURCE}"
+    echo "  Building node-service package only (dashboard opens in browser)."
+    echo "  To include the desktop app: cd app && flutter build macos --release"
 fi
 
 # ── Assemble .app bundle ───────────────────────────────────────────────────────
@@ -75,8 +77,14 @@ cat > "${CONTENTS}/Info.plist" <<EOF
     <string>APPL</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- Agent: no Dock icon. Double-click still works; main_service detaches
+         a daemon and exits so Launch Services never marks us Not Responding. -->
     <key>LSUIElement</key>
     <true/>
+    <key>LSBackgroundOnly</key>
+    <false/>
+    <key>CFBundleGetInfoString</key>
+    <string>The Telescope Net Node Agent — opens the local dashboard in your browser</string>
 </dict>
 </plist>
 EOF
@@ -85,8 +93,10 @@ cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/com.teles
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-# The foreground Flutter window and background node daemon ship in one package.
-cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
+# Optional foreground Flutter window ships next to the background node daemon.
+if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
+    cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
+fi
 
 # ── Code signing ───────────────────────────────────────────────────────────────
 if [ -n "${SIGN_ID}" ]; then
@@ -95,10 +105,12 @@ if [ -n "${SIGN_ID}" ]; then
         --sign "${SIGN_ID}" \
         "${BUNDLE_DIR}"
     codesign --verify --deep --strict "${BUNDLE_DIR}"
-    codesign --deep --force --options runtime \
-        --sign "${SIGN_ID}" \
-        "${DESKTOP_BUNDLE_DIR}"
-    codesign --verify --deep --strict "${DESKTOP_BUNDLE_DIR}"
+    if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
+        codesign --deep --force --options runtime \
+            --sign "${SIGN_ID}" \
+            "${DESKTOP_BUNDLE_DIR}"
+        codesign --verify --deep --strict "${DESKTOP_BUNDLE_DIR}"
+    fi
 else
     echo "Skipping code signing (pass --sign 'Developer ID: ...' to sign)"
 fi
@@ -112,13 +124,23 @@ FINAL_PKG="${DIST_DIR}/${APP_NAME}-${VERSION}-macOS.pkg"
 rm -rf "${PKG_STAGING}"
 mkdir -p "${PKG_STAGING}/Applications"
 cp -r "${BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
-cp -r "${DESKTOP_BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
+if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
+    cp -r "${DESKTOP_BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
+fi
+
+# pkgbuild only runs scripts named exactly "preinstall" / "postinstall"
+# (no .sh extension). Stage a copy so the repo can keep postinstall.sh.
+SCRIPTS_STAGING="${DIST_DIR}/pkg_scripts"
+rm -rf "${SCRIPTS_STAGING}"
+mkdir -p "${SCRIPTS_STAGING}"
+cp "${BUILD_DIR}/postinstall.sh" "${SCRIPTS_STAGING}/postinstall"
+chmod 755 "${SCRIPTS_STAGING}/postinstall"
 
 pkgbuild \
     --root "${PKG_STAGING}" \
     --identifier "org.telescopenet.nodeagent" \
     --version "${VERSION}" \
-    --scripts "${BUILD_DIR}" \
+    --scripts "${SCRIPTS_STAGING}" \
     --install-location "/" \
     "${COMPONENT_PKG}"
 
@@ -185,7 +207,7 @@ productbuild \
     "${FINAL_PKG}"
 
 # Clean up staging artifacts
-rm -rf "${PKG_STAGING}" "${COMPONENT_PKG}" "${DIST_DIR}/distribution.xml"
+rm -rf "${PKG_STAGING}" "${SCRIPTS_STAGING}" "${COMPONENT_PKG}" "${DIST_DIR}/distribution.xml"
 
 echo ""
 echo "=== Build complete ==="
