@@ -181,6 +181,7 @@ _sched_state: dict = {
     "total":           0,
     "error":           None,
     "source":          "",   # manual | cloud | interrupt
+    "items":           [],   # full observation list for the current run
 }
 
 # ── Image history ─────────────────────────────────────────────────────────────
@@ -2105,6 +2106,87 @@ def api_commissioning_restart():
     return jsonify({"ok": True, **_commissioning.evaluate()})
 
 
+@app.route("/scope")
+def scope_dashboard():
+    """The macOS control-room dashboard — live Aladin sky view of where the
+    mount is pointed, the real photometric light curve, schedule, and rig
+    stats.  Served as a self-contained page; all data comes from /api/scope."""
+    return Response(_SCOPE_HTML, content_type="text/html; charset=utf-8")
+
+
+@app.route("/api/scope")
+def api_scope():
+    """Consolidated snapshot for the /scope dashboard: telescope pointing +
+    rig specs, current exposure, schedule with per-item state, the light-curve
+    history, and the latest AAVSO filings — in one round trip."""
+    with _state_lock:
+        tel   = copy.deepcopy(_state["telescope"])
+        cam   = copy.deepcopy(_state["camera"])
+        phot  = copy.deepcopy(_state["photometry"])
+        aavso = copy.deepcopy(_state["aavso"])
+    with _sched_lock:
+        sched      = dict(_sched_state)
+        items      = list(sched.get("items", []))
+        cur_idx    = sched.get("current_idx", -1)
+        completed  = sched.get("completed", 0)
+        running    = sched.get("running", False)
+
+    # Per-item lifecycle state, derived from the runner's cursor.
+    sched_items = []
+    for i, it in enumerate(items):
+        if not running:
+            st = "complete" if i < completed else "queued"
+        elif i == cur_idx:
+            st = "observing"
+        elif i < cur_idx or i < completed:
+            st = "complete"
+        else:
+            st = "queued"
+        sched_items.append({**it, "state": st})
+
+    # Live optics off the connected hardware, best-effort.
+    specs: dict = {}
+    try:
+        if tel.get("connected") or cam.get("connected"):
+            specs = _cloud_telescope_specs() or {}
+    except Exception:
+        specs = {}
+
+    cfg = _load_config()
+    obs = cfg.get("observatory", {})
+
+    return jsonify({
+        "observatory": {
+            "name":      obs.get("name", "") or obs.get("telescope", "NODE"),
+            "telescope": obs.get("telescope", ""),
+            "node_id":   cfg.get("photometry", {}).get("node_id", ""),
+        },
+        "telescope": tel,
+        "camera":    cam,
+        "specs":     specs,
+        "schedule": {
+            "running":        running,
+            "current_idx":    cur_idx,
+            "current_phase":  sched.get("current_phase", ""),
+            "current_target": sched.get("current_target", ""),
+            "current_frame":  sched.get("current_frame", 0),
+            "total_frames":   sched.get("total_frames", 0),
+            "completed":      completed,
+            "total":          sched.get("total", 0),
+            "items":          sched_items,
+        },
+        "photometry": {
+            "enabled":     phot.get("enabled"),
+            "running":     phot.get("running"),
+            "queued":      phot.get("queued"),
+            "last_result": phot.get("last_result"),
+            "history":     phot.get("history", []),
+        },
+        "aavso": aavso,
+        "server_ts": time.time(),
+    })
+
+
 @app.route("/api/logs")
 def api_logs():
     q: queue.Queue = queue.Queue(maxsize=400)
@@ -2885,6 +2967,7 @@ def api_photometry():
             "running":     _state["photometry"]["running"],
             "last_result": _state["photometry"]["last_result"],
             "last_export": _state["photometry"]["last_export"],
+            "history":     list(_state["photometry"]["history"]),
         }
     return jsonify(snap)
 
@@ -3630,6 +3713,18 @@ def _run_schedule_bg(items: list, source: str = "manual",
             "current_frame": 0, "total_frames": 0,
             "completed": 0, "total": len(items), "error": None,
             "source": source,
+            "items": [
+                {
+                    "target":    it.get("target", "Unknown"),
+                    "ra":        it.get("ra"),
+                    "dec":       it.get("dec"),
+                    "expDur":    it.get("expDur"),
+                    "expCount":  it.get("expCount"),
+                    "startTime": it.get("startTime", ""),
+                    "filter":    it.get("filter", ""),
+                }
+                for it in items
+            ],
         })
     logger.info("Schedule started: %d observations", len(items))
     _telemetry.event("schedule_started", severity="info",
@@ -3881,6 +3976,321 @@ def api_geocode():
     except Exception as exc:
         logger.exception("Location search failed")
         return jsonify({"error": "Location search failed"}), 500
+
+
+# ── /scope dashboard ─────────────────────────────────────────────────────────
+
+_SCOPE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NODE — Live Sky</title>
+<link rel="stylesheet" href="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.css">
+<style>
+  :root {
+    --bg:      #0c0c0e;
+    --panel:   #101013;
+    --line:    rgba(255,255,255,0.07);
+    --line2:   rgba(255,255,255,0.04);
+    --txt:     #b9b6b0;
+    --dim:     #6b6862;
+    --faint:   #46443f;
+    --accent:  #cd7f4b;
+    --accent2: #e0a06a;
+    --good:    #7fae7f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--txt);
+    font: 12px/1.5 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0.02em;
+    overflow: hidden;
+  }
+  .app { display: grid; grid-template-columns: 176px 1fr 340px; height: 100vh; }
+  .lbl { color: var(--dim); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+  .acc { color: var(--accent); }
+
+  /* ── Left nav ── */
+  nav { border-right: 1px solid var(--line); padding: 22px 20px; display: flex; flex-direction: column; }
+  nav .brand { color: var(--accent); font-size: 13px; letter-spacing: 0.16em; margin-bottom: 34px; }
+  nav a { display: block; color: var(--dim); text-decoration: none; padding: 6px 0; letter-spacing: 0.05em; }
+  nav a.active { color: var(--txt); }
+  nav a:hover { color: var(--txt); }
+  nav .rule { height: 1px; background: var(--line); margin: 20px 0; }
+  nav .foot { margin-top: auto; color: var(--faint); font-size: 10px; line-height: 1.7; }
+
+  /* ── Center: sky ── */
+  .center { position: relative; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+  .chead { display: flex; justify-content: space-between; align-items: baseline;
+           padding: 14px 22px; border-bottom: 1px solid var(--line2); }
+  .chead .t { letter-spacing: 0.12em; text-transform: uppercase; font-size: 11px; }
+  .chead .t b { color: var(--accent); font-weight: 400; }
+  #sky { flex: 1; position: relative; background: #05050a; }
+  #aladin { position: absolute; inset: 0; }
+  .compass { position: absolute; left: 22px; bottom: 20px; z-index: 20; color: var(--dim);
+             font-size: 10px; letter-spacing: 0.1em; pointer-events: none; }
+  .compass svg { display: block; }
+  .noconn { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+            z-index: 15; color: var(--faint); letter-spacing: 0.14em; text-transform: uppercase; font-size: 11px; }
+  /* dim aladin's default chrome to fit the aesthetic */
+  .aladin-location, .aladin-fov { opacity: 0.45 !important; font-size: 10px !important; }
+
+  /* ── Right sidebar ── */
+  aside { padding: 18px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; }
+  aside::-webkit-scrollbar { width: 6px; }
+  aside::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .sec > .hd { display: flex; justify-content: space-between; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 5px 0; border-bottom: 1px solid var(--line2); vertical-align: baseline; }
+  tr:last-child td { border-bottom: none; }
+  .sched td:nth-child(1) { color: var(--txt); }
+  .sched td:nth-child(2) { color: var(--dim); text-align: right; white-space: nowrap; padding-right: 10px; font-variant-numeric: tabular-nums; }
+  .sched td:nth-child(3) { color: var(--dim); text-align: right; width: 74px; }
+  .st-observing { color: var(--accent) !important; }
+  .st-complete  { color: var(--good) !important; }
+  .st-queued    { color: var(--dim) !important; }
+  .kv { display: flex; justify-content: space-between; padding: 4px 0; }
+  .kv .v { color: var(--txt); font-variant-numeric: tabular-nums; }
+  .kv .v.on { color: var(--accent); }
+  .exp { display: flex; gap: 8px; align-items: baseline; }
+  .exp .big { color: var(--txt); }
+  .exp .n { color: var(--accent); }
+  #lc { width: 100%; height: 78px; display: block; }
+  .lc-empty { color: var(--faint); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; padding: 20px 0; text-align: center; }
+  .filed td:nth-child(2) { text-align: right; color: var(--txt); font-variant-numeric: tabular-nums; }
+  .filed td.proc { color: var(--accent); }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-right: 6px; vertical-align: middle; }
+  .dot.live { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="brand">◍ NODE</div>
+    <a class="active">Tonight</a>
+    <a>Telescopes</a>
+    <a>History</a>
+    <a>Me</a>
+    <div class="rule"></div>
+    <div class="foot" id="navFoot">NODE ····<br>REV. —</div>
+  </nav>
+
+  <div class="center">
+    <div class="chead">
+      <div class="t"><span class="dot" id="liveDot"></span>LIVE SKY — <b id="skyTarget">—</b></div>
+      <div class="t lbl" id="skyMeta">DSS2 · POINTING</div>
+    </div>
+    <div id="sky">
+      <div id="aladin"></div>
+      <div class="noconn" id="noconn">MOUNT NOT CONNECTED — NO POINTING</div>
+      <div class="compass">
+        <svg width="34" height="34" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1">
+          <line x1="6" y1="28" x2="6" y2="10"/><line x1="6" y1="28" x2="24" y2="28"/>
+        </svg>
+        <div style="margin-top:2px">N ↑ &nbsp; E →</div>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="sec">
+      <div class="hd"><span class="lbl">Tonight's schedule</span><span class="lbl" id="schedCount">—</span></div>
+      <table class="sched"><tbody id="schedBody">
+        <tr><td class="st-queued" colspan="3">no active schedule</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="sec">
+      <div class="hd"><span class="lbl">Exposure</span></div>
+      <div class="exp"><span class="big"><span id="expDur">—</span>s × <span id="expCount">—</span></span>
+        <span>·</span><span class="n" id="expCap">—</span><span class="lbl">captured</span></div>
+    </div>
+
+    <div class="sec">
+      <div class="hd"><span class="lbl">Δ mag — time series</span><span class="lbl acc" id="lcTarget"></span></div>
+      <svg id="lc" viewBox="0 0 300 78" preserveAspectRatio="none"></svg>
+      <div class="lc-empty" id="lcEmpty">awaiting photometry</div>
+    </div>
+
+    <div class="sec">
+      <div class="hd"><span class="lbl">Telescope</span><span class="lbl" id="telName"></span></div>
+      <div class="kv"><span class="lbl">Mount</span><span class="v" id="telMount">—</span></div>
+      <div class="kv"><span class="lbl">RA</span><span class="v" id="telRA">—</span></div>
+      <div class="kv"><span class="lbl">Dec</span><span class="v" id="telDec">—</span></div>
+      <div class="kv"><span class="lbl">Tracking</span><span class="v" id="telTrack">—</span></div>
+      <div class="kv"><span class="lbl">Aperture</span><span class="v" id="telAp">—</span></div>
+      <div class="kv"><span class="lbl">Focal / ƒ</span><span class="v" id="telFl">—</span></div>
+      <div class="kv"><span class="lbl">Pixel scale</span><span class="v" id="telPx">—</span></div>
+      <div class="kv"><span class="lbl">Sensor °C</span><span class="v" id="telTemp">—</span></div>
+    </div>
+
+    <div class="sec">
+      <div class="hd"><span class="lbl">Filed to AAVSO</span></div>
+      <table class="filed"><tbody id="filedBody">
+        <tr><td class="st-queued">nothing filed yet</td><td></td></tr>
+      </tbody></table>
+    </div>
+  </aside>
+</div>
+
+<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.js" charset="utf-8"></script>
+<script>
+let aladin = null, aladinReady = false, lastPointKey = "", lastWant = null;
+const fmtRA = h => { if (h==null) return "—"; const m=(h*60)%60, s=(h*3600)%60;
+  return String(Math.floor(h)).padStart(2,"0")+"ʰ"+String(Math.floor(m)).padStart(2,"0")+"ᵐ"+s.toFixed(1)+"ˢ"; };
+const fmtDec = d => { if (d==null) return "—"; const sg=d<0?"−":"+"; d=Math.abs(d);
+  const m=(d*60)%60, s=(d*3600)%60;
+  return sg+String(Math.floor(d)).padStart(2,"0")+"° "+String(Math.floor(m)).padStart(2,"0")+"′ "+s.toFixed(0)+"″"; };
+
+if (typeof A !== "undefined" && A.init) {
+  A.init.then(() => {
+    aladin = A.aladin("#aladin", {
+      survey: "P/DSS2/color", fov: 1.2, cooFrame: "ICRS",
+      showReticle: true, showZoomControl: false, showFullscreenControl: false,
+      showLayersControl: false, showGotoControl: false, showShareControl: false,
+      showSimbadPointerControl: false, showCooGrid: false, showFrame: false,
+      reticleColor: "#cd7f4b", backgroundColor: "#05050a",
+    });
+    aladinReady = true;
+    if (lastWant) setPointing(lastWant[0], lastWant[1]);
+  }).catch(() => { document.getElementById("noconn").textContent = "SKY VIEWER UNAVAILABLE"; });
+} else {
+  // Aladin failed to load (offline / blocked). Keep the rest of the dashboard live.
+  window.aladinFailed = true;
+  const nc = document.getElementById("noconn");
+  nc.textContent = "SKY VIEWER OFFLINE"; nc.style.display = "flex";
+}
+
+function setPointing(ra_h, dec) {
+  if (ra_h != null && dec != null) lastWant = [ra_h, dec];
+  if (!aladinReady || ra_h == null || dec == null) return;
+  const ra_deg = ra_h * 15;
+  const key = ra_deg.toFixed(4) + "," + dec.toFixed(4);
+  if (key === lastPointKey) return;
+  lastPointKey = key;
+  aladin.gotoRaDec(ra_deg, dec);
+}
+
+function drawLC(hist) {
+  const svg = document.getElementById("lc");
+  const empty = document.getElementById("lcEmpty");
+  const pts = (hist || []).filter(h => typeof h.magnitude === "number" && typeof h.bjd === "number");
+  if (pts.length < 2) { svg.style.display = "none"; empty.style.display = "block"; return; }
+  svg.style.display = "block"; empty.style.display = "none";
+  const W = 300, H = 78, pad = 6;
+  const xs = pts.map(p => p.bjd), ys = pts.map(p => p.magnitude);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = x1 > x0 ? (W - 2*pad) / (x1 - x0) : 0;
+  const yr = y1 > y0 ? (y1 - y0) : 1;
+  // magnitude: smaller = brighter = higher on chart (invert)
+  const X = v => pad + (v - x0) * sx;
+  const Y = v => pad + (v - y0) / yr * (H - 2*pad);
+  let d = "", dots = "";
+  pts.forEach((p, i) => {
+    const x = X(p.bjd), y = Y(p.magnitude);
+    d += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+    dots += '<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="1.6" fill="#e0a06a"/>';
+  });
+  svg.innerHTML = '<path d="'+d+'" fill="none" stroke="#cd7f4b" stroke-width="1.4"/>' + dots;
+}
+
+function renderSchedule(s) {
+  const body = document.getElementById("schedBody");
+  document.getElementById("schedCount").textContent =
+    s.total ? s.total + " ENTR" + (s.total===1?"Y":"IES") : "—";
+  if (!s.items || !s.items.length) {
+    body.innerHTML = '<tr><td class="st-queued" colspan="3">no active schedule</td></tr>'; return;
+  }
+  body.innerHTML = s.items.map(it => {
+    const cls = "st-" + it.state;
+    const win = it.startTime || (it.expDur!=null ? (it.expDur+"s ×"+(it.expCount||1)) : "");
+    return '<tr><td>'+it.target+'</td><td>'+win+'</td><td class="'+cls+'">'+it.state+'</td></tr>';
+  }).join("");
+}
+
+function renderFiled(aavso) {
+  const body = document.getElementById("filedBody");
+  const rows = [];
+  const ls = aavso && aavso.last_submission;
+  if (ls) {
+    const m = (ls.magnitude!=null) ? Number(ls.magnitude).toFixed(2) : "—";
+    const ok = ls.ok !== false;
+    rows.push('<tr><td>'+(ls.target_name||"—")+'</td><td class="'+(ok?"":"proc")+'">'+(ok?m:"processing")+'</td></tr>');
+  }
+  const rs = aavso && aavso.recent_submissions;
+  if (rs) for (const [name, bjd] of Object.entries(rs)) {
+    if (ls && name === ls.target_name) continue;
+    rows.push('<tr><td>'+name+'</td><td class="st-complete">filed</td></tr>');
+  }
+  body.innerHTML = rows.length ? rows.join("")
+    : '<tr><td class="st-queued">nothing filed yet</td><td></td></tr>';
+}
+
+function txt(id, v) { document.getElementById(id).textContent = v; }
+
+async function tick() {
+  let d;
+  try { d = await (await fetch("/api/scope")).json(); }
+  catch (e) { return; }
+
+  const tel = d.telescope || {}, cam = d.camera || {}, sp = d.specs || {};
+  const connected = !!tel.connected;
+  if (!window.aladinFailed)
+    document.getElementById("noconn").style.display = connected ? "none" : "flex";
+  document.getElementById("liveDot").className = "dot" + (connected && tel.tracking ? " live" : "");
+
+  // pointing
+  setPointing(tel.ra, tel.dec);
+
+  // header target = current schedule target, else pointing
+  const sched = d.schedule || {};
+  txt("skyTarget", sched.current_target || (connected ? "MANUAL" : "—"));
+  txt("skyMeta", connected ? ("DSS2 · " + (sched.current_phase || "TRACKING").toUpperCase()) : "DSS2 · OFFLINE");
+
+  // nav footer
+  const obs = d.observatory || {};
+  document.getElementById("navFoot").innerHTML =
+    "NODE " + (obs.node_id || "····") + "<br>REV. " +
+    new Date((d.server_ts||0)*1000).toISOString().slice(0,10);
+
+  // schedule + exposure
+  renderSchedule(sched);
+  txt("expDur", cam.exposure_duration != null ? Math.round(cam.exposure_duration) : "—");
+  txt("expCount", sched.total_frames || "—");
+  txt("expCap", sched.current_frame || 0);
+
+  // light curve
+  const phot = d.photometry || {};
+  drawLC(phot.history);
+  const lr = phot.last_result;
+  txt("lcTarget", lr && lr.target_name ? lr.target_name : "");
+
+  // telescope stats
+  txt("telName", obs.telescope || "");
+  txt("telMount", tel.parked ? "PARKED" : (tel.slewing ? "SLEWING" : (connected ? "TRACKING" : "—")));
+  txt("telRA", fmtRA(tel.ra));
+  txt("telDec", fmtDec(tel.dec));
+  const trk = document.getElementById("telTrack");
+  trk.textContent = connected ? (tel.tracking ? "ON" : "OFF") : "—";
+  trk.className = "v" + (tel.tracking ? " on" : "");
+  txt("telAp", sp.aperture_mm ? sp.aperture_mm + " mm" : "—");
+  txt("telFl", sp.focal_length_mm ? (sp.focal_length_mm + " mm · ƒ/" + (sp.focal_ratio||"—")) : "—");
+  txt("telPx", sp.pixel_scale_arcsec ? sp.pixel_scale_arcsec + "″/px" : "—");
+  txt("telTemp", (cam.ccd_temperature != null) ? Number(cam.ccd_temperature).toFixed(1) : "—");
+
+  renderFiled(d.aavso);
+}
+
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>"""
 
 
 # ── HTML template ──────────────────────────────────────────────────────────────
