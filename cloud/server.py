@@ -132,10 +132,10 @@ def serve_website(filename):
 # on the website stays stable even as release tags change.
 
 _GITHUB_RELEASE_BASE = "https://github.com/ManiFed/TTN/releases/download"
-_GITHUB_RELEASE_PAGE = "https://github.com/ManiFed/TTN/releases/tag/v1.0.2"
+_GITHUB_RELEASE_PAGE = "https://github.com/ManiFed/TTN/releases/tag/v1.0.3"
 
 _DOWNLOAD_URLS = {
-    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.2/TelescopeNetNode-1.0.2-macOS.pkg",
+    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.3/TelescopeNetNode-1.0.3-macOS.pkg",
     "windows": os.environ.get("TTN_WINDOWS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
     "linux":   os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
     "raspberry-pi-os": os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),

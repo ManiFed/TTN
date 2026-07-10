@@ -2599,8 +2599,9 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       Text('Your activation code', style: tt.titleMedium),
       const SizedBox(height: 8),
       Text(
-        'Open http://localhost:5173 on the computer running the Node Agent. '
-        'The setup prompt will appear there; paste this code to link the telescope.',
+        'In The Telescope Net app on this computer, open the Node tab and tap '
+        '“Enter activation code”, then paste this code to link the telescope. '
+        'Nothing opens automatically until you request it.',
         style: tt.bodyMedium,
       ),
       const SizedBox(height: 20),

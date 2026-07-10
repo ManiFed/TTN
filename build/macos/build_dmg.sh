@@ -14,7 +14,7 @@
 set -e
 cd "$(dirname "$0")/../.."   # repo root
 
-VERSION="1.0.2"
+VERSION="1.0.3"
 APP_NAME="TelescopeNetNode"
 DESKTOP_APP_NAME="TelescopeNet"
 BUNDLE_DIR="dist/${APP_NAME}.app"
@@ -39,19 +39,9 @@ if [ ! -f "${DIST_DIR}/${APP_NAME}" ]; then
     echo "Run first:  python -m PyInstaller build/node_agent.spec --clean --noconfirm"
     exit 1
 fi
-HAS_DESKTOP_APP=0
-if [ -d "${FLUTTER_APP_SOURCE}" ]; then
-    HAS_DESKTOP_APP=1
-else
-    echo "WARNING: Flutter desktop app not found at ${FLUTTER_APP_SOURCE}"
-    echo "  Building node-service package only (dashboard opens in browser)."
-    echo "  To include the desktop app: cd app && flutter build macos --release"
-fi
-
-# ── Assemble .app bundle ───────────────────────────────────────────────────────
+# ── Assemble background agent .app ─────────────────────────────────────────────
 echo "Assembling .app bundle..."
 rm -rf "${BUNDLE_DIR}"
-rm -rf "${DESKTOP_BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 cp "${DIST_DIR}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
@@ -77,14 +67,13 @@ cat > "${CONTENTS}/Info.plist" <<EOF
     <string>APPL</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <!-- Agent: no Dock icon. Double-click still works; main_service detaches
-         a daemon and exits so Launch Services never marks us Not Responding. -->
+    <!-- Agent: no Dock icon. Double-click opens TelescopeNet.app and exits. -->
     <key>LSUIElement</key>
     <true/>
     <key>LSBackgroundOnly</key>
     <false/>
     <key>CFBundleGetInfoString</key>
-    <string>The Telescope Net Node Agent — opens the local dashboard in your browser</string>
+    <string>The Telescope Net Node Agent — background service; opens The Telescope Net app</string>
 </dict>
 </plist>
 EOF
@@ -93,9 +82,22 @@ cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/com.teles
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-# Optional foreground Flutter window ships next to the background node daemon.
-if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
+# ── Foreground UI app (Flutter preferred, else native WKWebView shell) ────────
+HAS_DESKTOP_APP=0
+rm -rf "${DESKTOP_BUNDLE_DIR}"
+if [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" != "${DESKTOP_BUNDLE_DIR}" ]; then
+    echo "Using Flutter desktop app: ${FLUTTER_APP_SOURCE}"
     cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
+    HAS_DESKTOP_APP=1
+else
+    echo "Flutter app not at ${FLUTTER_APP_SOURCE} — building native WKWebView shell."
+    bash "${BUILD_DIR}/build_desktop_shell.sh" "${DESKTOP_BUNDLE_DIR}" "${VERSION}"
+    if [ -d "${DESKTOP_BUNDLE_DIR}" ]; then
+        HAS_DESKTOP_APP=1
+    else
+        echo "ERROR: failed to build TelescopeNet.app desktop shell"
+        exit 1
+    fi
 fi
 
 # ── Code signing ───────────────────────────────────────────────────────────────

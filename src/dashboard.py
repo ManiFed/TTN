@@ -2075,8 +2075,10 @@ def _pier_cam_loop() -> None:
 
 @app.route("/")
 def index():
-    from flask import abort
-    abort(403)
+    # Served only on 127.0.0.1 — embedded in the native desktop app window
+    # (TelescopeNet.app), not intended as a public web UI.
+    from flask import render_template_string
+    return render_template_string(_HTML)
 
 
 @app.route("/api/status")
@@ -9587,13 +9589,13 @@ async function _checkFirstRun() {
       return;
     }
     if (setupBanner) setupBanner.style.display = 'flex';
-    // Pre-fill with any saved code so the user just has to click Connect
+    // Do NOT auto-open the activation modal — only when the user clicks
+    // "Enter code" (or the desktop app submits a code to the local API).
     const savedCode = (cloudCfg.activation_code || '').trim();
     if (savedCode && !_isPlaceholderCode(savedCode)) {
       const inp = document.getElementById('welcomeCodeInput');
       if (inp && !inp.value) inp.value = savedCode;
     }
-    openWelcomeModal();
   } catch (_) {}
 }
 
@@ -9801,6 +9803,8 @@ def launch(port: int = 5173, open_browser: bool = True) -> None:
         except Exception:
             time.sleep(0.25)
 
+    # Browser UI is intentionally not the product surface (desktop app is).
+    # open_browser remains for local source-dev convenience only.
     if open_browser:
         try:
             import webbrowser

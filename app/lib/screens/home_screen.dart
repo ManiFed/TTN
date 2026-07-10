@@ -628,7 +628,7 @@ class _SetupWallState extends State<_SetupWall> {
       icon: Icons.link_outlined,
       label: 'Come back here and tap Connect',
       detail:
-          'Tap "Connect telescope" below, then paste the activation code into the Node Agent dashboard.',
+          'Tap "Connect telescope" below to get a code, then enter it in the Node tab of this app.',
     ),
   ];
 

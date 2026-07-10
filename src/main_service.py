@@ -23,11 +23,13 @@ import socket
 import subprocess
 import sys
 import time
-import webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 logger = logging.getLogger("main_service")
+
+# Foreground desktop app installed alongside the headless node service.
+_MACOS_DESKTOP_APP = pathlib.Path("/Applications/TelescopeNet.app")
 
 
 def _default_data_dir() -> pathlib.Path:
@@ -71,7 +73,6 @@ def _prepare_data_dir(data_dir: pathlib.Path) -> None:
     template = _template_path()
     if template is not None:
         shutil.copyfile(template, config_path)
-        # The placeholder is useful to installers but is not a real code.
         raw = config_path.read_text(encoding="utf-8")
         config_path.write_text(
             raw.replace("ACTIVATION_CODE_PLACEHOLDER", ""),
@@ -99,23 +100,40 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
-def _open_dashboard(port: int) -> None:
-    url = f"http://localhost:{port}"
-    try:
-        webbrowser.open(url)
-    except Exception as exc:
-        logger.warning("Could not open browser for %s: %s", url, exc)
+def _open_desktop_ui() -> bool:
+    """Open the native Telescope Net app window (never the browser)."""
+    if sys.platform == "darwin":
+        if _MACOS_DESKTOP_APP.is_dir():
+            try:
+                subprocess.Popen(
+                    ["/usr/bin/open", "-a", str(_MACOS_DESKTOP_APP)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                return True
+            except OSError as exc:
+                logger.error("Could not open desktop app: %s", exc)
+                return False
+        logger.error(
+            "Desktop app missing at %s — install TelescopeNet.app",
+            _MACOS_DESKTOP_APP,
+        )
+        return False
+    # Non-macOS packaged launches: no browser fallback. The desktop app is
+    # the only supported control surface.
+    logger.warning("No desktop app open helper on this platform")
+    return False
 
 
 def _macos_gui_launch(port: int, data_dir: pathlib.Path) -> bool:
-    """Handle double-click / Finder launch of the .app bundle.
+    """Handle double-click / Finder launch of the headless .app bundle.
 
-    A PyInstaller binary is not a Cocoa app, so if it stays in the foreground
-    Launch Services marks it "Application Not Responding" forever and the
-    process holds a lock that blocks deleting the .app.
-
-    Strategy: if the dashboard is not up, spawn a detached daemon child, wait
-    for the port, open the browser, then exit the GUI-tracked process.
+    TelescopeNetNode.app is not a Cocoa UI — Launch Services would mark it
+    "Application Not Responding" if it stayed in the foreground. Detach the
+    background service if needed, open TelescopeNet.app, then exit.
     """
     if sys.platform != "darwin":
         return False
@@ -152,7 +170,7 @@ def _macos_gui_launch(port: int, data_dir: pathlib.Path) -> bool:
                 break
             time.sleep(0.25)
 
-    _open_dashboard(port)
+    _open_desktop_ui()
     return True
 
 
@@ -161,7 +179,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5173,
                         help="Dashboard port (default: 5173)")
     parser.add_argument("--no-browser", action="store_true",
-                        help="Start in headless mode without opening a browser tab")
+                        help="Start headless (service mode; do not open UI)")
     parser.add_argument("--data-dir", default="",
                         help="Working directory for config.yaml and data/ (default: current dir)")
     args = parser.parse_args()
@@ -169,43 +187,39 @@ def main() -> None:
     if args.data_dir:
         data_dir = pathlib.Path(args.data_dir).expanduser()
     elif getattr(sys, "frozen", False):
-        # Finder/DMG launches do not inherit a useful working directory. Never
-        # try to persist config beside the signed app or on a read-only DMG.
         data_dir = _default_data_dir()
     else:
         data_dir = pathlib.Path.cwd()
     _prepare_data_dir(data_dir)
     os.chdir(data_dir)
 
-    # On Windows as a service, stdout may not exist — redirect to a log file
     _setup_service_logging()
 
-    # Finder double-click: detach daemon + open browser + exit (no ANR).
+    # Finder double-click of the headless service .app: detach + open real UI.
     if not args.no_browser and _macos_gui_launch(args.port, data_dir):
         return
 
-    # Already running (e.g. launchd service up, second click / second start).
+    # Already running — open the desktop app if this was an interactive launch.
     if _port_open(args.port):
-        logger.info("Dashboard already listening on port %d", args.port)
+        logger.info("Node agent already listening on port %d", args.port)
         if not args.no_browser:
-            _open_dashboard(args.port)
+            _open_desktop_ui()
             return
-        # Headless/service restarts should not stack a second server.
         logger.error(
             "Port %d is already in use — refusing second headless instance",
             args.port,
         )
         sys.exit(0)
 
-    # Install a SIGTERM handler so systemd / launchd can shut us down cleanly
     def _sigterm(signum, frame):
         logger.info("SIGTERM received — shutting down")
         sys.exit(0)
     signal.signal(signal.SIGTERM, _sigterm)
 
-    # Import and run the dashboard (this blocks until Ctrl-C / SIGTERM)
     import src.dashboard as dashboard
-    dashboard.launch(port=args.port, open_browser=not args.no_browser)
+    # Never open a browser from the packaged service. The Flutter desktop app
+    # is the only control surface. open_browser=False always for headless.
+    dashboard.launch(port=args.port, open_browser=False)
 
 
 def _setup_service_logging() -> None:
@@ -216,7 +230,7 @@ def _setup_service_logging() -> None:
         import logging.handlers
         handler = logging.handlers.RotatingFileHandler(
             log_dir / "node_agent.log",
-            maxBytes=5 * 1024 * 1024,  # 5 MB
+            maxBytes=5 * 1024 * 1024,
             backupCount=3,
             encoding="utf-8",
         )
@@ -224,7 +238,7 @@ def _setup_service_logging() -> None:
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.root.addHandler(handler)
     except OSError:
-        pass  # Console logging still works
+        pass
 
 
 if __name__ == "__main__":

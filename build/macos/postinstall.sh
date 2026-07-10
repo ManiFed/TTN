@@ -115,8 +115,8 @@ if [ -n "${CONSOLE_USER}" ] && [ "${CONSOLE_USER}" != "root" ] && [ "${CONSOLE_U
             launchctl asuser "${CONSOLE_UID}" /usr/bin/open -a "${DESKTOP_APP}" || true
             echo "Desktop app opened for ${CONSOLE_USER}: ${DESKTOP_APP}"
         else
-            launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}" || true
-            echo "Dashboard opened for ${CONSOLE_USER}: ${DASHBOARD_URL}"
+            # Never fall back to a browser — the product UI is the desktop app.
+            echo "WARNING: Desktop app missing at ${DESKTOP_APP}; not opening browser"
         fi
     fi
 fi
