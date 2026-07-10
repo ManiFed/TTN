@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends astrometry.net wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip
+
+COPY cloud/requirements.txt cloud/requirements.txt
+RUN pip install --no-cache-dir -r cloud/requirements.txt
+
+COPY cloud/ cloud/
+COPY src/ src/
+COPY scripts/fetch_astrometry_index.sh scripts/fetch_astrometry_index.sh
+
+# The astrometry.net apt package ships /etc/astrometry.cfg pointing at its own
+# bundled data dir; point it at the volume-backed index dir instead so index
+# files persist across deploys instead of re-downloading into image layers.
+RUN mkdir -p /data/astrometry \
+    && printf 'add_path /data/astrometry\ninparallel\nautoindex\n' > /etc/astrometry.cfg
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["sh", "-c", "./scripts/fetch_astrometry_index.sh && python -m cloud.ingest_worker cloud/config.production.yaml"]

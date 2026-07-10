@@ -121,8 +121,11 @@ def start_background_loops(config: dict) -> None:
         crossmatch.run_pending(config)
         crossmatch.run_pending_retro(config)
     _loop("crossmatch", 300, crossmatch_pass)
-    _loop("ingest-worker", float(config.get("survey", {}).get("ingest_interval_s", 30)),
-          lambda: ingest_worker.process_pending(config))
+    # Solving/extraction (ingest_worker.process_pending) does NOT run here —
+    # it needs the astrometry.net index volume, which only exists on the
+    # dedicated solver-worker service (run via `python -m cloud.ingest_worker`).
+    # Running it here would permanently fail any no-WCS contribution on first
+    # attempt, since solve-field isn't installed on the API host.
     if sched_cfg.get("reflow", False):
         from cloud.chorus import reflow
         _loop("reflow", float(sched_cfg.get("reflow_interval_s", 60)),

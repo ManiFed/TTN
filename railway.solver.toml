@@ -1,0 +1,20 @@
+# EVERY LENS ON EARTH — solver-worker: plate-solves contributed frames with
+# no WCS, using a local astrometry.net index volume mounted at /data/astrometry.
+# In Railway: create a NEW service, Settings -> Config file path = /railway.solver.toml,
+# attach a volume at /data (for both /data/astrometry and cloud_data if used),
+# connect to the same GitHub repo (main branch), and share DATABASE_URL with
+# the API service. No public domain needed — this service only reads/writes
+# the shared database and the local index volume.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.solver"
+watchPatterns = [
+  "cloud/**",
+  "src/**",
+  "scripts/fetch_astrometry_index.sh",
+  "Dockerfile.solver",
+  "railway.solver.toml",
+]
+
+[deploy]
+restartPolicyType = "always"

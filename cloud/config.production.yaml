@@ -82,6 +82,13 @@ scheduler:
   network_optimizer: false
   local_search_ms: 1500
   replan_interval_minutes: 120
+  # THE ORGANISM: mid-night reflow of a clouded-out node's unexecuted plan
+  # items onto currently-dark nodes. reflow.tick runs only on the API
+  # service (the loop that dispatches interrupts); the solver-worker never
+  # touches this.
+  reflow: true
+  reflow_interval_s: 60
+  reflow_max_per_night: 200
   min_score: 0.25
   max_targets_per_night: 12
   sun_altitude_limit: -12
@@ -104,6 +111,19 @@ storage:
   raw_image_dir: /data/raw_images
   raw_image_retention_days: 14
   max_image_mb: 64
+
+# EVERY LENS ON EARTH: cloud plate solving. Runs only on the solver-worker
+# service (python -m cloud.ingest_worker), which has the astrometry.net
+# index volume mounted at /data/astrometry (see Dockerfile.solver). The
+# local index covers common consumer-telescope fields of view; frames
+# outside that range fall back to nova.astrometry.net.
+solver:
+  solve_field_path: solve-field
+  search_radius_deg: 15
+  timeout_s: 180
+  web_fallback: true
+  web_api_key: '${ASTROMETRY_API_KEY}'
+  web_timeout_s: 300
 
 logging:
   level: INFO
