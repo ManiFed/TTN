@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import 'discoveries_screen.dart';
 import 'help_tab.dart';
 import 'organism_screen.dart';
 import 'suggest_program_screen.dart';
@@ -66,6 +67,16 @@ class MoreTab extends StatelessWidget {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute<void>(builder: (_) => const OrganismScreen()),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.auto_awesome_outlined,
+          title: 'Open Aperture',
+          subtitle: 'Discoveries your telescope or contributed frames helped find',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => const DiscoveriesScreen()),
           ),
         ),
       ],

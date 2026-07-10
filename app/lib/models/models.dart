@@ -827,6 +827,83 @@ class OrganismFeed {
       );
 }
 
+/// A discovery candidate this member's nodes or contributed frames touched —
+/// "your telescope may have found something new" (GET /me/discoveries).
+///
+/// Covers two record shapes from the cloud: "live" candidates (ongoing,
+/// bjd/mag are a range — `firstBjd`/`lastBjd`, `peakDeltaMag`/`lastMag`) and
+/// "retrospective" ones found in an archived upload (a single point in
+/// time — `bjd`/`deltaMag`/`mag`), distinguished by [retrospective].
+class Discovery {
+  final int id;
+  final String sourceKey;
+  final double raDeg;
+  final double decDeg;
+  final String kind;
+  final String filter;
+  final String state;
+  final String vsxName;
+  final String tnsName;
+  final String updatedAt;
+  final bool retrospective;
+  final int nDetections;
+  final int nNodes;
+  final double peakDeltaMag;
+  final double lastMag;
+  final double deltaMag;
+  final double mag;
+  final List<String> yourNodes;
+
+  const Discovery({
+    required this.id,
+    required this.sourceKey,
+    required this.raDeg,
+    required this.decDeg,
+    required this.kind,
+    required this.filter,
+    required this.state,
+    required this.vsxName,
+    required this.tnsName,
+    required this.updatedAt,
+    required this.retrospective,
+    this.nDetections = 0,
+    this.nNodes = 0,
+    this.peakDeltaMag = 0,
+    this.lastMag = 0,
+    this.deltaMag = 0,
+    this.mag = 0,
+    this.yourNodes = const [],
+  });
+
+  /// The step-change in brightness that flagged this candidate, whichever
+  /// shape the record came from.
+  double get magnitudeDelta => retrospective ? deltaMag : peakDeltaMag;
+
+  /// Confirmed against a known variable-star or transient catalog.
+  bool get isKnown => vsxName.isNotEmpty || tnsName.isNotEmpty;
+
+  factory Discovery.fromJson(Map<String, dynamic> j) => Discovery(
+        id: _asInt(j['id']),
+        sourceKey: _asStr(j['source_key']),
+        raDeg: _asDouble(j['ra_deg']),
+        decDeg: _asDouble(j['dec_deg']),
+        kind: _asStr(j['kind']),
+        filter: _asStr(j['filter']),
+        state: _asStr(j['state']),
+        vsxName: _asStr(j['vsx_name']),
+        tnsName: _asStr(j['tns_name']),
+        updatedAt: _asStr(j['updated_at']),
+        retrospective: j['retrospective'] == true,
+        nDetections: _asInt(j['n_detections']),
+        nNodes: _asInt(j['n_nodes']),
+        peakDeltaMag: _asDouble(j['peak_delta_mag']),
+        lastMag: _asDouble(j['last_mag']),
+        deltaMag: _asDouble(j['delta_mag']),
+        mag: _asDouble(j['mag']),
+        yourNodes: (j['your_nodes'] as List? ?? []).map((e) => '$e').toList(),
+      );
+}
+
 /// One help assistant turn (POST /me/help/chat).
 class HelpChatResponse {
   final String reply;

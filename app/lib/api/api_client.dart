@@ -224,6 +224,15 @@ class ApiClient {
   Future<OrganismFeed> organism() async =>
       OrganismFeed.fromJson(await _get('/network/organism'));
 
+  /// Open Aperture: discovery candidates this member's nodes or contributed
+  /// frames touched — "your telescope may have found something new".
+  Future<List<Discovery>> discoveries() async {
+    final json = await _get('/me/discoveries');
+    return (json['discoveries'] as List? ?? [])
+        .map((e) => Discovery.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
   /// Push credentials to a local agent that is polling a pairing token.
   Future<void> pushPairCredentials({
     required String pairingToken,
