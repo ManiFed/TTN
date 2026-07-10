@@ -17,7 +17,8 @@ fetch() {
     return 0
   fi
   echo "fetch_astrometry_index: downloading ${name}..."
-  wget -q -O "${dest}.tmp" "$url" && mv "${dest}.tmp" "$dest"
+  wget -q --timeout=30 --tries=3 --waitretry=5 -O "${dest}.tmp" "$url" \
+    && mv "${dest}.tmp" "$dest"
 }
 
 fetch 4100 index-4107.fits
