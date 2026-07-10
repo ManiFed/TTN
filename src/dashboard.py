@@ -2379,10 +2379,14 @@ def _do_connect(host: str, port: int, set_as_default: bool = False) -> tuple[dic
         with _state_lock:
             _state["connected"] = False
             _state["server"] = None
+        if _cloud is not None:
+            _cloud.request_heartbeat()
         return {"error": "No devices connected — " + "; ".join(errors)}, 502
 
     with _state_lock:
         _state["connected"] = True
+    if _cloud is not None:
+        _cloud.request_heartbeat()
 
     if set_as_default:
         try:
@@ -2499,6 +2503,8 @@ def api_disconnect():
         logger.info("Disconnected from %s:%s", _disc_host, _disc_port)
     else:
         logger.info("Disconnected from ALPACA server")
+    if _cloud is not None:
+        _cloud.request_heartbeat()
     return jsonify({"ok": True})
 
 
@@ -3986,7 +3992,6 @@ _SCOPE_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NODE — Live Sky</title>
-<link rel="stylesheet" href="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.css">
 <style>
   :root {
     --bg:      #0c0c0e;
@@ -4137,7 +4142,7 @@ _SCOPE_HTML = r"""<!DOCTYPE html>
   </aside>
 </div>
 
-<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.js" charset="utf-8"></script>
+<script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
 <script>
 let aladin = null, aladinReady = false, lastPointKey = "", lastWant = null;
 const fmtRA = h => { if (h==null) return "—"; const m=(h*60)%60, s=(h*3600)%60;
@@ -9962,6 +9967,31 @@ def launch(port: int = 5173, open_browser: bool = True) -> None:
     global _safety_mgr, _image_watcher, _cloud, _commissioning
 
     import urllib.request
+
+    # Refuse to start a second instance. Flask's app.run() runs in a daemon
+    # thread below — if the port is already taken, that bind failure kills
+    # the thread silently while the rest of launch() (supervisor, safety
+    # manager, cloud comms) keeps going, producing a second process that
+    # fights the real instance for the same Alpaca connection and leaves it
+    # stuck reporting "can't reach the telescope" even though the server
+    # is fine. Fail loudly here instead, before any device connections open.
+    import socket as _socket
+    try:
+        _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        _probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        _probe.bind(("127.0.0.1", port))
+        _probe.close()
+    except OSError:
+        print(
+            f"\n  NODE v1 is already running on port {port}.\n"
+            f"  Refusing to start a second instance — running two at once causes "
+            f"duplicate connections to your telescope and can leave the dashboard "
+            f"stuck reporting it can't connect.\n"
+            f"  Open http://localhost:{port} in your browser, or quit the other "
+            f"instance first.\n",
+            file=sys.__stderr__,
+        )
+        sys.exit(1)
 
     cfg = _load_config()
     log_cfg = cfg.get("logging", {})

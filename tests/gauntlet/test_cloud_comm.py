@@ -180,6 +180,32 @@ class CloudCommGauntletTest(TempCwdTestCase):
         comm.submit_incident({"event": "x", "severity": "error"})  # no raise
         self.assertEqual(self.fake.paths("/incidents"), [])
 
+    # ── Immediate heartbeat on device-state change ─────────────────────────────
+
+    def test_request_heartbeat_wakes_loop_before_interval_elapses(self):
+        """A device reconnect must not sit behind a stale cached cloud status
+        for up to a full heartbeat interval — request_heartbeat() should cut
+        the wait short."""
+        import threading
+        import time
+
+        comm = self._comm()
+        woke_at = {}
+
+        def _wait():
+            start = time.monotonic()
+            comm._wait_or_kick(30)
+            woke_at["elapsed"] = time.monotonic() - start
+
+        t = threading.Thread(target=_wait)
+        t.start()
+        time.sleep(0.2)  # let the wait actually start blocking
+        comm.request_heartbeat()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "wait_or_kick did not wake on request_heartbeat")
+        self.assertLess(woke_at["elapsed"], 5.0)
+        self.assertFalse(comm._kick.is_set(), "kick flag should be cleared after waking")
+
 
 if __name__ == "__main__":
     unittest.main()

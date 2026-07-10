@@ -114,6 +114,7 @@ class CloudCommunicator:
         self._load_state()
 
         self._stop = threading.Event()
+        self._kick = threading.Event()
         self._queue_lock = threading.Lock()
         self._last_plan_id: Optional[str] = None
         self._threads: list[threading.Thread] = []
@@ -164,6 +165,18 @@ class CloudCommunicator:
     def stop(self) -> None:
         self._stop.set()
         logger.info("Cloud communicator stopped")
+
+    def request_heartbeat(self) -> None:
+        """Wake the heartbeat loop immediately instead of waiting out the interval.
+
+        Call this whenever locally-known device state changes (connect,
+        disconnect, reconnect) so the cloud's cached ``conditions`` — and
+        anything a member's app derives from it, like "scope connected" —
+        reflects reality within a second or two instead of lagging by up to
+        a full heartbeat interval (60s idle, 600s at the reconnect backoff
+        ceiling).
+        """
+        self._kick.set()
 
     # ── Registration ───────────────────────────────────────────────────────────
 
@@ -392,7 +405,16 @@ class CloudCommunicator:
                     was_ok = True
                     self._flush_queue()
                     self._flush_survey_queue()
-            self._stop.wait(interval)
+            self._wait_or_kick(interval)
+
+    def _wait_or_kick(self, interval: float) -> None:
+        """Sleep for *interval* seconds, waking early on stop() or request_heartbeat()."""
+        step = 1.0
+        elapsed = 0.0
+        while elapsed < interval and not self._stop.is_set() and not self._kick.is_set():
+            self._stop.wait(min(step, interval - elapsed))
+            elapsed += step
+        self._kick.clear()
 
     # ── Realtime push (SSE) ─────────────────────────────────────────────────────
 
