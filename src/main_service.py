@@ -218,9 +218,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _sigterm)
 
     import src.dashboard as dashboard
-    # Never open a browser from the packaged service. The Flutter desktop app
-    # is the only control surface. open_browser=False always for headless.
-    dashboard.launch(port=args.port, open_browser=False)
+    dashboard.launch(port=args.port)
 
 
 def _setup_service_logging() -> None:

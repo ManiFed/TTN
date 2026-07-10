@@ -8,12 +8,6 @@
       "port": 5173
     },
     {
-      "name": "scope-preview",
-      "runtimeExecutable": "venv/bin/python3",
-      "runtimeArgs": ["scripts/scope_preview.py"],
-      "port": 5200
-    },
-    {
       "name": "website",
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4187", "--directory", "website"],
