@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -162,10 +163,10 @@ class _NodeCard extends StatelessWidget {
   }
 
   Future<void> _openManage(BuildContext context) async {
-    final ok = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _NodeManageSheet(node: node, onRefresh: onRefresh),
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => _NodeDetailScreen(node: node, onRefresh: onRefresh),
+      ),
     );
     if (ok == true) onRefresh();
   }
@@ -493,18 +494,18 @@ class _NodeCard extends StatelessWidget {
   }
 }
 
-// ── Node manage sheet ─────────────────────────────────────────────────────────
+// ── Telescope detail screen ───────────────────────────────────────────────────
 
-class _NodeManageSheet extends StatefulWidget {
-  const _NodeManageSheet({required this.node, required this.onRefresh});
+class _NodeDetailScreen extends StatefulWidget {
+  const _NodeDetailScreen({required this.node, required this.onRefresh});
   final Node node;
   final VoidCallback onRefresh;
 
   @override
-  State<_NodeManageSheet> createState() => _NodeManageSheetState();
+  State<_NodeDetailScreen> createState() => _NodeDetailScreenState();
 }
 
-class _NodeManageSheetState extends State<_NodeManageSheet> {
+class _NodeDetailScreenState extends State<_NodeDetailScreen> {
   late Future<List<NightSummary>> _nightsFuture;
   bool _busy = false;
   String? _error;
@@ -623,183 +624,144 @@ class _NodeManageSheetState extends State<_NodeManageSheet> {
     final node = widget.node;
     final name = node.label;
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.92,
-      builder: (_, ctrl) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          children: [
-            // Handle + header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 36, height: 4,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(2),
-                        color: BSTheme.glassBorder,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(name, style: tt.titleLarge),
-                            if (node.location.isNotEmpty) ...[
-                              const SizedBox(height: 3),
-                              Row(
-                                children: [
-                                  const Icon(Icons.location_on_outlined,
-                                      size: 12, color: BSTheme.ink3),
-                                  const SizedBox(width: 3),
-                                  Flexible(
-                                    child: Text(node.location,
-                                        style: const TextStyle(
-                                            fontFamily: 'Geist',
-                                            fontSize: 13,
-                                            color: BSTheme.ink3)),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      _StatusBadge(status: node.status),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    node.nodeId,
-                    style: const TextStyle(
-                        fontFamily: 'Geist',
-                        fontSize: 10,
-                        color: BSTheme.ink3,
-                        letterSpacing: 0.8),
-                  ),
-                  const SizedBox(height: 20),
-                  const Divider(height: 1),
-                ],
-              ),
-            ),
-
-            // Scrollable body
-            Expanded(
-              child: ListView(
-                controller: ctrl,
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-                children: [
-                  // Stats
-                  FutureBuilder<List<NightSummary>>(
-                    future: _nightsFuture,
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 20),
-                            child: CircularProgressIndicator(),
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(name),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: node.location.isNotEmpty
+                    ? Row(
+                        children: [
+                          const Icon(Icons.location_on_outlined,
+                              size: 12, color: BSTheme.ink3),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(node.location,
+                                style: const TextStyle(
+                                    fontFamily: 'Geist',
+                                    fontSize: 13,
+                                    color: BSTheme.ink3)),
                           ),
-                        );
-                      }
-                      final nights = snap.data ?? [];
-                      final clearNights =
-                          nights.where((n) => n.wasClear).length;
-                      final totalObs = nights.fold<int>(
-                          0, (s, n) => s + n.nObservations);
-                      final submitted = nights.fold<int>(
-                          0, (s, n) => s + n.nSubmitted);
-                      return _StatsRow(
-                        clearNights: clearNights,
-                        totalObs: totalObs,
-                        submitted: submitted,
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 24),
-                  Text('MANAGE',
-                      style: tt.labelSmall
-                          ?.copyWith(letterSpacing: 1.4, color: BSTheme.ink3)),
-                  const SizedBox(height: 12),
-
-                  _ManageTile(
-                    icon: Icons.drive_file_rename_outline,
-                    color: BSTheme.accent,
-                    title: 'Rename telescope',
-                    subtitle: node.displayName.isEmpty
-                        ? 'Give it a name you\'ll recognize'
-                        : 'Currently "${node.displayName}"',
-                    onTap: _busy ? null : _renameTelescope,
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Vacation
-                  if (node.isOnVacation) ...[
-                    _ManageTile(
-                      icon: Icons.event_busy_outlined,
-                      color: BSTheme.warm,
-                      title: 'On vacation',
-                      subtitle: node.vacationUntil.isNotEmpty
-                          ? 'Back ${_fmtDate(node.vacationUntil)}'
-                          : 'Vacation mode active',
-                      trailing: _busy
-                          ? const SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : TextButton(
-                              onPressed: _cancelVacation,
-                              style: TextButton.styleFrom(
-                                  foregroundColor: BSTheme.warm,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8)),
-                              child: const Text('Cancel'),
-                            ),
-                    ),
-                  ] else ...[
-                    _ManageTile(
-                      icon: Icons.event_busy_outlined,
-                      color: BSTheme.ink3,
-                      title: 'Set vacation',
-                      subtitle: 'Pause reliability score while away',
-                      onTap: _busy ? null : _setVacation,
-                    ),
-                  ],
-
-                  const SizedBox(height: 8),
-
-                  // Disconnect
-                  _ManageTile(
-                    icon: Icons.link_off_outlined,
-                    color: BSTheme.danger,
-                    title: 'Disconnect telescope',
-                    subtitle: 'Remove from your account',
-                    onTap: _busy ? null : _disconnect,
-                  ),
-
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(_error!,
-                        style: const TextStyle(
-                            color: BSTheme.danger, fontSize: 13)),
-                  ],
-                ],
+                        ],
+                      )
+                    : const SizedBox.shrink(),
               ),
+              _StatusBadge(status: node.status),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            node.nodeId,
+            style: const TextStyle(
+                fontFamily: 'Geist',
+                fontSize: 10,
+                color: BSTheme.ink3,
+                letterSpacing: 0.8),
+          ),
+          const SizedBox(height: 20),
+          const Divider(height: 1),
+          const SizedBox(height: 20),
+
+          // Stats
+          FutureBuilder<List<NightSummary>>(
+            future: _nightsFuture,
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: CircularProgressIndicator(),
+                  ),
+                );
+              }
+              final nights = snap.data ?? [];
+              final clearNights = nights.where((n) => n.wasClear).length;
+              final totalObs =
+                  nights.fold<int>(0, (s, n) => s + n.nObservations);
+              final submitted =
+                  nights.fold<int>(0, (s, n) => s + n.nSubmitted);
+              return _StatsRow(
+                clearNights: clearNights,
+                totalObs: totalObs,
+                submitted: submitted,
+              );
+            },
+          ),
+
+          const SizedBox(height: 24),
+          _LocalAgentPanel(nodeId: node.nodeId),
+
+          Text('MANAGE',
+              style: tt.labelSmall
+                  ?.copyWith(letterSpacing: 1.4, color: BSTheme.ink3)),
+          const SizedBox(height: 12),
+
+          _ManageTile(
+            icon: Icons.drive_file_rename_outline,
+            color: BSTheme.accent,
+            title: 'Rename telescope',
+            subtitle: node.displayName.isEmpty
+                ? 'Give it a name you\'ll recognize'
+                : 'Currently "${node.displayName}"',
+            onTap: _busy ? null : _renameTelescope,
+          ),
+
+          const SizedBox(height: 8),
+
+          // Vacation
+          if (node.isOnVacation) ...[
+            _ManageTile(
+              icon: Icons.event_busy_outlined,
+              color: BSTheme.warm,
+              title: 'On vacation',
+              subtitle: node.vacationUntil.isNotEmpty
+                  ? 'Back ${_fmtDate(node.vacationUntil)}'
+                  : 'Vacation mode active',
+              trailing: _busy
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : TextButton(
+                      onPressed: _cancelVacation,
+                      style: TextButton.styleFrom(
+                          foregroundColor: BSTheme.warm,
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 8)),
+                      child: const Text('Cancel'),
+                    ),
+            ),
+          ] else ...[
+            _ManageTile(
+              icon: Icons.event_busy_outlined,
+              color: BSTheme.ink3,
+              title: 'Set vacation',
+              subtitle: 'Pause reliability score while away',
+              onTap: _busy ? null : _setVacation,
             ),
           ],
-        ),
+
+          const SizedBox(height: 8),
+
+          // Disconnect
+          _ManageTile(
+            icon: Icons.link_off_outlined,
+            color: BSTheme.danger,
+            title: 'Disconnect telescope',
+            subtitle: 'Remove from your account',
+            onTap: _busy ? null : _disconnect,
+          ),
+
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!,
+                style: const TextStyle(color: BSTheme.danger, fontSize: 13)),
+          ],
+        ],
       ),
     );
   }
@@ -989,6 +951,182 @@ class _ManageTile extends StatelessWidget {
                     : const SizedBox.shrink()),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Local node agent panel ────────────────────────────────────────────────────
+// Live status from the node service running on this computer. Only renders
+// when that service reports it's paired with the telescope being viewed —
+// a member's other telescopes may run on different machines entirely.
+class _LocalAgentPanel extends StatefulWidget {
+  const _LocalAgentPanel({required this.nodeId});
+  final String nodeId;
+
+  @override
+  State<_LocalAgentPanel> createState() => _LocalAgentPanelState();
+}
+
+class _LocalAgentPanelState extends State<_LocalAgentPanel> {
+  final _client = NodeAgentClient();
+  Timer? _poller;
+  NodeAgentStatus? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _poller = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _poller?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final status = await _client.status();
+      if (mounted) setState(() => _status = status);
+    } catch (_) {
+      if (mounted) setState(() => _status = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _status;
+    if (status == null || status.nodeId != widget.nodeId) {
+      return const SizedBox.shrink();
+    }
+    final online = status.connected && status.telescopeConnected;
+    final color = online ? BSTheme.success : BSTheme.warm;
+    final tt = Theme.of(context).textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('LOCAL NODE',
+              style:
+                  tt.labelSmall?.copyWith(letterSpacing: 1.4, color: BSTheme.ink3)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: BSTheme.glassBg,
+              border: Border.all(color: BSTheme.glassBorder),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  online ? Icons.check_circle_outline : Icons.info_outline,
+                  color: color,
+                  size: 26,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        online ? 'Node service online' : 'Setup or reconnect needed',
+                        style: const TextStyle(
+                            fontFamily: 'Geist',
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: BSTheme.ink),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        status.commissioningStatus == null
+                            ? 'Running on this computer.'
+                            : 'Commissioning: ${status.commissioningStatus}.',
+                        style: const TextStyle(
+                            fontFamily: 'Geist',
+                            fontSize: 12,
+                            color: BSTheme.ink3),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _AgentMetric(
+                  label: 'Telescope',
+                  value: status.telescopeConnected ? 'Connected' : 'Offline'),
+              _AgentMetric(
+                  label: 'Camera',
+                  value: status.cameraConnected ? 'Connected' : 'Offline'),
+              _AgentMetric(
+                  label: 'Safety',
+                  value: status.safe
+                      ? 'Safe'
+                      : (status.safetyReason.isEmpty
+                          ? 'Paused'
+                          : status.safetyReason)),
+              _AgentMetric(
+                  label: 'Photometry',
+                  value: status.photometryRunning
+                      ? 'Processing'
+                      : '${status.queuedFrames} queued'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AgentMetric extends StatelessWidget {
+  const _AgentMetric({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: BSTheme.glassBg,
+        border: Border.all(color: BSTheme.glassBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+                fontFamily: 'Geist',
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0,
+                color: BSTheme.ink3),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontFamily: 'Geist',
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: BSTheme.ink),
+          ),
+        ],
       ),
     );
   }
