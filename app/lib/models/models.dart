@@ -719,6 +719,114 @@ class HelpChatMessage {
       );
 }
 
+/// A node's live second-scale state in THE ORGANISM feed (part of
+/// GET /network/organism `fleet`).
+class FleetNode {
+  final String nodeId;
+  final String phase;
+  final String targetName;
+  final bool skyClear;
+  final bool isDark;
+  final bool online;
+  final String updatedAt;
+
+  const FleetNode({
+    required this.nodeId,
+    required this.phase,
+    required this.targetName,
+    required this.skyClear,
+    required this.isDark,
+    required this.online,
+    required this.updatedAt,
+  });
+
+  factory FleetNode.fromJson(Map<String, dynamic> j) => FleetNode(
+        nodeId: _asStr(j['node_id']),
+        phase: _asStr(j['phase']),
+        targetName: _asStr(j['target_name']),
+        skyClear: j['sky_clear'] == true || j['sky_clear'] == 1 || j['sky_clear'] == 1.0,
+        isDark: j['is_dark'] == true,
+        online: j['online'] == true,
+        updatedAt: _asStr(j['updated_at']),
+      );
+}
+
+/// A mid-night reflow: a clouded-out node's work moved to a dark node
+/// (part of GET /network/organism `reflows`).
+class ReflowEvent {
+  final String fromNode;
+  final String toNode;
+  final String targetName;
+  final double expectedInfo;
+  final String outcome;
+  final String createdAt;
+
+  const ReflowEvent({
+    required this.fromNode,
+    required this.toNode,
+    required this.targetName,
+    required this.expectedInfo,
+    required this.outcome,
+    required this.createdAt,
+  });
+
+  factory ReflowEvent.fromJson(Map<String, dynamic> j) => ReflowEvent(
+        fromNode: _asStr(j['from_node']),
+        toNode: _asStr(j['to_node']),
+        targetName: _asStr(j['target_name']),
+        expectedInfo: _asDouble(j['expected_info']),
+        outcome: _asStr(j['outcome']),
+        createdAt: _asStr(j['created_at']),
+      );
+}
+
+/// An autonomous reflex confirmation fired on candidate promotion
+/// (part of GET /network/organism `reflex_confirmations`).
+class ReflexConfirmation {
+  final String name;
+  final List<String> nodeIds;
+  final String createdAt;
+
+  const ReflexConfirmation({
+    required this.name,
+    required this.nodeIds,
+    required this.createdAt,
+  });
+
+  factory ReflexConfirmation.fromJson(Map<String, dynamic> j) => ReflexConfirmation(
+        name: _asStr(j['name']),
+        nodeIds: (j['node_ids'] as List? ?? []).map((e) => '$e').toList(),
+        createdAt: _asStr(j['created_at']),
+      );
+}
+
+/// THE ORGANISM activity feed (GET /network/organism): live fleet phases plus
+/// what the network just did on its own in the last 24h.
+class OrganismFeed {
+  final List<FleetNode> fleet;
+  final List<ReflowEvent> reflows;
+  final List<ReflexConfirmation> reflexConfirmations;
+
+  const OrganismFeed({
+    required this.fleet,
+    required this.reflows,
+    required this.reflexConfirmations,
+  });
+
+  factory OrganismFeed.fromJson(Map<String, dynamic> j) => OrganismFeed(
+        fleet: (j['fleet'] as List? ?? [])
+            .map((e) => FleetNode.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        reflows: (j['reflows'] as List? ?? [])
+            .map((e) => ReflowEvent.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        reflexConfirmations: (j['reflex_confirmations'] as List? ?? [])
+            .map((e) =>
+                ReflexConfirmation.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+      );
+}
+
 /// One help assistant turn (POST /me/help/chat).
 class HelpChatResponse {
   final String reply;

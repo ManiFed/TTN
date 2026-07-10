@@ -219,6 +219,11 @@ class ApiClient {
   Future<Map<String, dynamic>> skyQuality(double lat, double lon) =>
       _get('/sky-quality', {'lat': lat, 'lon': lon});
 
+  /// THE ORGANISM: live fleet phases + the network's own mid-night reflow
+  /// and reflex-confirmation activity. Public read, no auth required.
+  Future<OrganismFeed> organism() async =>
+      OrganismFeed.fromJson(await _get('/network/organism'));
+
   /// Push credentials to a local agent that is polling a pairing token.
   Future<void> pushPairCredentials({
     required String pairingToken,

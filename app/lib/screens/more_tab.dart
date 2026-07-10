@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import 'help_tab.dart';
+import 'organism_screen.dart';
 import 'suggest_program_screen.dart';
 
 /// Secondary destinations gated behind the More tab.
@@ -55,6 +56,16 @@ class MoreTab extends StatelessWidget {
             MaterialPageRoute<void>(
               builder: (_) => const SuggestProgramScreen(),
             ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.hub_outlined,
+          title: 'The Organism',
+          subtitle: 'Live fleet status, mid-night reflows, and reflex confirmations',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => const OrganismScreen()),
           ),
         ),
       ],
