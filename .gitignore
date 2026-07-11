@@ -13,6 +13,7 @@ cloud_data/*.db-shm
 cloud_data/*.db-wal
 cloud_data/raw_images/
 cloud_data/aavso_files/
+cloud_data/aavso_batches/
 logs/
 app/.metadata
 app/test/

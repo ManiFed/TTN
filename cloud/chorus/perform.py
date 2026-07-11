@@ -137,12 +137,3 @@ def contingency_ladder(ctx, node_opps: list, final_state,
     return {"alternates": alternates} if alternates else {}
 
 
-def expected_info_summary(placements: list) -> Optional[dict]:
-    """Small per-node digest for logging / plan_runs stats."""
-    if not placements:
-        return None
-    return {
-        "n": len(placements),
-        "expected_info": round(sum(p.marginal for p in placements), 4),
-        "expected_deliveries": round(sum(p.p for p in placements), 2),
-    }

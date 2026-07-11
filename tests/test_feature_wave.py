@@ -5,7 +5,6 @@ import unittest
 from unittest.mock import patch
 
 from cloud import incidents, scoring
-from cloud.archive import greedy_scheduler
 
 
 class ScoreExplanationTest(unittest.TestCase):
@@ -117,18 +116,6 @@ class IncidentClassificationTest(unittest.TestCase):
 
         self.assertGreater(node_penalty, env_penalty)
         self.assertLess(node_penalty, 1.0)
-
-
-class LongitudeDiversityTest(unittest.TestCase):
-    def test_reserved_nearby_wraps_across_dateline(self):
-        reservations = {"T": [179.0]}
-
-        self.assertTrue(
-            greedy_scheduler._reserved_nearby(reservations, "T", -179.0, 5.0)
-        )
-        self.assertFalse(
-            greedy_scheduler._reserved_nearby(reservations, "T", -150.0, 5.0)
-        )
 
 
 if __name__ == "__main__":

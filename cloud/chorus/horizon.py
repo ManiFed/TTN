@@ -83,34 +83,3 @@ def scarcity(target: dict, nodes: list, p_exec_by_node: dict,
     return 1.0 / (1.0 + q)
 
 
-def event_scarcity(period_days: Optional[float], target: dict, nodes: list,
-                   p_exec_by_node: dict,
-                   clear_prob: Callable[[dict, datetime], float],
-                   params: dict, today: Optional[datetime] = None) -> float:
-    """Scarcity for a periodic *event* (transit): future chances only exist on
-    nights an event recurs, so rare events price near 1.0."""
-    if not period_days or period_days <= 0 or not nodes:
-        return 1.0
-    gamma = min(max(float(params.get("scarcity_gamma", 0.93)), 0.5), 0.999)
-    horizon = int(float(params.get("scarcity_horizon_nights", 45)))
-    now = today or datetime.now(timezone.utc)
-    ra, dec = float(target["ra_deg"]), float(target["dec_deg"])
-
-    q = 0.0
-    k = 1
-    while True:
-        d = k * period_days
-        if d > horizon:
-            break
-        when = now + timedelta(days=d)
-        best = 0.0
-        for node in nodes:
-            if not visible_from(node, ra, dec, when):
-                continue
-            p = (clear_prob(node, when)
-                 * float(p_exec_by_node.get(node.get("node_id", ""), 0.6)))
-            if p > best:
-                best = p
-        q += (gamma ** d) * best
-        k += 1
-    return 1.0 / (1.0 + q)

@@ -79,17 +79,6 @@ def record_frame(
         _save(state)
 
 
-def current_medians() -> dict:
-    """Rolling-median snapshot (values may be None while windows are empty)."""
-    with _lock:
-        state = _load()
-    out = {"n_frames": int(state.get("n_frames", 0))}
-    for key, arr in (state.get("samples") or {}).items():
-        out[key] = round(statistics.median(arr), 4) if arr else None
-        out[f"{key}_n"] = len(arr)
-    return out
-
-
 def maybe_report(force: bool = False) -> Optional[dict]:
     """A characterization payload when one is due (every REPORT_EVERY solved
     frames, or forced right after registration), else None."""

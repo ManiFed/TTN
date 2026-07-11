@@ -273,10 +273,6 @@ def update_characterization(node_id: str, report: dict) -> dict:
     return {"ok": True, "applied": accepted}
 
 
-def get_node(node_id: str) -> Optional[dict]:
-    return db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
-
-
 def list_nodes(active_only: bool = False) -> list:
     rows = db.query("SELECT * FROM nodes ORDER BY registered_at")
     if active_only:
@@ -527,28 +523,6 @@ def end_session(node_id: str) -> None:
     logger.info("Session ended: node %s → sleeping", node_id)
 
 
-def mark_stale_portables_sleeping() -> int:
-    """Set portable nodes whose heartbeat has gone stale back to sleeping.
-
-    Called by the nightly maintenance loop so a portable node that was left
-    running and lost connection doesn't stay 'active' forever.
-    Returns the number of nodes updated.
-    """
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=HEARTBEAT_STALE_S)).isoformat()
-    rows = db.query(
-        "SELECT node_id FROM nodes WHERE portable = 1 AND status = 'active'"
-        " AND (last_heartbeat IS NULL OR last_heartbeat < %s)",
-        (cutoff,),
-    )
-    for r in rows:
-        db.execute(
-            "UPDATE nodes SET status = 'sleeping' WHERE node_id = %s",
-            (r["node_id"],),
-        )
-        logger.info("Portable node %s heartbeat stale → sleeping", r["node_id"])
-    return len(rows)
-
-
 # ── Vacation management ────────────────────────────────────────────────────────
 
 def set_vacation(node_id: str, until_date: str) -> None:
@@ -575,20 +549,3 @@ def clear_vacation(node_id: str) -> None:
     )
     logger.info("Node %s vacation cleared → %s", node_id, new_status)
 
-
-def expire_vacations() -> int:
-    """Auto-clear vacations whose end date has passed.  Called by nightly maintenance."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rows = db.query(
-        "SELECT node_id, portable FROM nodes"
-        " WHERE status = 'vacation' AND vacation_until != '' AND vacation_until < %s",
-        (today,),
-    )
-    for r in rows:
-        new_status = "sleeping" if r.get("portable") else "offline"
-        db.execute(
-            "UPDATE nodes SET status = %s, vacation_until = '' WHERE node_id = %s",
-            (new_status, r["node_id"]),
-        )
-        logger.info("Node %s vacation expired → %s", r["node_id"], new_status)
-    return len(rows)

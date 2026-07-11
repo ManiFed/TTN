@@ -168,21 +168,6 @@ def open_incident(node_id: str, title: str, root_cause: str = "unknown",
         return None
 
 
-def resolve_incident(incident_id: int, resolver: str = "",
-                     note: str = "") -> None:
-    """Mark a structured incident as resolved."""
-    try:
-        now = _now()
-        db.execute(
-            """UPDATE incidents SET status='resolved', resolved_at=%s, updated_at=%s,
-                    resolver=%s, resolution_note=%s
-               WHERE id=%s""",
-            (now, now, resolver[:120], note[:500], incident_id),
-        )
-    except Exception as exc:
-        logger.warning("Could not resolve incident %s: %s", incident_id, exc)
-
-
 def auto_triage(node_id: str, stats: dict[str, Any]) -> None:
     """
     Auto-open a structured incident based on freshly computed performance stats.

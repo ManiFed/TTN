@@ -27,10 +27,6 @@ POST_BASELINE_MIN = 30
 JD_UNIX_EPOCH = 2440587.5  # JD at 1970-01-01 00:00 UTC
 
 
-def _jd_now() -> float:
-    return datetime.now(timezone.utc).timestamp() / 86400 + JD_UNIX_EPOCH
-
-
 def _jd_to_utc(jd: float) -> datetime:
     unix = (jd - JD_UNIX_EPOCH) * 86400
     return datetime.fromtimestamp(unix, tz=timezone.utc)
