@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -41,21 +45,32 @@ class _DashboardData {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 class _DashboardTabState extends State<DashboardTab> {
-  late Future<_DashboardData> _future;
+  static const _pollInterval = Duration(seconds: 15);
+
+  _DashboardData? _data;
+  Object? _error;
+  bool _loading = true;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _refresh();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _refresh(silent: true));
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<_DashboardData> _load() async {
     final api = context.read<AppState>().api;
 
     final nodesFuture = api.nodes().catchError((_) => <Node>[]);
-    final obsFuture = api
-        .observations(days: 1, limit: 10)
-        .catchError((_) => <Observation>[]);
+    final obsFuture =
+        api.observations(days: 1, limit: 10).catchError((_) => <Observation>[]);
     final timelineFuture = api.timeline().catchError((_) => <TimelineItem>[]);
     final targetsFuture = api.targets().catchError((_) => <Target>[]);
     final notifsFuture = api.notifications(limit: 5);
@@ -83,46 +98,66 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
-  Future<void> _refresh() async => setState(() => _future = _load());
+  // `silent` refreshes (periodic polling) update data in place without
+  // dropping back to a loading spinner, so the view doesn't flicker every
+  // 15s. Only the initial load and manual pull-to-refresh show the spinner.
+  Future<void> _refresh({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final data = await _load();
+      if (!mounted) return;
+      setState(() {
+        _data = data;
+        _error = null;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<_DashboardData>(
-      future: _future,
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_off, size: 48, color: BSTheme.ink3),
-                  const SizedBox(height: 12),
-                  Text(
-                    '${snap.error}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: BSTheme.ink2),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _refresh,
-                    child: const Text('Retry'),
-                  ),
-                ],
+    if (_data == null) {
+      if (_loading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, size: 48, color: BSTheme.ink3),
+              const SizedBox(height: 12),
+              Text(
+                '$_error',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: BSTheme.ink2),
               ),
-            ),
-          );
-        }
-        return _DashboardView(
-          data: snap.data!,
-          onRefresh: _refresh,
-          onNavigateToTab: widget.onNavigateToTab,
-        );
-      },
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => _refresh(),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return _DashboardView(
+      data: _data!,
+      onRefresh: () => _refresh(),
+      onNavigateToTab: widget.onNavigateToTab,
     );
   }
 }
@@ -474,7 +509,7 @@ class _LiveStatusBanner extends StatelessWidget {
   }
 }
 
-class _TelescopeOpsPanel extends StatelessWidget {
+class _TelescopeOpsPanel extends StatefulWidget {
   const _TelescopeOpsPanel({
     required this.nodes,
     required this.unread,
@@ -486,14 +521,57 @@ class _TelescopeOpsPanel extends StatelessWidget {
   final VoidCallback onOpenAlerts;
 
   @override
+  State<_TelescopeOpsPanel> createState() => _TelescopeOpsPanelState();
+}
+
+class _TelescopeOpsPanelState extends State<_TelescopeOpsPanel> {
+  List<TelescopeSpec> _catalog = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCatalog();
+  }
+
+  Future<void> _loadCatalog() async {
+    try {
+      final list = await context.read<AppState>().api.telescopes();
+      if (mounted) setState(() => _catalog = list);
+    } catch (_) {}
+  }
+
+  TelescopeSpec? _specFor(Node? node) {
+    if (node == null || node.telescopeModel.isEmpty) return null;
+    final model = node.telescopeModel.toLowerCase();
+    for (final spec in _catalog) {
+      if (spec.isCustom) continue;
+      if (spec.displayName.toLowerCase() == model ||
+          spec.key.replaceAll('_', ' ') == model) {
+        return spec;
+      }
+    }
+    for (final spec in _catalog) {
+      if (spec.isCustom) continue;
+      if (model.contains(spec.displayName.toLowerCase()) ||
+          spec.displayName.toLowerCase().contains(model)) {
+        return spec;
+      }
+    }
+    return null;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final nodes = widget.nodes;
+    final unread = widget.unread;
+    final onOpenAlerts = widget.onOpenAlerts;
     final node = nodes.isEmpty ? null : nodes.first;
     final online = nodes.where((n) => n.online).length;
     final selectedLabel = node != null
         ? node.label
         : nodes.length > 1
-        ? 'All telescopes'
-        : 'No telescope';
+            ? 'All telescopes'
+            : 'No telescope';
 
     return _OpsPanel(
       padding: EdgeInsets.zero,
@@ -553,6 +631,23 @@ class _TelescopeOpsPanel extends StatelessWidget {
             ),
             if (node?.telescopeModel.isNotEmpty == true)
               _KeyValueLine(label: 'Model', value: node!.telescopeModel),
+            if (_specFor(node) case final spec?) ...[
+              _KeyValueLine(
+                label: 'Aperture',
+                value: '${spec.apertureMm.toStringAsFixed(0)} mm',
+              ),
+              _KeyValueLine(
+                label: 'Focal / ƒ',
+                value:
+                    '${spec.focalLengthMm.toStringAsFixed(0)} mm · ƒ/${spec.focalRatio.toStringAsFixed(1)}',
+              ),
+              _KeyValueLine(
+                label: 'Pixel scale',
+                value: '${spec.pixelScaleArcsec.toStringAsFixed(2)}″/px',
+              ),
+              if (spec.cameraModel.isNotEmpty)
+                _KeyValueLine(label: 'Sensor', value: spec.cameraModel),
+            ],
             const SizedBox(height: 16),
             GestureDetector(
               onTap: onOpenAlerts,
@@ -582,9 +677,8 @@ class _ObservingPlanPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rows = timeline.isNotEmpty
-        ? timeline.take(4).toList()
-        : <TimelineItem>[];
+    final rows =
+        timeline.isNotEmpty ? timeline.take(4).toList() : <TimelineItem>[];
 
     return _OpsPanel(
       padding: EdgeInsets.zero,
@@ -734,6 +828,33 @@ class _SelectedTargetPanelState extends State<_SelectedTargetPanel> {
               ),
             ] else ...[
               const SizedBox(height: 14),
+              FutureBuilder<ObjectDetails?>(
+                key: ValueKey('finder-$_lookupName'),
+                future: _detailsFuture,
+                builder: (context, snap) {
+                  final raDeg = (widget.plan != null &&
+                          (widget.plan!.ra != 0 || widget.plan!.dec != 0))
+                      ? widget.plan!.ra
+                      : snap.data?.raDeg;
+                  final decDeg = (widget.plan != null &&
+                          (widget.plan!.ra != 0 || widget.plan!.dec != 0))
+                      ? widget.plan!.dec
+                      : snap.data?.decDeg;
+                  if (raDeg == null || decDeg == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: _FinderChart(
+                      raDeg: raDeg,
+                      decDeg: decDeg,
+                      label: title,
+                    ),
+                  );
+                },
+              ),
+              _LightCurveMini(targetName: title),
+              const SizedBox(height: 14),
               _SectionLabel('Coordinates'),
               const SizedBox(height: 8),
               _KeyValueLine(
@@ -741,16 +862,16 @@ class _SelectedTargetPanelState extends State<_SelectedTargetPanel> {
                 value: widget.plan == null
                     ? '—'
                     : (widget.plan!.ra != 0 || widget.plan!.dec != 0)
-                    ? _formatRa(widget.plan!.ra)
-                    : '—',
+                        ? _formatRa(widget.plan!.ra)
+                        : '—',
               ),
               _KeyValueLine(
                 label: 'Dec',
                 value: widget.plan == null
                     ? '—'
                     : (widget.plan!.ra != 0 || widget.plan!.dec != 0)
-                    ? _formatDec(widget.plan!.dec)
-                    : '—',
+                        ? _formatDec(widget.plan!.dec)
+                        : '—',
               ),
               _KeyValueLine(
                 label: 'Magnitude',
@@ -806,6 +927,258 @@ class _SelectedTargetPanelState extends State<_SelectedTargetPanel> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Live sky view of where this target sits — a real DSS2 cutout centered on
+/// its coordinates (via the CDS hips2fits service), with an orange reticle
+/// marking the pointing. This is the closest thing to an Aladin finder chart
+/// that works without an embedded web view.
+class _FinderChart extends StatelessWidget {
+  const _FinderChart({
+    required this.raDeg,
+    required this.decDeg,
+    required this.label,
+    this.fovDeg = 0.8,
+  });
+
+  final double raDeg;
+  final double decDeg;
+  final String label;
+  final double fovDeg;
+
+  String get _imageUrl {
+    final params = {
+      'hips': 'CDS/P/DSS2/color',
+      'width': '440',
+      'height': '300',
+      'fov': fovDeg.toString(),
+      'projection': 'TAN',
+      'coordsys': 'icrs',
+      'ra': raDeg.toString(),
+      'dec': decDeg.toString(),
+      'format': 'jpg',
+    };
+    return Uri.https(
+      'alasky.u-strasbg.fr',
+      '/hips-image-services/hips2fits',
+      params,
+    ).toString();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: AspectRatio(
+        aspectRatio: 440 / 300,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(color: Colors.black),
+            Image.network(
+              _imageUrl,
+              key: ValueKey(_imageUrl),
+              fit: BoxFit.cover,
+              loadingBuilder: (context, child, progress) {
+                if (progress == null) return child;
+                return const Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: BSTheme.ink3,
+                    ),
+                  ),
+                );
+              },
+              errorBuilder: (context, error, stack) => const Center(
+                child: Text(
+                  'Sky image unavailable',
+                  style: TextStyle(
+                    fontFamily: 'Geist',
+                    fontSize: 11,
+                    color: BSTheme.ink3,
+                  ),
+                ),
+              ),
+            ),
+            IgnorePointer(
+              child: Center(
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: BSTheme.warm.withValues(alpha: 0.9),
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 8,
+              top: 6,
+              child: Text(
+                'FINDER CHART — ${label.toUpperCase()}',
+                style: const TextStyle(
+                  fontFamily: 'Geist',
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+            Positioned(
+              right: 8,
+              top: 6,
+              child: Text(
+                '${fovDeg.toStringAsFixed(1)}° FOV · DSS2',
+                style: const TextStyle(
+                  fontFamily: 'Geist',
+                  fontSize: 9,
+                  color: Colors.white54,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact real photometric light curve for the selected target, pulled from
+/// the same /lightcurves endpoint the full target-detail screen uses.
+class _LightCurveMini extends StatefulWidget {
+  const _LightCurveMini({required this.targetName});
+
+  final String targetName;
+
+  @override
+  State<_LightCurveMini> createState() => _LightCurveMiniState();
+}
+
+class _LightCurveMiniState extends State<_LightCurveMini> {
+  late Future<List<LightCurvePoint>> _future;
+  String? _loadedName;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load(widget.targetName);
+  }
+
+  @override
+  void didUpdateWidget(_LightCurveMini oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.targetName != _loadedName) {
+      setState(() => _future = _load(widget.targetName));
+    }
+  }
+
+  Future<List<LightCurvePoint>> _load(String name) async {
+    _loadedName = name;
+    if (name.isEmpty) return const [];
+    try {
+      return await context.read<AppState>().api.lightCurve(name, days: 14);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<LightCurvePoint>>(
+      key: ValueKey('lc-${widget.targetName}'),
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.only(bottom: 14),
+            child: _CatalogueLoading(),
+          );
+        }
+        final points = snap.data ?? const [];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(child: _SectionLabel('Δ MAG — TIME SERIES')),
+                  if (points.isNotEmpty)
+                    Text(
+                      '${points.length} pts',
+                      style: const TextStyle(
+                        fontFamily: 'Geist',
+                        fontSize: 10,
+                        color: BSTheme.ink3,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (points.length < 2)
+                const _EmptyLine('Awaiting photometry.')
+              else
+                SizedBox(height: 78, child: _LightCurveSpark(points: points)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LightCurveSpark extends StatelessWidget {
+  const _LightCurveSpark({required this.points});
+
+  final List<LightCurvePoint> points;
+
+  @override
+  Widget build(BuildContext context) {
+    final sorted = [...points]..sort((a, b) => a.bjd.compareTo(b.bjd));
+    final origin = sorted.first.bjd;
+    final spots =
+        sorted.map((p) => FlSpot(p.bjd - origin, -p.magnitude)).toList();
+    final mags = sorted.map((p) => p.magnitude).toList();
+    final minMag = mags.reduce(math.min);
+    final maxMag = mags.reduce(math.max);
+    final pad = (maxMag - minMag) * 0.18 + 0.05;
+
+    return LineChart(
+      LineChartData(
+        minY: -maxMag - pad,
+        maxY: -minMag + pad,
+        gridData: const FlGridData(show: false),
+        borderData: FlBorderData(show: false),
+        titlesData: const FlTitlesData(show: false),
+        lineTouchData: const LineTouchData(enabled: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            curveSmoothness: 0.25,
+            color: BSTheme.warm,
+            barWidth: 1.4,
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
+                radius: 1.8,
+                color: BSTheme.warm,
+                strokeColor: Colors.transparent,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1704,9 +2077,7 @@ class _EvidencePanel extends StatelessWidget {
               child: Sparkline(values: values, color: BSTheme.sky, height: 112),
             ),
             const SizedBox(height: 10),
-            ...obs
-                .take(4)
-                .map(
+            ...obs.take(4).map(
                   (o) => _EvidenceRow(
                     obs: o,
                     onTap: () => _openTarget(context, o.targetName),
@@ -2042,7 +2413,7 @@ class _TimelineIntentRow extends StatelessWidget {
     final detail = item.reason.isNotEmpty
         ? item.reason
         : '${item.expCount} exposures'
-              '${item.filter.isEmpty ? '' : ' · ${item.filter.toUpperCase()}'}';
+            '${item.filter.isEmpty ? '' : ' · ${item.filter.toUpperCase()}'}';
     return _IntentRow(
       icon: Icons.schedule,
       color: BSTheme.sky,
@@ -2084,8 +2455,8 @@ class _EvidenceRow extends StatelessWidget {
     final magColor = obs.magnitude < 8
         ? BSTheme.warm
         : obs.magnitude < 11
-        ? BSTheme.sky
-        : BSTheme.ink2;
+            ? BSTheme.sky
+            : BSTheme.ink2;
     final status = obs.aavsoSubmitted ? 'AAVSO accepted' : obs.qualityFlag;
     return _IntentRow(
       icon: Icons.scatter_plot_outlined,
@@ -2238,8 +2609,8 @@ class _Hero extends StatelessWidget {
     final networkColor = totalNodes == 0
         ? BSTheme.ink3
         : allOnline
-        ? BSTheme.success
-        : BSTheme.warm;
+            ? BSTheme.success
+            : BSTheme.warm;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2379,10 +2750,8 @@ class _ActivityPanel extends StatelessWidget {
             Expanded(
               child: ListView(
                 padding: EdgeInsets.zero,
-                children: timeline
-                    .take(6)
-                    .map((t) => _TimelineRow(item: t))
-                    .toList(),
+                children:
+                    timeline.take(6).map((t) => _TimelineRow(item: t)).toList(),
               ),
             ),
           ] else ...[
@@ -2398,9 +2767,7 @@ class _ActivityPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            ...obs
-                .take(4)
-                .map(
+            ...obs.take(4).map(
                   (o) => _ActivityRow(
                     obs: o,
                     onTap: () => _openTarget(context, o.targetName),
@@ -2467,8 +2834,8 @@ class _ActivityRow extends StatelessWidget {
     final magColor = obs.magnitude < 8
         ? BSTheme.warm
         : obs.magnitude < 11
-        ? BSTheme.accent
-        : BSTheme.ink2;
+            ? BSTheme.accent
+            : BSTheme.ink2;
 
     return _DashboardTapRow(
       onTap: onTap,
@@ -2585,11 +2952,10 @@ class _TargetRow extends StatelessWidget {
     final barColor = p > 0.7
         ? BSTheme.accent
         : p > 0.4
-        ? BSTheme.warm
-        : BSTheme.ink3;
-    final typeLabel = target.targetType.isEmpty
-        ? '—'
-        : target.targetType.toUpperCase();
+            ? BSTheme.warm
+            : BSTheme.ink3;
+    final typeLabel =
+        target.targetType.isEmpty ? '—' : target.targetType.toUpperCase();
 
     return _DashboardTapRow(
       onTap: onTap,
@@ -2877,10 +3243,10 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
   String _selectedProgram = '';
 
   static Color _programColor(String program) => switch (program) {
-    'exoplanet_transits' => BSTheme.accent,
-    'transient_follow_up' => BSTheme.danger,
-    _ => BSTheme.warm,
-  };
+        'exoplanet_transits' => BSTheme.accent,
+        'transient_follow_up' => BSTheme.danger,
+        _ => BSTheme.warm,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -2918,9 +3284,8 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
               children: _programs.map((entry) {
                 final (label, program) = entry;
                 final selected = _selectedProgram == program;
-                final color = program.isEmpty
-                    ? BSTheme.ink2
-                    : _programColor(program);
+                final color =
+                    program.isEmpty ? BSTheme.ink2 : _programColor(program);
                 return Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
@@ -2983,13 +3348,12 @@ class _TargetsListScreenState extends State<_TargetsListScreen> {
                 final barColor = t.scienceProgram.isNotEmpty
                     ? _programColor(t.scienceProgram)
                     : (p > 0.7
-                          ? BSTheme.accent
-                          : p > 0.4
-                          ? BSTheme.warm
-                          : BSTheme.ink3);
-                final typeLabel = t.targetType.isEmpty
-                    ? '—'
-                    : t.targetType.toUpperCase();
+                        ? BSTheme.accent
+                        : p > 0.4
+                            ? BSTheme.warm
+                            : BSTheme.ink3);
+                final typeLabel =
+                    t.targetType.isEmpty ? '—' : t.targetType.toUpperCase();
 
                 return GestureDetector(
                   onTap: () => Navigator.of(context).push(
