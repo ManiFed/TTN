@@ -253,7 +253,7 @@ def fetch_atlas(cfg: dict) -> list:
         "https://psweb.mp.qub.ac.uk/sne/atlas4/api/objectlist/",
         params={"objectlistid": 2, "format": "json"},
         headers={"Authorization": f"Token {token}"},
-        timeout=60,
+        timeout=180,
     )
     rows = payload if isinstance(payload, list) else payload.get("results", [])
     out = []
