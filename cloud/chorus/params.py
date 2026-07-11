@@ -17,7 +17,8 @@ DEFAULTS = {
     "kernel_time_scale_h":     3.0,    # temporal locality of a sample outside its cell (h)
     "kernel_phase_scale":      0.04,   # phase locality for periodic classes (phase units)
     "value_scale_eb":          1.0,    # class value multipliers on nu_raw
-    "value_scale_exoplanet":   1.4,
+    "value_scale_exoplanet":   1.0,    # was 1.4 — parity now that transit opps clear
+                                       # the same eps eligibility gate as everything else
     "value_scale_cv":          1.0,
     "value_scale_transient":   1.3,
     "value_scale_lpv":         0.5,

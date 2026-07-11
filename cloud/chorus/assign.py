@@ -595,7 +595,7 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
             window = p_sky_by_slot[s0:s0 + need]
             p_sky = sum(window) / len(window) if window else 0.5
             seq += 1
-            opps.append(ChorusOpportunity(
+            opp = ChorusOpportunity(
                 node_id=ctx.node_id, target_id=tw.target_id, name=tw.name,
                 ra_deg=tw.ra_deg, dec_deg=tw.dec_deg, mag=tw.mag,
                 target_type="EXOPLANET",
@@ -608,7 +608,9 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
                 p_exec=p_exec, p_accept=p_accept, explore=explore,
                 node_lon=ctx.lon, variant=variant,
                 observation_mode="time_series",
-                duration_min=round(obs_min, 1), seq=seq))
+                duration_min=round(obs_min, 1), seq=seq)
+            if optimistic_value(opp, cells_by_target, params, ctx) > eps:
+                opps.append(opp)
     return opps
 
 

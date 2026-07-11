@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM — mid-night work reflow.
+Live fleet — mid-night work reflow.
 
 CHORUS plans once per night. When a node then clouds out or drops offline with
 committed work still ahead of it, that science is simply lost until the next
@@ -22,6 +22,7 @@ feasible window means it is simply skipped.
 
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from cloud import db, incidents, live, registry
 
@@ -73,6 +74,45 @@ def detect_dropouts(config: dict) -> list[dict]:
                 "remaining": remaining,
             })
     return out
+
+
+def detect_urgent_alerts(config: dict) -> Optional[dict]:
+    """New time-critical alert targets that arrived after tonight's plan was
+    generated and haven't already been reflowed in.
+
+    Rule-based urgency: a target qualifies when cloud.alerts marked it
+    `time_critical` at ingestion (SN/TDE/GRB/nova/CV-outburst depending on
+    source — see cloud.alerts.TYPE_PRIORITY) and it is bright enough for this
+    fleet to usefully follow up. No LLM in this path — same "pure procedural
+    hot path" contract as the rest of scoring/scheduling.
+
+    Returns a dropout-shaped dict (node_id=None) so it can be fed straight
+    into _candidate_placements/dispatch_reflow, or None if nothing qualifies.
+    """
+    reflow_cfg = (config.get("scheduler", {}) or {}).get("reflow_detect", {}) or {}
+    mag_limit = float(reflow_cfg.get("urgent_alert_mag_limit", 18.0))
+    night = _tonight()
+
+    latest_plan = db.query_one(
+        "SELECT MAX(generated_at) AS g FROM plans WHERE night = %s", (night,))
+    since = (latest_plan or {}).get("g") or _now()
+
+    already = {r["target_id"] for r in db.query(
+        "SELECT target_id FROM reflow_log WHERE night = %s", (night,))}
+
+    rows = db.query(
+        """SELECT target_id, name, mag FROM targets
+           WHERE active = 1 AND time_critical = 1 AND last_updated > %s""",
+        (since,))
+    remaining = [
+        {"target_id": r["target_id"], "target": r["name"], "score": 0.0}
+        for r in rows
+        if r["target_id"] not in already
+        and (r.get("mag") is None or float(r["mag"]) <= mag_limit)
+    ]
+    if not remaining:
+        return None
+    return {"node_id": None, "phase": "urgent_alert", "remaining": remaining}
 
 
 def _remaining_items(node_id: str, current_idx) -> list[dict]:
@@ -335,4 +375,17 @@ def tick(config: dict) -> int:
             continue
         if placements:
             total += dispatch_reflow(dropped["node_id"], placements, config)
+
+    if _reflows_tonight() < cap:
+        urgent = detect_urgent_alerts(config)
+        if urgent:
+            try:
+                placements = _candidate_placements(urgent, config)
+            except Exception as exc:
+                logger.warning("reflow valuation failed for urgent alerts: %s", exc)
+                incidents.log("fleet", "reflow_alert_failed", severity="warning",
+                              detail={"error": str(exc)[:200]})
+                placements = []
+            if placements:
+                total += dispatch_reflow("urgent_alert", placements, config)
     return total
