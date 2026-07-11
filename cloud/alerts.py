@@ -238,7 +238,7 @@ def fetch_atlas(cfg: dict) -> list:
         return []
 
     token_resp = requests.post(
-        "https://star.pst.qub.ac.uk/sne/atlas4/api-auth-token/",
+        "https://psweb.mp.qub.ac.uk/sne/atlas4/api/auth-token/",
         data={"username": username, "password": password},
         timeout=30,
     )
@@ -250,7 +250,7 @@ def fetch_atlas(cfg: dict) -> list:
 
     mag_limit = float(cfg.get("mag_limit", 16.5))
     payload = _http_get_json(
-        "https://star.pst.qub.ac.uk/sne/atlas4/api/objectlist/",
+        "https://psweb.mp.qub.ac.uk/sne/atlas4/api/objectlist/",
         params={"objectlistid": 2, "format": "json"},
         headers={"Authorization": f"Token {token}"},
         timeout=60,
