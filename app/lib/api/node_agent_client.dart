@@ -73,6 +73,57 @@ class NodeAgentClient {
       throw NodeAgentException(detail);
     }
   }
+
+  /// Broadcast an ALPACA discovery request on this computer's local network
+  /// and return every server that responded.
+  Future<List<Map<String, dynamic>>> discoverAlpacaServers() async {
+    final response = await _http
+        .post(_base.replace(path: '/api/discover'))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      throw NodeAgentException(
+        'ALPACA discovery failed (${response.statusCode}).',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const NodeAgentException(
+        'The local node service sent an invalid discovery response.',
+      );
+    }
+    final servers = decoded['servers'];
+    if (servers is! List) return const [];
+    return servers.whereType<Map>().map((s) => s.cast<String, dynamic>()).toList();
+  }
+
+  /// Tell the node agent to connect to the ALPACA server at [host]:[port].
+  Future<void> connectAlpaca({
+    required String host,
+    required int port,
+    bool setAsDefault = false,
+  }) async {
+    final response = await _http
+        .post(
+          _base.replace(path: '/api/connect'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'host': host,
+            'port': port,
+            'set_as_default': setAsDefault,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode != 200) {
+      String detail = 'Could not connect to the telescope server (${response.statusCode}).';
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['error'] != null) {
+          detail = body['error'].toString();
+        }
+      } catch (_) {}
+      throw NodeAgentException(detail);
+    }
+  }
 }
 
 class NodeAgentException implements Exception {

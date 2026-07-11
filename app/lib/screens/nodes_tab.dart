@@ -42,12 +42,31 @@ class NodesTab extends StatefulWidget {
 }
 
 class _NodesTabState extends State<NodesTab> {
+  static const _pollInterval = Duration(seconds: 15);
+
+  // Kept only for the very first load — AsyncView owns the loading/error/
+  // empty states for that initial fetch and for manual pull-to-refresh.
   late Future<List<Node>> _future;
+  // Once we have data, background polls update this directly so the list
+  // never drops back through AsyncView's FutureBuilder (which flashes a
+  // spinner for a frame whenever its `future` identity changes, even if the
+  // new future is already resolved).
+  List<Node>? _liveNodes;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _future = _load()..then((nodes) {
+      if (mounted) setState(() => _liveNodes = nodes);
+    });
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _silentRefresh());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<List<Node>> _load() {
@@ -58,7 +77,26 @@ class _NodesTabState extends State<NodesTab> {
     });
   }
 
-  Future<void> _refresh() async => setState(() => _future = _load());
+  Future<void> _refresh() async {
+    final nodes = await _load();
+    if (!mounted) return;
+    setState(() {
+      _future = Future.value(nodes);
+      _liveNodes = nodes;
+    });
+  }
+
+  // Background poll: fetches fresh data and patches `_liveNodes` directly
+  // so the list doesn't flash back to a loading spinner every 15s.
+  Future<void> _silentRefresh() async {
+    try {
+      final nodes = await _load();
+      if (!mounted) return;
+      setState(() => _liveNodes = nodes);
+    } catch (_) {
+      // Keep showing the last known-good data; the next poll will retry.
+    }
+  }
 
   Future<void> _claimDialog() async {
     final claimed = await showModalBottomSheet<bool>(
@@ -73,21 +111,54 @@ class _NodesTabState extends State<NodesTab> {
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top + kToolbarHeight;
     final bottom = MediaQuery.of(context).padding.bottom + 64;
+    final liveNodes = _liveNodes;
 
     return Stack(
       children: [
-        AsyncView<List<Node>>(
-          future: _future,
-          onRefresh: _refresh,
-          isEmpty: (list) => list.isEmpty,
-          emptyMessage: 'No telescopes yet.\nTap + to connect one.',
-          builder: (context, nodes) => ListView.builder(
-            padding: EdgeInsets.fromLTRB(16, top + 8, 16, bottom + 80),
-            itemCount: nodes.length,
-            itemBuilder: (context, i) =>
-                _NodeCard(node: nodes[i], onRefresh: _refresh),
-          ),
-        ),
+        liveNodes != null
+            ? RefreshIndicator(
+                onRefresh: _refresh,
+                child: liveNodes.isEmpty
+                    ? ListView(
+                        children: [
+                          const SizedBox(height: 120),
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(32),
+                              child: Text(
+                                'No telescopes yet.\nTap + to connect one.',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          top + 8,
+                          16,
+                          bottom + 80,
+                        ),
+                        itemCount: liveNodes.length,
+                        itemBuilder: (context, i) => _NodeCard(
+                          node: liveNodes[i],
+                          onRefresh: _refresh,
+                        ),
+                      ),
+              )
+            : AsyncView<List<Node>>(
+                future: _future,
+                onRefresh: _refresh,
+                isEmpty: (list) => list.isEmpty,
+                emptyMessage: 'No telescopes yet.\nTap + to connect one.',
+                builder: (context, nodes) => ListView.builder(
+                  padding: EdgeInsets.fromLTRB(16, top + 8, 16, bottom + 80),
+                  itemCount: nodes.length,
+                  itemBuilder: (context, i) =>
+                      _NodeCard(node: nodes[i], onRefresh: _refresh),
+                ),
+              ),
         Positioned(
           right: 16,
           bottom: bottom + 16,
@@ -1983,6 +2054,8 @@ class _ClaimSheet extends StatefulWidget {
 
 enum _ScopeStep { idle, confirming, confirmed }
 
+enum _AlpacaStep { discovering, none, single, picking, picked }
+
 class _ClaimSheetState extends State<_ClaimSheet> {
   final _locationCtrl = TextEditingController();
   final _scopeCtrl = TextEditingController();
@@ -2006,6 +2079,11 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   // Portable
   bool? _portable; // null = not yet chosen
 
+  // ALPACA server discovery
+  _AlpacaStep _alpacaStep = _AlpacaStep.discovering;
+  List<Map<String, dynamic>> _alpacaServers = [];
+  Map<String, dynamic>? _selectedAlpacaServer;
+
   @override
   void initState() {
     super.initState();
@@ -2013,6 +2091,41 @@ class _ClaimSheetState extends State<_ClaimSheet> {
     _scopeCtrl.addListener(() => setState(() {}));
     _nameCtrl.addListener(() => setState(() {}));
     _loadCatalog();
+    _discoverAlpaca();
+  }
+
+  Future<void> _discoverAlpaca() async {
+    setState(() => _alpacaStep = _AlpacaStep.discovering);
+    try {
+      final servers = await NodeAgentClient().discoverAlpacaServers();
+      if (!mounted) return;
+      if (servers.isEmpty) {
+        setState(() => _alpacaStep = _AlpacaStep.none);
+      } else if (servers.length == 1) {
+        setState(() {
+          _alpacaServers = servers;
+          _selectedAlpacaServer = servers.first;
+          _alpacaStep = _AlpacaStep.single;
+        });
+      } else {
+        setState(() {
+          _alpacaServers = servers;
+          _alpacaStep = _AlpacaStep.picking;
+        });
+      }
+    } catch (_) {
+      // Local node agent may not be running yet, or this device isn't on
+      // the same network as the telescope — that's fine, connecting the
+      // ALPACA device can be finished later from the dashboard.
+      if (mounted) setState(() => _alpacaStep = _AlpacaStep.none);
+    }
+  }
+
+  void _selectAlpacaServer(Map<String, dynamic> server) {
+    setState(() {
+      _selectedAlpacaServer = server;
+      _alpacaStep = _AlpacaStep.picked;
+    });
   }
 
   Future<void> _loadCatalog() async {
@@ -2179,6 +2292,20 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         final agent = NodeAgentClient();
         final status = await agent.status();
         await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
+        final chosen = _selectedAlpacaServer;
+        if (chosen != null) {
+          final host = chosen['address'] as String? ?? '';
+          final port = (chosen['port'] as num?)?.toInt() ?? 11111;
+          if (host.isNotEmpty) {
+            try {
+              await agent.connectAlpaca(
+                  host: host, port: port, setAsDefault: true);
+            } catch (_) {
+              // Non-fatal — the account is still linked; the user can pick
+              // the ALPACA server again from the dashboard later.
+            }
+          }
+        }
         final pair = status.pairToken;
         if (pair != null && pair.isNotEmpty) {
           // Also stash for any other agent polling this pair token.
@@ -2262,7 +2389,16 @@ class _ClaimSheetState extends State<_ClaimSheet> {
               const SizedBox(height: 20),
               ..._buildPortableSection(tt),
             ],
-            if (_scopeStep == _ScopeStep.confirmed && _portable != null) ...[
+            if (_scopeStep == _ScopeStep.confirmed &&
+                _alpacaStep == _AlpacaStep.picking) ...[
+              const SizedBox(height: 20),
+              const Divider(height: 1),
+              const SizedBox(height: 20),
+              ..._buildAlpacaSection(tt),
+            ],
+            if (_scopeStep == _ScopeStep.confirmed &&
+                _portable != null &&
+                _alpacaStep != _AlpacaStep.picking) ...[
               const SizedBox(height: 20),
               const Divider(height: 1),
               const SizedBox(height: 20),
@@ -2279,6 +2415,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
               const Center(child: CircularProgressIndicator())
             else if (_scopeStep == _ScopeStep.confirmed &&
                 _portable != null &&
+                _alpacaStep != _AlpacaStep.picking &&
                 _step == _LocStep.confirmed)
               FilledButton(
                 onPressed: _link,
@@ -2354,6 +2491,54 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         title: 'Portable — I move it to different sites',
         subtitle: 'Star parties, dark sky reserves, travelling.',
         onTap: () => setState(() => _portable = true),
+      ),
+    ];
+  }
+
+  List<Widget> _buildAlpacaSection(TextTheme tt) {
+    return [
+      Text('Which telescope server is this?', style: tt.titleMedium),
+      const SizedBox(height: 8),
+      Text(
+        "This computer found ${_alpacaServers.length} ALPACA devices on your "
+        "network. If you're not sure which one is yours: check the name and "
+        "serial number below against the label on the mount or dome, or "
+        "against the device list in the telescope's own app (e.g. the "
+        "Seestar app). If you only have one telescope on this network, any "
+        "extra entries are probably other people's gear nearby — pick the "
+        "one whose name matches yours.",
+        style: tt.bodySmall,
+      ),
+      const SizedBox(height: 16),
+      Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: BSTheme.glassBorder),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          children: [
+            for (final s in _alpacaServers)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.satellite_alt_outlined, size: 18),
+                title: Text(
+                  (s['device_name'] as String?)?.isNotEmpty == true
+                      ? s['device_name'] as String
+                      : '${s['address']}:${s['port']}',
+                  style: const TextStyle(fontSize: 14),
+                ),
+                subtitle: Text(
+                  [
+                    '${s['address']}:${s['port']}',
+                    if ((s['serial'] as String?)?.isNotEmpty == true)
+                      'Serial ${s['serial']}',
+                  ].join('  ·  '),
+                  style: const TextStyle(fontSize: 12, color: BSTheme.ink3),
+                ),
+                onTap: () => _selectAlpacaServer(s),
+              ),
+          ],
+        ),
       ),
     ];
   }
