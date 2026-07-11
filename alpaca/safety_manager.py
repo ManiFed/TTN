@@ -7,6 +7,8 @@ Responsibilities
 * Retry / reconnect logic for transient connection dropouts.
 * Auto-park when the telescope is unreachable beyond a configurable timeout.
 * Auto-park at astronomical (or nautical / civil) dawn.
+* Between astronomical and civil twilight, stays open but restricts targets
+  to bright ones only (see is_target_safe()) rather than parking outright.
 * Graceful shutdown on SIGTERM and SIGINT — parks before exiting.
 * is_safe() / status() API so other modules can gate operations on safety.
 
@@ -114,6 +116,16 @@ class SafetyManager:
         self._dawn_elevation       : float = _DAWN_ELEVATIONS.get(
             cfg.get("dawn_type", "astronomical"), -18.0
         )
+        # Hard park boundary — above this the sky is too bright for any
+        # observation. Between _dawn_elevation and this, we're in twilight:
+        # stay open but restrict to bright targets (see is_target_safe()).
+        self._twilight_park_type   : str   = cfg.get("twilight_park_type", "civil")
+        self._twilight_park_elevation: float = _DAWN_ELEVATIONS.get(
+            self._twilight_park_type, -6.0
+        )
+        self._twilight_bright_mag_limit: float = float(
+            cfg.get("twilight_bright_mag_limit", 3.0)
+        )
         self._lat                  : float = float(obs.get("latitude", 0.0))
         self._lon                  : float = float(obs.get("longitude", 0.0))
 
@@ -137,6 +149,7 @@ class SafetyManager:
         self._safe             : bool            = True
         self._parked           : bool            = False
         self._reason           : str             = ""
+        self._twilight          : bool            = False
         self._heartbeat_ok     : bool            = True
         self._last_heartbeat   : Optional[float] = None   # UTC epoch
         self._disconnect_since : Optional[float] = None   # monotonic
@@ -163,6 +176,7 @@ class SafetyManager:
                 self._parked       = False
                 self._reason       = ""
                 self._heartbeat_ok = True
+                self._twilight      = False
         if telescope is not None:
             logger.info("SafetyManager: telescope attached — safety state reset")
 
@@ -202,6 +216,26 @@ class SafetyManager:
         with self._lock:
             return self._safe
 
+    def is_target_safe(self, mag: Optional[float] = None) -> bool:
+        """
+        Return True if it is safe to observe a target of the given magnitude
+        right now.
+
+        Outside twilight (fully dark, or daytime park not in effect) this is
+        equivalent to is_safe(). During civil-to-astronomical twilight the
+        sky is still too bright for faint targets, so only targets at or
+        brighter than ``twilight_bright_mag_limit`` are allowed; an unknown
+        magnitude is treated conservatively as not bright enough.
+        """
+        with self._lock:
+            if not self._safe:
+                return False
+            twilight = self._twilight
+            limit    = self._twilight_bright_mag_limit
+        if not twilight:
+            return True
+        return mag is not None and mag <= limit
+
     def reset(self) -> str:
         """Manually clear a latched unsafe/parked state.
 
@@ -217,6 +251,7 @@ class SafetyManager:
             self._reason           = ""
             self._heartbeat_ok     = True
             self._disconnect_since = None
+            self._twilight          = False
         logger.warning("SafetyManager: safety state manually reset (was: %s)", prev or "safe")
         return prev
 
@@ -288,6 +323,9 @@ class SafetyManager:
                 "disconnected_secs": round(elapsed, 1) if elapsed is not None else None,
                 "sun_elevation":     sun_el,
                 "dawn_threshold":    self._dawn_elevation,
+                "twilight":          self._twilight,
+                "twilight_park_threshold":    self._twilight_park_elevation,
+                "twilight_bright_mag_limit":  self._twilight_bright_mag_limit,
                 "horizon_mask_knots": len(self._horizon_mask),
             }
 
@@ -409,10 +447,16 @@ class SafetyManager:
         try:
             elev = _solar_elevation(self._lat, self._lon, time.time())
             logger.debug("SafetyManager: sun elevation %.2f°", elev)
-            if elev > self._dawn_elevation:
+            if elev > self._twilight_park_elevation:
                 self._emergency_park(
-                    f"dawn — sun {elev:.1f}° > threshold {self._dawn_elevation:.1f}°"
+                    f"dawn — sun {elev:.1f}° > threshold "
+                    f"{self._twilight_park_elevation:.1f}° ({self._twilight_park_type})"
                 )
+                return
+            # Below the hard park boundary — open, but flag civil-to-astronomical
+            # twilight so is_target_safe() can restrict to bright targets only.
+            with self._lock:
+                self._twilight = elev > self._dawn_elevation
         except Exception as exc:
             logger.debug("SafetyManager: dawn check error: %s", exc)
 
@@ -431,7 +475,7 @@ class SafetyManager:
             return
         try:
             elev = _solar_elevation(self._lat, self._lon, time.time())
-            if elev <= self._dawn_elevation:
+            if elev <= self._twilight_park_elevation:
                 cleared = False
                 with self._lock:
                     if not self._safe and self._reason.startswith("dawn"):
@@ -441,11 +485,12 @@ class SafetyManager:
                         # Reset so the connection check starts a fresh timeout
                         # rather than continuing a stale counter from daytime.
                         self._disconnect_since = None
+                        self._twilight          = elev > self._dawn_elevation
                         cleared = True
                 if cleared:
                     logger.info(
-                        "SafetyManager: dawn latch auto-cleared — sun %.1f° ≤ threshold %.1f°",
-                        elev, self._dawn_elevation,
+                        "SafetyManager: dawn latch auto-cleared — sun %.1f° ≤ threshold %.1f° (%s)",
+                        elev, self._twilight_park_elevation, self._twilight_park_type,
                     )
                     # Reconnect immediately rather than waiting for the next
                     # scheduled heartbeat poll.

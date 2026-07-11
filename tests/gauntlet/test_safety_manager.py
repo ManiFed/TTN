@@ -160,6 +160,52 @@ class DawnParkTest(unittest.TestCase):
         self.assertTrue(mgr.is_safe())
 
 
+class TwilightBrightOnlyTest(unittest.TestCase):
+    def test_astronomical_dark_allows_any_target(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        with patch("alpaca.safety_manager._solar_elevation", return_value=-20.0):
+            mgr._run_dawn_check()
+        self.assertTrue(mgr.is_safe())
+        self.assertFalse(mgr.status()["twilight"])
+        self.assertTrue(mgr.is_target_safe(mag=12.0))
+        self.assertTrue(mgr.is_target_safe(mag=None))
+
+    def test_civil_twilight_restricts_to_bright_targets(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        with patch("alpaca.safety_manager._solar_elevation", return_value=-10.0):
+            mgr._run_dawn_check()
+        self.assertTrue(mgr.is_safe())               # stays open, not parked
+        self.assertEqual(tel.park_calls, 0)
+        self.assertTrue(mgr.status()["twilight"])
+        self.assertTrue(mgr.is_target_safe(mag=1.0))  # bright — allowed
+        self.assertFalse(mgr.is_target_safe(mag=8.0))  # faint — blocked
+        self.assertFalse(mgr.is_target_safe(mag=None))  # unknown — blocked
+
+    def test_past_civil_twilight_still_parks(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        with patch("alpaca.safety_manager._solar_elevation", return_value=-2.0):
+            mgr._run_dawn_check()
+        self.assertFalse(mgr.is_safe())
+        self.assertEqual(tel.park_calls, 1)
+        self.assertFalse(mgr.is_target_safe(mag=1.0))  # parked — nothing is safe
+
+    def test_dusk_clear_into_twilight_sets_bright_only(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        with patch("alpaca.safety_manager._solar_elevation", return_value=-2.0):
+            mgr._run_dawn_check()
+        self.assertFalse(mgr.is_safe())
+        with patch("alpaca.safety_manager._solar_elevation", return_value=-10.0):
+            mgr._run_dawn_clear()
+        self.assertTrue(mgr.is_safe())
+        self.assertTrue(mgr.status()["twilight"])
+        self.assertTrue(mgr.is_target_safe(mag=1.0))
+        self.assertFalse(mgr.is_target_safe(mag=8.0))
+
+
 class PointingSafetyTest(unittest.TestCase):
     def test_horizon_mask_interpolates(self):
         mgr = SafetyManager(config={"safety": {
