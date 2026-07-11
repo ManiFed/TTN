@@ -1,7 +1,7 @@
 // Application-level settings for the Runner target.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = TelescopeNet
+PRODUCT_NAME = The Telescope Net
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = org.telescopenet.app
