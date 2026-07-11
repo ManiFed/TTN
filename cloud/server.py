@@ -44,7 +44,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from defusedxml import ElementTree as ET
-from flask import Flask, jsonify, make_response, redirect as _redirect, request, send_from_directory
+from flask import Flask, jsonify, redirect as _redirect, request, send_from_directory
 from werkzeug.utils import safe_join
 
 from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
@@ -87,31 +87,6 @@ def serve_dashboard_asset(filename):
     return send_from_directory(_DASHBOARD_DIR, "index.html")
 
 
-@app.route("/app")
-@app.route("/app/")
-def serve_app():
-    return _serve_app_index()
-
-
-@app.route("/app/<path:filename>")
-def serve_app_asset(filename):
-    full = safe_join(_APP_DIR, filename)
-    if full and os.path.isfile(full):
-        return send_from_directory(_APP_DIR, filename)
-    return _serve_app_index()
-
-
-def _serve_app_index():
-    """Serve the Flutter shell under /app/ without rebuilding the standalone app."""
-    index_path = os.path.join(_APP_DIR, "index.html")
-    with open(index_path, encoding="utf-8") as fh:
-        html = fh.read().replace('<base href="/">', '<base href="/app/">')
-    resp = make_response(html)
-    resp.headers["Content-Type"] = "text/html; charset=utf-8"
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
-
-
 @app.route("/<path:filename>")
 def serve_website(filename):
     # Never let the website catch-all swallow API requests — return 404 so Flask
@@ -121,9 +96,6 @@ def serve_website(filename):
     full = safe_join(_WEBSITE_DIR, filename)
     if full and os.path.isfile(full):
         return send_from_directory(_WEBSITE_DIR, filename)
-    app_asset = safe_join(_APP_DIR, filename)
-    if app_asset and os.path.isfile(app_asset):
-        return send_from_directory(_APP_DIR, filename)
     return send_from_directory(_WEBSITE_DIR, "tour.html")
 
 
@@ -337,8 +309,8 @@ def api_characterization(node):
 def api_heartbeat(node):
     body = request.get_json(force=True, silent=True) or {}
     registry.heartbeat(node["node_id"], body.get("conditions"))
-    # THE ORGANISM: fold the optional second-scale phase report into the live
-    # fleet map. Old node agents omit "state" and simply don't appear live.
+    # Live fleet state: fold the optional second-scale phase report into the
+    # live fleet map. Old node agents omit "state" and simply don't appear live.
     state = body.get("state")
     if isinstance(state, dict):
         try:
@@ -810,9 +782,9 @@ def api_network_status():
 
 @app.route("/api/v1/network/fleet", methods=["GET"])
 def api_network_fleet():
-    """THE ORGANISM: live second-scale phase of every node in the fleet.
+    """Live fleet state: second-scale phase of every node in the fleet.
 
-    Public read (like network/status) so the member 'organism' view and the
+    Public read (like network/status) so the member 'live fleet' view and the
     node dashboard can render who is dark, clouded, exposing, or offline right
     now. Nodes appear here only after they start sending heartbeat 'state'.
     """
@@ -838,11 +810,11 @@ def api_network_fleet():
     })
 
 
-@app.route("/api/v1/network/organism", methods=["GET"])
-def api_network_organism():
-    """THE ORGANISM activity feed: live fleet + what the network just did on its
+@app.route("/api/v1/network/live-fleet", methods=["GET"])
+def api_network_live_fleet():
+    """Live fleet activity feed: live fleet + what the network just did on its
     own (mid-night reflows and reflex confirmations). The data behind the member
-    'organism' view — 'node X clouded out, its targets moved to Y; a candidate
+    'live fleet' view — 'node X clouded out, its targets moved to Y; a candidate
     was auto-confirmed on Z'."""
     night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
@@ -1353,7 +1325,7 @@ def api_me_nodes(user):
 @app.route("/api/v1/me/nodes/<node_id>/live", methods=["GET"])
 @auth.require_member
 def api_me_node_live(user, node_id):
-    """Live phase of one of the member's own nodes (organism view)."""
+    """Live phase of one of the member's own nodes (live fleet view)."""
     owns = db.query_one(
         "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
         (node_id, user["user_id"]),
@@ -1926,7 +1898,7 @@ def _fits_header_probe(raw: bytes) -> dict:
 def api_me_contribute(user):
     """Drag-and-drop FITS contribution: anyone's existing images become
     survey science. The cloud solver adds a WCS when the frame lacks one, so a
-    plain LIGHT frame from any camera is accepted — EVERY LENS ON EARTH."""
+    plain LIGHT frame from any camera is accepted — universal frame ingestion."""
     import hashlib
     f = request.files.get("file")
     if f is None:
