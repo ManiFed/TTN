@@ -100,6 +100,7 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
 
     filter_name = str(frame.get("filter") or "CV")[:8]
     frame_id = str(frame.get("fits_file") or "")[:120]
+    date_obs_utc = str(frame.get("date_obs") or "")[:32]
     try:
         zp_scatter = float(frame.get("zp_scatter") or 0.05)
     except (TypeError, ValueError):
@@ -242,7 +243,7 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
                 node_id, bjd, filter_name, zp_scatter,
                 new_sources, baselines, config, node_tier)
 
-        return {
+        result = {
             "ok": True,
             "accepted": len(new_sources),
             "duplicates": len(batch) - len(new_sources),
@@ -252,6 +253,20 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
         }
     finally:
         db.release(conn)
+
+    # Best-effort: uncatalogued detections also feed the moving-object
+    # tracklet pipeline (cloud.moving_objects), on its own connection so a
+    # hiccup there never disturbs the stationary-object ingest above.
+    if new_sources:
+        try:
+            from cloud import moving_objects
+            moving_objects.record_frame_detections(
+                node_id, bjd, filter_name, frame_id, date_obs_utc,
+                new_sources, config)
+        except Exception as exc:
+            logger.warning("Moving-object recording failed: %s", exc)
+
+    return result
 
 
 # ── Deviation detection ────────────────────────────────────────────────────────
@@ -407,7 +422,7 @@ def _record_detection(node_id: str, bjd: float, filter_name: str, s: dict,
                         "%s %s Δ=%.2f (%d detections, %d nodes)",
                         open_cand["id"], kind, s["key"], peak, n_det,
                         len(node_ids))
-            # THE ORGANISM: reflex-confirm this candidate on other dark nodes
+            # Live fleet: reflex-confirm this candidate on other dark nodes
             # now, instead of waiting for the nightly replan. Fully guarded and
             # best-effort — a reflex failure never affects the survey ingest.
             try:

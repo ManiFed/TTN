@@ -150,10 +150,10 @@ node_v1-main/
 
 ## Recent Changes (June–July 2026)
 
-### THE ORGANISM + EVERY LENS ON EARTH (New Programs)
+### Live Fleet State + Universal Frame Ingestion (New Programs)
 Two structural additions on top of CHORUS and Open Aperture — see
-[ORGANISM.md](ORGANISM.md) for full design and status.
-- **THE ORGANISM** — the network keeps a live, second-scale picture of the
+[LIVE_FLEET.md](LIVE_FLEET.md) for full design and status.
+- **Live fleet state** — the network keeps a live, second-scale picture of the
   fleet (`cloud/live.py` + a dedicated `realtime/` SSE gateway service) instead
   of learning what happened the next morning. Mid-night **reflow**
   (`cloud/chorus/reflow.py`) re-values a clouded-out node's remaining targets
@@ -161,17 +161,17 @@ Two structural additions on top of CHORUS and Open Aperture — see
   optimizer itself is untouched. **Reflex confirmation** (`cloud/reflex.py`)
   tasks other dark nodes to confirm a just-promoted discovery candidate within
   seconds instead of waiting for the next replan.
-- **EVERY LENS ON EARTH** — any FITS frame, from any camera, live or archival,
-  can become survey science. The cloud now plate-solves contributed frames
-  that arrive without a WCS (`src/plate_solve.py`, `cloud/solver.py`), runs a
-  staged triage → solve → extract → ingest pipeline
+- **Universal frame ingestion** — any FITS frame, from any camera, live or
+  archival, can become survey science. The cloud now plate-solves contributed
+  frames that arrive without a WCS (`src/plate_solve.py`, `cloud/solver.py`),
+  runs a staged triage → solve → extract → ingest pipeline
   (`cloud/ingest_worker.py`), and a lightweight **companion** watcher mode
   (`src/companion.py`) turns any astrophotographer's output folder into a
   feed. Archive frames route through a retrospective path
   (`retro_discoveries`) that enriches baselines without ever firing a live
   alert.
 - Reflow ships disabled (`scheduler.reflow: false`); reflex confirmation is
-  enabled by default. Both are fully tested — see `tests/test_organism_cloud.py`,
+  enabled by default. Both are fully tested — see `tests/test_live_fleet_cloud.py`,
   `tests/test_reflow_reflex.py`, `tests/test_ingest_worker.py`,
   `tests/test_triage.py`, `tests/test_historical.py`.
 

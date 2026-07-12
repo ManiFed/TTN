@@ -219,10 +219,10 @@ class ApiClient {
   Future<Map<String, dynamic>> skyQuality(double lat, double lon) =>
       _get('/sky-quality', {'lat': lat, 'lon': lon});
 
-  /// THE ORGANISM: live fleet phases + the network's own mid-night reflow
+  /// Live fleet: live fleet phases + the network's own mid-night reflow
   /// and reflex-confirmation activity. Public read, no auth required.
-  Future<OrganismFeed> organism() async =>
-      OrganismFeed.fromJson(await _get('/network/organism'));
+  Future<LiveFleetFeed> liveFleet() async =>
+      LiveFleetFeed.fromJson(await _get('/network/live-fleet'));
 
   /// Open Aperture: discovery candidates this member's nodes or contributed
   /// frames touched — "your telescope may have found something new".

@@ -11,16 +11,14 @@
 
 ## The Mission
 
-The Telescope Net is an accessible astronomy charity that operates the world's first
-planet-wide hunt for the stars that professional observatories miss.
-Seestar smart telescope owners donate their telescope's nights to the network. Our
-pipeline automatically schedules observations of scientifically valuable targets,
+The Telescope Net is an accessible astronomy charity that operates a distributed,
+global network of donated telescopes to observe targets professional observatories
+miss. Seestar smart telescope owners donate their telescope's nights to the network.
+Our pipeline automatically schedules observations of scientifically valuable targets,
 processes the data into calibrated photometry, and submits it to professional
 astronomical databases. Members contribute to real science — supernovae, novae,
 variable stars, transient phenomena — without physical effort, technical expertise,
 or significant cost.
-
-The night sky belongs to everyone. The Telescope Net makes that true.
 
 ---
 
@@ -39,7 +37,7 @@ Professional telescope networks like Las Cumbres Observatory are inaccessible to
 public. Consumer smart telescope networks like Unistellar are closed platforms with
 proprietary hardware costing thousands of dollars and no accessibility focus.
 
-Nobody has solved this. Not because they tried and failed. Because nobody tried.
+No existing service addresses this combination of barriers.
 
 ---
 
@@ -53,8 +51,8 @@ The Telescope Net is a three-part system:
 3. A fully accessible mobile app that gives anyone — regardless of physical ability —
    a genuine connection to the science their telescope produces
 
-Members contribute their telescope's nights to the network. The network does the science.
-The science is real, credited, and permanent.
+Members contribute their telescope's nights to the network, which schedules the
+observations, processes the data, and submits it to AAVSO under the member's name.
 
 ---
 
@@ -71,7 +69,8 @@ and a statement of what must exist in the product.
 
 Establishes the mission in one sentence and directs each visitor type to their path.
 
-- Hero: "Your telescope. Real science. Anyone." with a live counter of active nodes and
+- Hero: a one-line description of the network (donated telescopes, automated
+  scheduling, real AAVSO submissions) with a live counter of active nodes and
   recent AAVSO submissions from the network.
 - Three clear entry points: Join the Network / See the Science / Support the Mission.
 - Accessibility statement prominently placed (not buried in a footer).
@@ -292,12 +291,13 @@ optionally printed on a physical card for members who prefer it (accessibility o
 
 #### Secondary Path: Node Builder (Guided Hardware Configurator)
 
-It's a storefront if you don't have the necessary equipment to operate a node.
+The Node Builder is a storefront for members who don't already have the
+necessary equipment to operate a node.
 
-The Node Builder is a sleek, dark space-themed mobile-first wizard:
+It is a dark-themed, mobile-first wizard:
 - Starts with a Hardware Inventory Quiz to detect what the user already has
 - Persistent summary panel showing estimated science impact and uptime for the build
-- Hero preset: "Complete Autonomous Node" — fully assembled recommendation
+- Default preset: "Complete Autonomous Node" — fully assembled recommendation
 
 **Step 1 — Hardware Quiz:** What do you already own? Personalises all subsequent
 recommendations.
@@ -331,7 +331,7 @@ recommendations.
 **Step 5 — Review:** Shows the complete build with links to purchase each component
 at standard retail price. No checkout, no markup, no The Telescope Net transaction.
 
-**Complete Autonomous Node preset** (the flagship recommendation):
+**Complete Autonomous Node preset** (the default recommendation):
 - Seestar S50
 - Raspberry Pi 5 preloaded with Node Agent
 - Smart Power Box + SwitchBot + UPS
@@ -547,8 +547,8 @@ in `alpaca/` is designed to make driver swaps straightforward.
 | 3 | Asia / Pacific | +8 to +12 | 30% | 11:00–19:00 |
 | 4 | Middle East / India | +4 to +7 | 10% | Gap-filling |
 
-With this distribution any target can be observed continuously for 24 hours by different
-nodes. No target is ever out of reach.
+With this distribution, targets can be observed continuously for 24 hours across
+different nodes.
 
 ---
 

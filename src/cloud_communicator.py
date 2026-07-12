@@ -89,7 +89,7 @@ class CloudCommunicator:
         self._heartbeat_s = float(cloud_cfg.get("heartbeat_interval", 60))
         self._plan_poll_s = float(cloud_cfg.get("plan_poll_interval", 300))
         self._upload_images = bool(cloud_cfg.get("upload_images", False))
-        # THE ORGANISM: adaptive heartbeat + realtime push.
+        # Live fleet: adaptive heartbeat + realtime push.
         # When the node is observing (dark/active) it heartbeats fast so its live
         # phase and any retasking arrive within seconds; idle/daytime it relaxes
         # to the slow cadence to save the fleet's request budget.

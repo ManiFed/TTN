@@ -82,7 +82,7 @@ scheduler:
   network_optimizer: false
   local_search_ms: 1500
   replan_interval_minutes: 120
-  # THE ORGANISM: mid-night reflow of a clouded-out node's unexecuted plan
+  # Live fleet: mid-night reflow of a clouded-out node's unexecuted plan
   # items onto currently-dark nodes. reflow.tick runs only on the API
   # service (the loop that dispatches interrupts); the solver-worker never
   # touches this.
@@ -112,7 +112,36 @@ storage:
   raw_image_retention_days: 14
   max_image_mb: 64
 
-# EVERY LENS ON EARTH: cloud plate solving. Runs only on the solver-worker
+# Asteroid/minor-planet astrometry: link unmatched survey detections into
+# moving-object tracklets, crossmatch against known objects (SkyBoT), and
+# generate MPC-format reports for manual submission once an observatory code
+# is registered.
+mpc:
+  enabled: false                 # gate report generation until an observatory code exists
+  observatory_code: ''           # assigned by MPC after manual site registration
+  observer_name: ''
+  min_detection_snr: 5.0
+  skybot_radius_arcsec: 30
+  link_window_hours: 6
+  link_max_field_sep_deg: 2.0
+  min_track_detections: 3
+  max_fit_residual_arcsec: 5.0
+  link_retry_hours: 12
+  detection_retention_days: 30
+  arc_link_window_days: 14
+  arc_max_pred_resid_arcsec: 20
+  report_dir: /data/mpc_reports
+  neo_rate_threshold_deg_day: 2.0
+  neo_alert_n_nodes: 2
+  neo_alert_expires_hours: 1.5
+  comet_extended_fraction: 0.6
+  rotation_followup:
+    enabled: false
+    n_visits: 4
+    interval_hours: 1.5
+    expires_hours: 0.75
+
+# Universal frame ingestion: cloud plate solving. Runs only on the solver-worker
 # service (python -m cloud.ingest_worker), which has the astrometry.net
 # index volume mounted at /data/astrometry (see Dockerfile.solver). The
 # local index covers common consumer-telescope fields of view; frames

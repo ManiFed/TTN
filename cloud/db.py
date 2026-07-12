@@ -408,7 +408,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # the node *measured* from its own plate solves (vs. spec-sheet entries).
     ("nodes", "measured_specs", "TEXT DEFAULT '{}'"),
     ("nodes", "measured_at",    "TEXT DEFAULT ''"),
-    # EVERY LENS ON EARTH: universal ingestion. Contributions are no longer
+    # Universal frame ingestion. Contributions are no longer
     # required to arrive with a WCS — the cloud solver adds one. These columns
     # carry the staged pipeline's progress and results.
     ("contributions", "stage",              "TEXT DEFAULT ''"),      # triage|solve|extract|ingest
@@ -422,6 +422,16 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # confirmed discovery can credit the person who caught it.
     ("survey_measurements", "contribution_id", "INTEGER"),
     ("survey_measurements", "user_id",         "TEXT DEFAULT ''"),
+    # Moving-object linking: retire unlinked detections once their time window
+    # has closed so the linker's scan set can't be starved by permanent noise.
+    ("moving_object_detections", "link_done", "BOOLEAN DEFAULT FALSE"),
+    # Comet coma heuristic: whether this detection's PSF was flagged extended
+    # relative to the frame's stellar sharpness baseline (src/photometry.py).
+    ("moving_object_detections", "extended", "BOOLEAN DEFAULT FALSE"),
+    # NEO fast-mover flag and comet-vs-asteroid classification, both set when
+    # a tracklet is linked/merged (cloud/moving_objects.py).
+    ("asteroid_candidates", "priority", "TEXT DEFAULT 'normal'"),
+    ("asteroid_candidates", "object_type", "TEXT DEFAULT 'asteroid'"),
 ]
 
 # Tables added after initial schema — created idempotently in init().
@@ -647,7 +657,7 @@ _LATE_TABLES: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_contributions_status ON contributions(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_contributions_user ON contributions(user_id, created_at)",
-    # ── THE ORGANISM: live fleet state + server→node dispatch bus ──────────────
+    # ── Live fleet state + server→node dispatch bus ────────────────────────────
     # node_live_state carries second-scale phase for every node (one row/node,
     # upserted on each heartbeat). 'offline' is derived at read time from
     # updated_at age, never written by a reaper.
@@ -697,7 +707,7 @@ _LATE_TABLES: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_reflow_night ON reflow_log(night)",
-    # EVERY LENS ON EARTH: retrospective discovery. Deviations found in
+    # Universal frame ingestion: retrospective discovery. Deviations found in
     # historical (archive) frames land here, NOT in the live candidate flow —
     # a nova in a 2023 image is a real find but must never fire a live interrupt
     # or pollute the baseline it is compared against.
@@ -726,6 +736,84 @@ _LATE_TABLES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_retro_state ON retro_discoveries(state, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_retro_coords ON retro_discoveries(ra_deg, dec_deg)",
     "CREATE INDEX IF NOT EXISTS idx_retro_user ON retro_discoveries(user_id)",
+    # Asteroid/minor-planet astrometry: unmatched (uncatalogued) survey
+    # detections, kept per-position (not quantized/deduped like survey_sources)
+    # since a moving object's position changes every frame — this is the raw
+    # material cloud.moving_objects links into tracklets.
+    """
+    CREATE TABLE IF NOT EXISTS moving_object_detections (
+        id            BIGSERIAL PRIMARY KEY,
+        node_id       TEXT NOT NULL,
+        bjd           DOUBLE PRECISION NOT NULL,
+        ra_deg        DOUBLE PRECISION NOT NULL,
+        dec_deg       DOUBLE PRECISION NOT NULL,
+        mag           DOUBLE PRECISION,
+        mag_err       DOUBLE PRECISION,
+        snr           DOUBLE PRECISION,
+        filter        TEXT DEFAULT 'CV',
+        frame_id      TEXT DEFAULT '',
+        date_obs_utc  TEXT DEFAULT '',
+        tracklet_id   INTEGER,
+        link_done     BOOLEAN DEFAULT FALSE,
+        created_at    TEXT NOT NULL,
+        UNIQUE (node_id, bjd, ra_deg, dec_deg)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_mod_unlinked ON moving_object_detections(node_id, bjd) "
+    "WHERE tracklet_id IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_mod_tracklet ON moving_object_detections(tracklet_id)",
+    """
+    CREATE TABLE IF NOT EXISTS asteroid_candidates (
+        id                   SERIAL PRIMARY KEY,
+        node_id              TEXT NOT NULL,
+        first_bjd            DOUBLE PRECISION NOT NULL,
+        last_bjd             DOUBLE PRECISION NOT NULL,
+        n_detections         INTEGER DEFAULT 0,
+        ra0_deg              DOUBLE PRECISION NOT NULL,
+        dec0_deg             DOUBLE PRECISION NOT NULL,
+        ra_rate_deg_day      DOUBLE PRECISION,
+        dec_rate_deg_day     DOUBLE PRECISION,
+        fit_residual_arcsec  DOUBLE PRECISION,
+        mean_mag             DOUBLE PRECISION,
+        state                TEXT DEFAULT 'linked',
+        skybot_name          TEXT DEFAULT '',
+        designation          TEXT DEFAULT '',
+        detail               TEXT DEFAULT '{}',
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_asteroid_cand_state ON asteroid_candidates(state, updated_at)",
+    """
+    CREATE TABLE IF NOT EXISTS mpc_reports (
+        id             SERIAL PRIMARY KEY,
+        candidate_id   INTEGER REFERENCES asteroid_candidates(id),
+        file_path      TEXT NOT NULL,
+        format         TEXT DEFAULT 'ades_psv',
+        n_observations INTEGER DEFAULT 0,
+        created_at     TEXT NOT NULL
+    )
+    """,
+    # Rotation light-curve follow-up: a schedule of same-night re-observation
+    # slots for a confirmed, slow-moving (non-NEO) asteroid, dispatched as
+    # ordinary `interrupts` when each slot comes due (cloud/moving_objects.py:
+    # schedule_rotation_followup / dispatch_due_followups). Position at
+    # dispatch time is re-extrapolated from the candidate's fit rate rather
+    # than stored up front, since the slot may fire later than planned.
+    """
+    CREATE TABLE IF NOT EXISTS asteroid_followups (
+        id            SERIAL PRIMARY KEY,
+        candidate_id  INTEGER NOT NULL REFERENCES asteroid_candidates(id),
+        node_id       TEXT NOT NULL,
+        seq           INTEGER NOT NULL,
+        not_before    TEXT NOT NULL,
+        fired_at      TEXT,
+        interrupt_id  INTEGER,
+        created_at    TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_followups_due ON asteroid_followups(not_before) "
+    "WHERE fired_at IS NULL",
 ]
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM cloud-side tests (Phase 0) against a throwaway local PostgreSQL:
+Live fleet cloud-side tests (Phase 0) against a throwaway local PostgreSQL:
 
   * live.record_state upserts one row/node and fleet_state derives 'offline'
     from heartbeat-age staleness,
@@ -11,7 +11,7 @@ THE ORGANISM cloud-side tests (Phase 0) against a throwaway local PostgreSQL:
 
 Skipped when no local postgres is reachable.
 
-Run with:  python3 -m unittest tests.test_organism_cloud
+Run with:  python3 -m unittest tests.test_live_fleet_cloud
 """
 
 import json
@@ -35,7 +35,7 @@ def _postgres_available() -> bool:
 
 
 @unittest.skipUnless(_postgres_available(), "local postgres not reachable")
-class OrganismCloudTest(unittest.TestCase):
+class LiveFleetCloudTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import psycopg2

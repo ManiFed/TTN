@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM — live fleet state and the server→node dispatch bus.
+Live fleet state and the server→node dispatch bus.
 
 Two responsibilities:
 
@@ -17,8 +17,8 @@ stream is an accelerator; the 300 s plan poll and interrupt-on-heartbeat poll
 remain the correctness path, so a node that never connects to SSE still works.
 
 fleet_state() is the read side powering GET /api/v1/network/fleet and the
-member "organism" view. 'offline' is computed here from updated_at age (3× the
-node's own heartbeat cadence) — no background reaper writes it.
+member "live fleet" view. 'offline' is computed here from updated_at age (3×
+the node's own heartbeat cadence) — no background reaper writes it.
 """
 
 import json

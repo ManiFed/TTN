@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM — realtime push gateway (SSE).
+Live fleet — realtime push gateway (SSE).
 
 A dedicated service so long-lived connections never pin threads on the main
 API's small gunicorn pool. Direction is strictly server→node/member, so
@@ -200,7 +200,7 @@ def stream_node():
 
 @app.route("/api/v1/stream/fleet", methods=["GET"])
 def stream_fleet():
-    """Whole-fleet stream for the member 'organism' view. Member token auth."""
+    """Whole-fleet stream for the member 'live fleet' view. Member token auth."""
     token = (request.args.get("token")
              or (request.headers.get("Authorization", "")[7:]
                  if request.headers.get("Authorization", "").startswith("Bearer ")

@@ -2,7 +2,7 @@
 """
 Ingestion triage — a cheap gate before the expensive solver/extraction.
 
-EVERY LENS ON EARTH accepts frames from anyone, which means junk too:
+Universal frame ingestion accepts frames from anyone, which means junk too:
 screenshots, terrestrial photos, heavily stretched/processed images whose pixel
 values are no longer linear (so photometry is meaningless), and star-trailed or
 gradient-ruined frames. Solving and extracting those wastes the solver worker.

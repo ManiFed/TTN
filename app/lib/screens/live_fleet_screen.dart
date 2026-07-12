@@ -6,22 +6,22 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 
-/// THE ORGANISM: what the network just did on its own, live.
+/// Live fleet: automatic fleet-coordination activity, updated live.
 ///
 /// Shows every node's current second-scale phase plus the network's
-/// self-healing activity in the last 24h — mid-night reflows (a
+/// automatic recovery activity in the last 24h — mid-night reflows (a
 /// clouded-out node's targets moved to a dark node) and reflex
 /// confirmations (a just-promoted discovery candidate auto-confirmed on
 /// other dark nodes within seconds). Public feed, no auth required.
-class OrganismScreen extends StatefulWidget {
-  const OrganismScreen({super.key});
+class LiveFleetScreen extends StatefulWidget {
+  const LiveFleetScreen({super.key});
 
   @override
-  State<OrganismScreen> createState() => _OrganismScreenState();
+  State<LiveFleetScreen> createState() => _LiveFleetScreenState();
 }
 
-class _OrganismScreenState extends State<OrganismScreen> {
-  late Future<OrganismFeed> _future;
+class _LiveFleetScreenState extends State<LiveFleetScreen> {
+  late Future<LiveFleetFeed> _future;
 
   @override
   void initState() {
@@ -29,9 +29,9 @@ class _OrganismScreenState extends State<OrganismScreen> {
     _future = _load();
   }
 
-  Future<OrganismFeed> _load() {
+  Future<LiveFleetFeed> _load() {
     final state = context.read<AppState>();
-    return state.api.organism().catchError((Object e) {
+    return state.api.liveFleet().catchError((Object e) {
       state.handleAuthError(e);
       throw e;
     });
@@ -53,7 +53,7 @@ class _OrganismScreenState extends State<OrganismScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text(
-          'The Organism',
+          'Live Fleet',
           style: TextStyle(
             fontFamily: 'Geist',
             fontSize: 16,
@@ -63,7 +63,7 @@ class _OrganismScreenState extends State<OrganismScreen> {
         ),
         iconTheme: const IconThemeData(color: BSTheme.ink2),
       ),
-      body: AsyncView<OrganismFeed>(
+      body: AsyncView<LiveFleetFeed>(
         future: _future,
         onRefresh: _refresh,
         isEmpty: (feed) => feed.fleet.isEmpty,
@@ -72,9 +72,9 @@ class _OrganismScreenState extends State<OrganismScreen> {
           padding: EdgeInsets.fromLTRB(16, top + 8, 16, bottom + 24),
           children: [
             const Text(
-              'Right now, the network reacts on its own — clouded-out nodes '
-              'hand their targets to dark ones, and new discoveries get '
-              'confirmed automatically within seconds.',
+              'The network automatically reassigns work and confirms '
+              'candidates — clouded-out nodes hand their targets to dark '
+              'ones, and new discoveries get confirmed within seconds.',
               style: TextStyle(
                 fontFamily: 'Geist',
                 fontSize: 13,

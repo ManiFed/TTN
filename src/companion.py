@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Companion — contributor mode for EVERY LENS ON EARTH.
+Companion — contributor mode for universal frame ingestion.
 
 Runs next to any imaging setup (no telescope control, no scheduler) and watches
 one or more folders where an astrophotographer's FITS land. Each new frame is

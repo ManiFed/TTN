@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM — reflex confirmation.
+Live fleet — reflex confirmation.
 
 When Open Aperture promotes a discovery candidate (a deviation corroborated past
 the 2-detection gate), the network should confirm it *now*, not on the next

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EVERY LENS ON EARTH Phase 1 — the staged ingestion worker.
+Universal frame ingestion Phase 1 — the staged ingestion worker.
 
 Against a throwaway local PostgreSQL, with the plate solver and the survey
 photometry pipeline mocked (the plan's P1 contract: solver mocked in unit

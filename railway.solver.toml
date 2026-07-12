@@ -1,4 +1,4 @@
-# EVERY LENS ON EARTH — solver-worker: plate-solves contributed frames with
+# Universal frame ingestion — solver-worker: plate-solves contributed frames with
 # no WCS, using a local astrometry.net index volume mounted at /data/astrometry.
 # In Railway: create a NEW service, Settings -> Config file path = /railway.solver.toml,
 # attach a volume at /data (for both /data/astrometry and cloud_data if used),

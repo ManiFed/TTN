@@ -25,7 +25,7 @@ heard.
 > greedy packer is archived under `cloud/archive/`.
 >
 > **Mid-night reuse:** `cloud/chorus/reflow.py` (see
-> [ORGANISM.md](ORGANISM.md)) calls `assign.build_opportunities` and
+> [LIVE_FLEET.md](LIVE_FLEET.md)) calls `assign.build_opportunities` and
 > `assign.best_slot` directly to re-value a dropped node's remaining targets
 > on other dark nodes between nightly runs. It is a caller of this module, not
 > a fork of it — nothing here changed to support it.

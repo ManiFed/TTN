@@ -3,7 +3,7 @@
 Shared Astrometry.net `solve-field` wrapper.
 
 The node's photometry pipeline already shells out to solve-field for its own
-frames (src/photometry.py). EVERY LENS ON EARTH needs the *same* capability
+frames (src/photometry.py). Universal frame ingestion needs the *same* capability
 cloud-side, where contributed images arrive with no WCS at all — including
 blind solves (no RA/Dec hint) and reporting back the solved field centre and
 pixel scale so arbitrary optics self-describe.

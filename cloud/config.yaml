@@ -109,7 +109,7 @@ scheduler:
   network_optimizer: false # CHORUS is the live planner
   local_search_ms: 1500    # annealing refinement budget per network run
   replan_interval_minutes: 120
-  # THE ORGANISM: mid-night reflow. When a node clouds out/drops offline with
+  # Live fleet: mid-night reflow. When a node clouds out/drops offline with
   # unexecuted plan items, re-value them on currently-dark nodes (reusing
   # CHORUS best_slot) and dispatch as interrupts. Off by default.
   reflow: false
@@ -171,7 +171,7 @@ survey:
   variable_suspect_stdev: 0.2      # own-scatter above this → survey science, not alerts
   crossmatch_radius_arcsec: 10.0   # VSX/TNS cone match for candidates
   historical_days: 7               # contributed frames older than this → retro path
-  # THE ORGANISM: reflex confirmation. On candidate promotion, task other dark
+  # Live fleet: reflex confirmation. On candidate promotion, task other dark
   # nodes to confirm within seconds instead of waiting for the nightly replan.
   reflex:
     enabled: true
@@ -182,7 +182,37 @@ survey:
     n_nodes: 3                     # confirming nodes per candidate
     expires_hours: 2
 
-# EVERY LENS ON EARTH: cloud plate solving for contributed frames.
+# Asteroid/minor-planet astrometry: link unmatched survey detections into
+# moving-object tracklets, crossmatch against known objects (SkyBoT), and
+# generate MPC-format reports for manual submission once an observatory code
+# is registered.
+mpc:
+  enabled: false                 # gate report generation until an observatory code exists
+  observatory_code: ''           # assigned by MPC after manual site registration
+  observer_name: ''
+  min_detection_snr: 5.0         # floor for keeping an unmatched detection
+  skybot_radius_arcsec: 30
+  link_window_hours: 6           # max time span for one single-night tracklet
+  link_max_field_sep_deg: 2.0    # max sky separation to consider two detections/tracklets co-field
+  min_track_detections: 3        # tracklet must have >=3 points before crossmatch
+  max_fit_residual_arcsec: 5.0   # reject non-linear (spurious) tracks
+  link_retry_hours: 12           # stop retrying an unlinked detection after this
+  detection_retention_days: 30   # prune retired-noise / closed-tracklet detections
+  arc_link_window_days: 14       # max gap between nights to fold into one multi-night arc
+  arc_max_pred_resid_arcsec: 20  # looser than max_fit_residual_arcsec — motion curves over days
+  report_dir: cloud_data/mpc_reports
+  neo_rate_threshold_deg_day: 2.0   # on-sky rate above this → priority='neo_candidate'
+  neo_alert_n_nodes: 2              # dark nodes to urgently re-task on a confirmed-unknown fast mover
+  neo_alert_expires_hours: 1.5      # how long that urgent interrupt stays open
+  comet_extended_fraction: 0.6      # fraction of a tracklet's detections flagged "extended" (see
+                                    # src/photometry.py survey_comet_sharpness_drop) to call it a comet candidate
+  rotation_followup:
+    enabled: false                  # same-night repeat exposures of a confirmed asteroid for a rotation light curve
+    n_visits: 4                     # follow-up exposures after confirmation
+    interval_hours: 1.5             # spacing between visits
+    expires_hours: 0.75             # how long each fired interrupt stays open
+
+# Universal frame ingestion: cloud plate solving for contributed frames.
 # Runs on the solver worker service (astrometry.net index volume). The web
 # fallback (nova.astrometry.net) is for archive frames outside the local index.
 solver:

@@ -1,6 +1,6 @@
-"""Gauntlet: THE ORGANISM realtime spine (Phase 0).
+"""Gauntlet: live fleet realtime infrastructure (Phase 0).
 
-Asserts the node-side pieces of the live nervous system against a programmable
+Asserts the node-side pieces of the live state pipeline against a programmable
 fake cloud — no telescope, no Postgres:
 
   * an SSE push of "interrupt" makes the node fetch interrupts within ~1 s
@@ -38,7 +38,7 @@ def _config(url: str, **overrides) -> dict:
     }
 
 
-class OrganismRealtimeTest(TempCwdTestCase):
+class LiveFleetRealtimeTest(TempCwdTestCase):
     def setUp(self):
         super().setUp()
         self.fake = FakeCloud().start()

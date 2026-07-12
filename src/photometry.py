@@ -652,6 +652,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "sky_mag":          sky_mag,
         "patrol_alerts":    patrol_alerts,
         "survey_sources":   survey_sources,
+        "date_obs":         str(header.get("DATE-OBS", "") or ""),
         "provenance":       provenance,
     }, None
 
@@ -2117,9 +2118,15 @@ def _run_survey_extraction(
     snr_min     = float(phot_cfg.get("survey_snr_min", 5.0))
     max_sources = int(phot_cfg.get("survey_max_sources", 800))
     match_arcsec = float(phot_cfg.get("survey_match_radius_arcsec", 5.0))
+    # Widened from DAOStarFinder's library default (0.2) so a marginally
+    # resolved cometary coma isn't rejected before it ever reaches the
+    # "extended" heuristic below. This only affects the low tail — genuinely
+    # diffuse comae still won't survive DAOStarFinder's point-source model,
+    # which is a real limitation of using a stellar finder for coma detection.
+    sharplo = float(phot_cfg.get("survey_sharplo", 0.15))
 
     daofind = DAOStarFinder(fwhm=fwhm_px, threshold=5.0 * bkg_std,
-                            exclude_border=True)
+                            exclude_border=True, sharplo=sharplo)
     detections = daofind(data - bkg_med)
     if detections is None or len(detections) == 0:
         return [], zero_point, zp_scatter
@@ -2132,6 +2139,7 @@ def _run_survey_extraction(
 
     xs = np.asarray(detections[x_col], dtype=float)
     ys = np.asarray(detections[y_col], dtype=float)
+    sharpness = np.asarray(detections["sharpness"], dtype=float)
     positions = list(zip(xs, ys))
 
     fluxes, flux_errors = _aperture_photometry(
@@ -2195,6 +2203,17 @@ def _run_survey_extraction(
                     zero_point, zp_scatter, len(zp_arr))
 
     zp_err = float(zp_scatter or 0.05)
+
+    # Frame-local "what does a star look like" baseline for the extended-
+    # source (comet coma) heuristic below: median DAOStarFinder sharpness of
+    # the catalog-matched (known-stellar) sources in this same frame, so the
+    # comparison self-calibrates to this image's seeing/PSF rather than a
+    # fixed constant.
+    stellar_mask = (match_idx >= 0) & valid
+    stellar_sharp_med = (float(np.median(sharpness[stellar_mask]))
+                        if np.any(stellar_mask) else None)
+    sharp_drop = float(phot_cfg.get("survey_comet_sharpness_drop", 0.15))
+
     sources = []
     for i in range(len(ras)):
         if not valid[i] or flux_errors[i] <= 0:
@@ -2207,6 +2226,9 @@ def _run_survey_extraction(
         mag_err = float(math.sqrt(sigma_poisson ** 2 + zp_err ** 2))
         ci = int(match_idx[i])
         cs = catalog_stars[ci] if ci >= 0 else None
+        src_sharp = float(sharpness[i])
+        extended = bool(stellar_sharp_med is not None
+                       and src_sharp <= stellar_sharp_med - sharp_drop)
         sources.append({
             "key":     _survey_source_key(cs, float(ras[i]), float(decs[i])),
             "ra":      round(float(ras[i]), 5),
@@ -2218,6 +2240,8 @@ def _run_survey_extraction(
             "cat_err": round(float(cs.get("mag_err") or 0.05), 3) if cs else None,
             "cat_src": cs.get("source", "") if cs else "",
             "matched": cs is not None,
+            "sharpness": round(src_sharp, 3),
+            "extended": extended,
         })
 
     logger.info("Survey extraction: %d sources (%d catalog-matched) at SNR≥%.0f",
@@ -2376,4 +2400,5 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         "n_sources":       len(sources),
         "fits_file":       os.path.basename(fits_path),
         "survey_sources":  sources,
+        "date_obs":        str(header.get("DATE-OBS", "") or ""),
     }
