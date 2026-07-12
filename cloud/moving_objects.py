@@ -763,8 +763,7 @@ def _extrapolate_now(cand: dict) -> tuple:
     _bjd_tdb_to_jd_utc for the more careful conversion used where arcsecond
     precision actually matters (SkyBoT crossmatch, MPC astrometry)."""
     from astropy.time import Time
-    now_jd = Time.now().jd
-    dt = now_jd - float(cand["first_bjd"])
+    dt = float(Time.now().jd) - float(cand["first_bjd"])
     ra = float(cand["ra0_deg"]) + float(cand.get("ra_rate_deg_day") or 0.0) * dt
     dec = float(cand["dec0_deg"]) + float(cand.get("dec_rate_deg_day") or 0.0) * dt
     return ra % 360.0, dec

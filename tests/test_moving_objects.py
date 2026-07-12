@@ -32,8 +32,21 @@ CONFIG = {
         "observatory_code": "",
         "observer_name": "",
         "report_dir": "cloud_data/mpc_reports_test",
+        "neo_rate_threshold_deg_day": 2.0,
+        "comet_extended_fraction": 0.6,
+        "rotation_followup": {"enabled": False, "n_visits": 3,
+                             "interval_hours": 1.5, "expires_hours": 0.75},
     }
 }
+
+
+def _with_mpc_overrides(**overrides) -> dict:
+    """A copy of CONFIG with mpc.<key> overrides — for tests that need a
+    specific threshold or to flip rotation_followup on."""
+    import copy
+    cfg = copy.deepcopy(CONFIG)
+    cfg["mpc"].update(overrides)
+    return cfg
 
 
 def _postgres_available() -> bool:
@@ -107,6 +120,39 @@ class TrackletGeometryTest(unittest.TestCase):
                   {"id": 1, "bjd": t0 + 0.02, "ra_deg": 180.001, "dec_deg": 10.0, "mag": 17.0}]
         found = moving_objects._find_linear_track(cluster, max_resid_arcsec=1.0, min_pts=3)
         self.assertIsNone(found)
+
+    def test_sky_rate_corrects_ra_for_cos_dec(self):
+        # Same raw ra_rate/dec_rate, but at high dec the physical angular
+        # rate should be smaller (RA degrees are foreshortened there).
+        rate_equator = moving_objects._sky_rate_deg_day(1.0, 0.0, dec0=0.0)
+        rate_high_dec = moving_objects._sky_rate_deg_day(1.0, 0.0, dec0=80.0)
+        self.assertLess(rate_high_dec, rate_equator)
+
+    def test_classify_track_flags_fast_mover_as_neo_candidate(self):
+        track = [{"extended": False}] * 4
+        priority, object_type = moving_objects._classify_track(
+            track, dec0=0.0, ra_rate=3.0, dec_rate=0.0, config=CONFIG)
+        self.assertEqual(priority, "neo_candidate")
+        self.assertEqual(object_type, "asteroid")
+
+    def test_classify_track_normal_rate_stays_normal_priority(self):
+        track = [{"extended": False}] * 4
+        priority, _ = moving_objects._classify_track(
+            track, dec0=0.0, ra_rate=0.3, dec_rate=0.1, config=CONFIG)
+        self.assertEqual(priority, "normal")
+
+    def test_classify_track_mostly_extended_detections_flagged_comet(self):
+        track = [{"extended": True}, {"extended": True}, {"extended": True},
+                {"extended": False}]
+        _, object_type = moving_objects._classify_track(
+            track, dec0=0.0, ra_rate=0.3, dec_rate=0.1, config=CONFIG)
+        self.assertEqual(object_type, "comet_candidate")
+
+    def test_classify_track_mostly_point_like_stays_asteroid(self):
+        track = [{"extended": False}, {"extended": False}, {"extended": True}]
+        _, object_type = moving_objects._classify_track(
+            track, dec0=0.0, ra_rate=0.3, dec_rate=0.1, config=CONFIG)
+        self.assertEqual(object_type, "asteroid")
 
 
 class MpcReportFormatTest(unittest.TestCase):
@@ -205,18 +251,19 @@ class MovingObjectIntegrationTest(unittest.TestCase):
         admin.close()
 
     def setUp(self):
-        for table in ("moving_object_detections", "asteroid_candidates", "mpc_reports"):
+        for table in ("asteroid_followups", "moving_object_detections",
+                     "asteroid_candidates", "mpc_reports", "interrupts"):
             self.db.execute(f"DELETE FROM {table}")
 
     def _insert_detection(self, node_id, bjd, ra, dec, mag=17.0, snr=20.0,
-                          created_at=None):
+                          created_at=None, extended=False):
         self.db.execute(
             "INSERT INTO moving_object_detections "
             "(node_id, bjd, ra_deg, dec_deg, mag, mag_err, snr, filter, "
-            " frame_id, date_obs_utc, created_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            " frame_id, date_obs_utc, extended, created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (node_id, bjd, ra, dec, mag, 0.05, snr, "CV", "",
-             "", created_at or datetime.now(timezone.utc).isoformat()))
+             "", extended, created_at or datetime.now(timezone.utc).isoformat()))
 
     def test_record_frame_detections_keeps_only_unmatched_above_snr(self):
         sources = [
@@ -388,6 +435,157 @@ class MovingObjectIntegrationTest(unittest.TestCase):
         updated2 = self.db.query_one(
             "SELECT * FROM asteroid_candidates WHERE id = %s", (cand2["id"],))
         self.assertEqual(updated2["state"], "rejected")
+
+    def test_link_tracklets_flags_fast_mover_neo_candidate(self):
+        t0 = 2460500.5000
+        ra0, dec0 = 120.0, 0.0
+        ra_rate = 6.0   # deg/day — well above the 2.0 default NEO threshold
+        for i in range(4):
+            dt = i * 0.01
+            self._insert_detection("node_neo", t0 + dt,
+                                  ra0 + ra_rate * dt, dec0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_neo'")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand["priority"], "neo_candidate")
+
+    def test_link_tracklets_normal_rate_is_not_neo_candidate(self):
+        t0 = 2460500.5000
+        for i in range(4):
+            dt = i * 0.02
+            self._insert_detection("node_slow", t0 + dt, 130.0 + 0.03 * dt, 0.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_slow'")
+        self.assertEqual(cand["priority"], "normal")
+
+    def test_link_tracklets_flags_mostly_extended_track_comet_candidate(self):
+        t0 = 2460500.5000
+        for i in range(4):
+            dt = i * 0.02
+            self._insert_detection("node_comet", t0 + dt, 140.0 + 0.03 * dt, 0.0,
+                                  extended=(i != 3))   # 3 of 4 extended
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_comet'")
+        self.assertEqual(cand["object_type"], "comet_candidate")
+
+    def test_link_tracklets_all_point_like_stays_asteroid(self):
+        t0 = 2460500.5000
+        for i in range(4):
+            dt = i * 0.02
+            self._insert_detection("node_ast", t0 + dt, 150.0 + 0.03 * dt, 0.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_ast'")
+        self.assertEqual(cand["object_type"], "asteroid")
+
+    def test_confirm_schedules_rotation_followup_for_normal_asteroid(self):
+        t0 = 2460500.5000
+        for i in range(3):
+            dt = i * 0.02
+            self._insert_detection("node_h", t0 + dt, 70.0 + 0.03 * dt, 15.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_h'")
+
+        cfg = _with_mpc_overrides(
+            rotation_followup={"enabled": True, "n_visits": 3,
+                              "interval_hours": 1.0, "expires_hours": 0.5})
+        result = moving_objects.confirm_candidate(cand["id"], cfg)
+        self.assertEqual(result["followups_scheduled"], 3)
+
+        rows = self.db.query(
+            "SELECT * FROM asteroid_followups WHERE candidate_id = %s "
+            "ORDER BY seq", (cand["id"],))
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([r["seq"] for r in rows], [1, 2, 3])
+        self.assertEqual(rows[0]["node_id"], "node_h")
+        self.assertIsNone(rows[0]["fired_at"])
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            not_before = datetime.fromisoformat(r["not_before"])
+            self.assertGreater(not_before, now)
+
+    def test_confirm_skips_rotation_followup_for_neo_candidate(self):
+        t0 = 2460500.5000
+        ra_rate = 6.0
+        for i in range(3):
+            dt = i * 0.01
+            self._insert_detection("node_i", t0 + dt, 80.0 + ra_rate * dt, 15.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_i'")
+        self.assertEqual(cand["priority"], "neo_candidate")
+
+        cfg = _with_mpc_overrides(rotation_followup={"enabled": True, "n_visits": 3,
+                                                     "interval_hours": 1.0,
+                                                     "expires_hours": 0.5})
+        result = moving_objects.confirm_candidate(cand["id"], cfg)
+        self.assertEqual(result["followups_scheduled"], 0)
+        rows = self.db.query(
+            "SELECT * FROM asteroid_followups WHERE candidate_id = %s", (cand["id"],))
+        self.assertEqual(len(rows), 0)
+
+    def test_dispatch_due_followups_fires_due_slot_as_interrupt(self):
+        t0 = 2460500.5000
+        for i in range(3):
+            dt = i * 0.02
+            self._insert_detection("node_j", t0 + dt, 90.0 + 0.03 * dt, 15.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_j'")
+        moving_objects.confirm_candidate(cand["id"], CONFIG)   # rotation_followup off
+
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        self.db.execute(
+            "INSERT INTO asteroid_followups "
+            "(candidate_id, node_id, seq, not_before, created_at) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (cand["id"], "node_j", 1, past, datetime.now(timezone.utc).isoformat()))
+
+        result = moving_objects.dispatch_due_followups(CONFIG)
+        self.assertEqual(result["fired"], 1)
+        self.assertEqual(result["skipped"], 0)
+
+        followup = self.db.query_one(
+            "SELECT * FROM asteroid_followups WHERE candidate_id = %s", (cand["id"],))
+        self.assertIsNotNone(followup["fired_at"])
+        self.assertIsNotNone(followup["interrupt_id"])
+
+        interrupt = self.db.query_one(
+            "SELECT * FROM interrupts WHERE id = %s", (followup["interrupt_id"],))
+        self.assertIsNotNone(interrupt)
+        self.assertEqual(interrupt["reason"], "asteroid_followup")
+        self.assertEqual(self.db.loads(interrupt["node_ids"], []), ["node_j"])
+
+    def test_dispatch_due_followups_skips_no_longer_confirmed_candidate(self):
+        t0 = 2460500.5000
+        for i in range(3):
+            dt = i * 0.02
+            self._insert_detection("node_k", t0 + dt, 100.0 + 0.03 * dt, 15.0)
+        moving_objects.link_tracklets(CONFIG)
+        cand = self.db.query_one(
+            "SELECT * FROM asteroid_candidates WHERE node_id = 'node_k'")
+        # Never confirmed (still 'linked') — a stray follow-up row for it
+        # should be skipped, not fired as a live interrupt.
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        self.db.execute(
+            "INSERT INTO asteroid_followups "
+            "(candidate_id, node_id, seq, not_before, created_at) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (cand["id"], "node_k", 1, past, datetime.now(timezone.utc).isoformat()))
+
+        result = moving_objects.dispatch_due_followups(CONFIG)
+        self.assertEqual(result["fired"], 0)
+        self.assertEqual(result["skipped"], 1)
+        followup = self.db.query_one(
+            "SELECT * FROM asteroid_followups WHERE candidate_id = %s", (cand["id"],))
+        self.assertIsNotNone(followup["fired_at"])
+        self.assertIsNone(followup["interrupt_id"])
+        self.assertEqual(
+            self.db.query_one("SELECT COUNT(*) AS n FROM interrupts")["n"], 0)
 
     def test_stale_unlinked_detections_retired_so_scan_set_cannot_starve(self):
         # Old noise that will never link: without retirement it would clog the

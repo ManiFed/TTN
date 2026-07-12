@@ -2126,7 +2126,7 @@ def _run_survey_extraction(
     sharplo = float(phot_cfg.get("survey_sharplo", 0.15))
 
     daofind = DAOStarFinder(fwhm=fwhm_px, threshold=5.0 * bkg_std,
-                            exclude_border=True, sharplo=sharplo)
+                            exclude_border=True, sharpness_range=(sharplo, 1.0))
     detections = daofind(data - bkg_med)
     if detections is None or len(detections) == 0:
         return [], zero_point, zp_scatter
