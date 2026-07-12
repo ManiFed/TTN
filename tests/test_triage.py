@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EVERY LENS ON EARTH Phase 3 — ingestion triage heuristics.
+Universal frame ingestion Phase 3 — ingestion triage heuristics.
 
 A synthetic fixture corpus (the plan's P3 contract): a clean linear star field
 must pass; a stretched/8-bit-processed frame, a star-trailed frame, and a

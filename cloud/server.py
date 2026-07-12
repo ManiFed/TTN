@@ -491,6 +491,42 @@ def api_aavso_files_download(rel):
                                download_name=Path(rel).name)
 
 
+def _mpc_report_dir() -> Path:
+    d = Path((_config.get("mpc", {}) or {}).get("report_dir", "cloud_data/mpc_reports"))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@app.route("/api/v1/mpc-files", methods=["GET"])
+def api_mpc_files_list():
+    """Generated MPC ADES astrometry reports, for an operator to download
+    and manually submit via MPC's web upload."""
+    root = _mpc_report_dir()
+    files = []
+    for psv in sorted(root.rglob("*.psv"), reverse=True):
+        rel = str(psv.relative_to(root))
+        files.append({
+            "path":     rel,
+            "size":     psv.stat().st_size,
+            "modified": datetime.fromtimestamp(psv.stat().st_mtime, tz=timezone.utc).isoformat(),
+            "download": f"/api/v1/mpc-files/download/{rel}",
+        })
+    return jsonify({"files": files, "count": len(files)})
+
+
+@app.route("/api/v1/mpc-files/download/<path:rel>", methods=["GET"])
+def api_mpc_files_download(rel):
+    from pathlib import Path
+    root = _mpc_report_dir()
+    abs_path = safe_join(str(root.resolve()), rel)
+    if abs_path is None:
+        return jsonify({"error": "invalid path"}), 400
+    if not Path(abs_path).is_file():
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(str(root.resolve()), rel, as_attachment=True,
+                               download_name=Path(rel).name)
+
+
 # ── Interrupts ─────────────────────────────────────────────────────────────────
 
 @app.route("/api/v1/interrupts", methods=["GET"])
@@ -1101,6 +1137,49 @@ def api_admin_candidate_update(cand_id: int):
         return jsonify({"ok": True, **result})
     if action == "reject":
         if not _cm.reject_candidate(cand_id, note=str(body.get("note") or "")):
+            return jsonify({"error": "candidate not found"}), 404
+        return jsonify({"ok": True, "candidate_id": cand_id})
+    return jsonify({"error": "action must be confirm or reject"}), 400
+
+
+@app.route("/api/v1/admin/asteroid-candidates", methods=["GET"])
+@require_admin
+def api_admin_asteroid_candidates():
+    """Moving-object tracklets. ?state=linked|candidate|known_skybot|
+    confirmed|rejected|all (default: candidate — human review queue)."""
+    from cloud import moving_objects
+    state = request.args.get("state", "candidate")
+    if state == "all":
+        rows = db.query(
+            "SELECT * FROM asteroid_candidates ORDER BY updated_at DESC LIMIT 200")
+    else:
+        rows = db.query(
+            "SELECT * FROM asteroid_candidates WHERE state = %s "
+            "ORDER BY updated_at DESC LIMIT 200", (state,))
+    return jsonify({"count": len(rows), "state": state, "candidates": rows,
+                    "moving_objects": moving_objects.stats()})
+
+
+@app.route("/api/v1/admin/asteroid-candidates/<int:cand_id>", methods=["PATCH"])
+@require_admin
+def api_admin_asteroid_candidate_update(cand_id: int):
+    """Human verdict on a moving-object tracklet.
+
+    Body: {"action": "confirm"|"reject", "note": "..."} — confirm writes an
+    MPC ADES astrometry report to cloud_data/mpc_reports for manual
+    submission (see GET /api/v1/mpc-files).
+    """
+    from cloud import moving_objects
+    body = request.get_json(force=True, silent=True) or {}
+    action = str(body.get("action") or "").lower()
+    if action == "confirm":
+        result = moving_objects.confirm_candidate(
+            cand_id, _config, note=str(body.get("note") or ""))
+        if result is None:
+            return jsonify({"error": "candidate not found or not open"}), 404
+        return jsonify({"ok": True, **result})
+    if action == "reject":
+        if not moving_objects.reject_candidate(cand_id, note=str(body.get("note") or "")):
             return jsonify({"error": "candidate not found"}), 404
         return jsonify({"ok": True, "candidate_id": cand_id})
     return jsonify({"error": "action must be confirm or reject"}), 400

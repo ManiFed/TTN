@@ -790,6 +790,7 @@ def _run_photometry_bg(fits_path: str) -> None:
                             "fwhm":       result.get("fwhm"),
                             "airmass":    result.get("airmass"),
                             "fits_file":  result.get("fits_file"),
+                            "date_obs":   result.get("date_obs"),
                         },
                         survey_sources,
                     )
@@ -888,7 +889,7 @@ def _cloud_telescope_specs() -> dict:
 
 
 def _cloud_state() -> dict:
-    """Second-scale live phase for THE ORGANISM fleet map + fast heartbeat.
+    """Second-scale live phase for the live fleet map + fast heartbeat.
 
     Maps the scheduler's internal phase to the cloud's live-state vocabulary and
     reports darkness/sky so the cloud knows, in seconds, which nodes are dark
@@ -2362,7 +2363,7 @@ def _revive_image_watcher() -> bool:
         return True
     with _state_lock:
         srv = _state.get("server") or {}
-    host = srv.get("address")
+    host = srv.get("address") or cfg.get("alpaca", {}).get("default_server", {}).get("address")
     if host:
         mount_path = _try_mount_seestar_smb(host)
         if mount_path:
@@ -3968,7 +3969,16 @@ def launch(port: int = 5173) -> None:
 
     iw_cfg = cfg.get("image_watcher", {})
     if iw_cfg.get("enabled", False):
-        watch_path     = iw_cfg.get("watch_path", "/mnt/seestar")
+        configured_path = iw_cfg.get("watch_path", "")
+        # The configured path is a Linux CIFS default; on macOS the Seestar
+        # share always mounts at /Volumes/Seestar (_try_mount_seestar_smb), so
+        # an unmodified Linux-style default would never exist on this platform.
+        if configured_path and os.path.isdir(configured_path):
+            watch_path = configured_path
+        elif platform.system() == "Darwin":
+            watch_path = "/Volumes/Seestar"
+        else:
+            watch_path = configured_path or "/mnt/seestar"
         debounce_delay = float(iw_cfg.get("debounce_delay", 2.0))
         _image_watcher = ImageWatcher(watch_path, _on_new_fits, debounce_delay)
         _image_watcher.start()

@@ -1,13 +1,13 @@
-# THE ORGANISM + EVERY LENS ON EARTH
+# Live Fleet State + Universal Frame Ingestion
 
 Two programs that change what the network *is*, not just what it schedules.
 Both build on CHORUS (see [CHORUS.md](CHORUS.md)) and Open Aperture
 (`cloud/survey.py`) without touching their internals.
 
 > **Implementation status: built.** All six phases below are implemented and
-> covered by tests (`tests/test_organism_cloud.py`, `tests/test_reflow_reflex.py`,
+> covered by tests (`tests/test_live_fleet_cloud.py`, `tests/test_reflow_reflex.py`,
 > `tests/test_ingest_worker.py`, `tests/test_triage.py`, `tests/test_historical.py`,
-> `tests/gauntlet/test_organism.py`, `tests/gauntlet/test_companion.py`).
+> `tests/gauntlet/test_live_fleet.py`, `tests/gauntlet/test_companion.py`).
 > Mid-night reflow is shipped **disabled** (`scheduler.reflow: false`) pending an
 > operator decision to turn it on; reflex confirmation is enabled by default.
 > The `realtime/` SSE gateway and the plate-solving `solver-worker` need their
@@ -23,24 +23,25 @@ CHORUS plans once a night and nodes poll for it. Open Aperture only sees frames
 from the fleet's own scheduled telescopes. Two structural limits followed from
 that:
 
-1. **The network is asleep between plans.** A node that clouds out mid-night
-   just loses that block of science; nobody finds out until the morning
-   summary. A promoted discovery candidate waits for the next scheduled
-   observation — potentially a full night — before anything confirms it.
+1. **The network has no live state between plans.** A node that clouds out
+   mid-night just loses that block of science; nobody finds out until the
+   morning summary. A promoted discovery candidate waits for the next
+   scheduled observation — potentially a full night — before anything
+   confirms it.
 2. **The network only sees what it points at.** Every other astrophotographer's
-   camera, and every frame ever taken before this network existed, is
-   scientifically inert data sitting on someone's hard drive.
+   camera, and every frame ever taken before this network existed, is data
+   that never enters the survey.
 
-**THE ORGANISM** collapses the first limit: the network keeps a live,
+**Live fleet state** addresses the first limit: the network keeps a live,
 second-scale picture of the fleet and reacts within seconds instead of within
-a replan cycle. **EVERY LENS ON EARTH** collapses the second: any FITS frame,
-from any camera, live or from years ago, becomes survey science.
+a replan cycle. **Universal frame ingestion** addresses the second: any FITS
+frame, from any camera, live or from years ago, becomes survey science.
 
 ---
 
-## THE ORGANISM
+## Live fleet state
 
-### 1. Live nervous system
+### 1. Live state and dispatch
 
 - `cloud/live.py` — `node_live_state` (one row per node: phase, target,
   darkness, sky clarity, heartbeat cadence) and `dispatch_events` (an
@@ -55,7 +56,7 @@ from any camera, live or from years ago, becomes survey science.
   turns any push into an immediate authenticated re-fetch. The stream is a
   pure signal — content always comes over the normal API — so a node that
   never connects to SSE is unaffected; it just polls on the old cadence.
-- `GET /api/v1/network/fleet`, `GET /api/v1/network/organism`,
+- `GET /api/v1/network/fleet`, `GET /api/v1/network/live-fleet`,
   `GET /api/v1/me/nodes/<id>/live` expose the live map.
 
 ### 2. Mid-night reflow
@@ -89,7 +90,7 @@ dedup against any interrupt already open for that source — configured under
 
 ---
 
-## EVERY LENS ON EARTH
+## Universal frame ingestion
 
 ### 1. Cloud plate solving
 
@@ -186,5 +187,5 @@ confirmed find credits the person whose upload caught it;
 3. Set `cloud.realtime_url` in node configs once the realtime service has a
    domain (nodes work fine without it — they just stay on polling).
 4. Leave `scheduler.reflow: false` until you've watched `reflow_log` /
-   `GET /api/v1/network/organism` under reflex-only operation and are ready
+   `GET /api/v1/network/live-fleet` under reflex-only operation and are ready
    for the network to retask nodes autonomously.

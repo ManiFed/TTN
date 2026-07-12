@@ -142,6 +142,42 @@ class SurveyExtractionTest(unittest.TestCase):
                                  cfg={"survey_max_sources": 3})
         self.assertLessEqual(len(sources), 3)
 
+    def test_sources_carry_sharpness_and_stars_are_not_extended(self):
+        # Ordinary injected stellar Gaussians should sit near the frame's own
+        # stellar sharpness baseline (they *are* that baseline) — the
+        # moving-object comet heuristic (cloud/moving_objects.py) depends on
+        # normal stars not being flagged.
+        data, wcs, catalog, _ = _make_field(zp=22.0)
+        sources, _, _ = _extract(data, wcs, catalog,
+                                 zero_point=22.0, zp_scatter=0.03)
+        self.assertTrue(all("sharpness" in s for s in sources))
+        self.assertTrue(all("extended" in s for s in sources))
+        matched_extended = [s["extended"] for s in sources if s["matched"]]
+        self.assertTrue(matched_extended)
+        self.assertFalse(any(matched_extended))
+
+    def test_broad_flattened_source_flagged_extended(self):
+        # A wider, flatter blob than the frame's stellar FWHM (a rough stand-
+        # in for a marginally resolved cometary coma) reads a measurably
+        # lower DAOStarFinder sharpness than the stellar baseline. The gap is
+        # real but modest for a symmetric Gaussian stand-in (a real coma's
+        # non-Gaussian wings would separate further), so this test tightens
+        # survey_comet_sharpness_drop rather than relying on the looser
+        # production default to demonstrate it.
+        data, wcs, catalog, _ = _make_field(zp=22.0)
+        _inject_star(data, 400.0, 400.0, 10 ** (-0.4 * (9.0 - 22.0)),
+                    fwhm_px=10.0)
+        sources, _, _ = _extract(data, wcs, catalog,
+                                 zero_point=22.0, zp_scatter=0.03,
+                                 cfg={"survey_comet_sharpness_drop": 0.03})
+        interloper_ra, interloper_dec = (float(v) for v in
+                                         wcs.pixel_to_world_values(400.0, 400.0))
+        unmatched = [s for s in sources if not s["matched"]]
+        self.assertTrue(unmatched)
+        nearest = min(unmatched, key=lambda s: (s["ra"] - interloper_ra) ** 2
+                     + (s["dec"] - interloper_dec) ** 2)
+        self.assertTrue(nearest["extended"])
+
 
 class SourceKeyTest(unittest.TestCase):
     def test_catalog_id_wins(self):

@@ -719,8 +719,8 @@ class HelpChatMessage {
       );
 }
 
-/// A node's live second-scale state in THE ORGANISM feed (part of
-/// GET /network/organism `fleet`).
+/// A node's live second-scale state in the live fleet feed (part of
+/// GET /network/live-fleet `fleet`).
 class FleetNode {
   final String nodeId;
   final String phase;
@@ -752,7 +752,7 @@ class FleetNode {
 }
 
 /// A mid-night reflow: a clouded-out node's work moved to a dark node
-/// (part of GET /network/organism `reflows`).
+/// (part of GET /network/live-fleet `reflows`).
 class ReflowEvent {
   final String fromNode;
   final String toNode;
@@ -781,7 +781,7 @@ class ReflowEvent {
 }
 
 /// An autonomous reflex confirmation fired on candidate promotion
-/// (part of GET /network/organism `reflex_confirmations`).
+/// (part of GET /network/live-fleet `reflex_confirmations`).
 class ReflexConfirmation {
   final String name;
   final List<String> nodeIds;
@@ -800,20 +800,20 @@ class ReflexConfirmation {
       );
 }
 
-/// THE ORGANISM activity feed (GET /network/organism): live fleet phases plus
+/// Live fleet activity feed (GET /network/live-fleet): live fleet phases plus
 /// what the network just did on its own in the last 24h.
-class OrganismFeed {
+class LiveFleetFeed {
   final List<FleetNode> fleet;
   final List<ReflowEvent> reflows;
   final List<ReflexConfirmation> reflexConfirmations;
 
-  const OrganismFeed({
+  const LiveFleetFeed({
     required this.fleet,
     required this.reflows,
     required this.reflexConfirmations,
   });
 
-  factory OrganismFeed.fromJson(Map<String, dynamic> j) => OrganismFeed(
+  factory LiveFleetFeed.fromJson(Map<String, dynamic> j) => LiveFleetFeed(
         fleet: (j['fleet'] as List? ?? [])
             .map((e) => FleetNode.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList(),

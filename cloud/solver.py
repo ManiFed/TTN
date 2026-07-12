@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cloud-side plate solving for EVERY LENS ON EARTH.
+Cloud-side plate solving for universal frame ingestion.
 
 Contributed frames arrive without a WCS. This module gives the ingest worker a
 single `solve(path, ...)` call that:

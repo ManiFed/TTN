@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,40 +8,75 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 
-/// THE ORGANISM: what the network just did on its own, live.
+/// Live fleet: automatic fleet-coordination activity, updated live.
 ///
 /// Shows every node's current second-scale phase plus the network's
-/// self-healing activity in the last 24h — mid-night reflows (a
+/// automatic recovery activity in the last 24h — mid-night reflows (a
 /// clouded-out node's targets moved to a dark node) and reflex
 /// confirmations (a just-promoted discovery candidate auto-confirmed on
 /// other dark nodes within seconds). Public feed, no auth required.
-class OrganismScreen extends StatefulWidget {
-  const OrganismScreen({super.key});
+class LiveFleetScreen extends StatefulWidget {
+  const LiveFleetScreen({super.key});
 
   @override
-  State<OrganismScreen> createState() => _OrganismScreenState();
+  State<LiveFleetScreen> createState() => _LiveFleetScreenState();
 }
 
-class _OrganismScreenState extends State<OrganismScreen> {
-  late Future<OrganismFeed> _future;
+class _LiveFleetScreenState extends State<LiveFleetScreen> {
+  static const _pollInterval = Duration(seconds: 15);
+
+  // Kept only for the very first load — AsyncView owns the loading/error/
+  // empty states for that initial fetch and for manual pull-to-refresh.
+  late Future<LiveFleetFeed> _future;
+  // Once we have data, background polls update this directly so the feed
+  // never drops back through AsyncView's FutureBuilder (which flashes a
+  // spinner for a frame whenever its `future` identity changes, even if the
+  // new future is already resolved).
+  LiveFleetFeed? _liveFeed;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _future = _load()..then((feed) {
+      if (mounted) setState(() => _liveFeed = feed);
+    });
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _silentRefresh());
   }
 
-  Future<OrganismFeed> _load() {
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<LiveFleetFeed> _load() {
     final state = context.read<AppState>();
-    return state.api.organism().catchError((Object e) {
+    return state.api.liveFleet().catchError((Object e) {
       state.handleAuthError(e);
       throw e;
     });
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = _load());
-    await _future;
+    final feed = await _load();
+    if (!mounted) return;
+    setState(() {
+      _future = Future.value(feed);
+      _liveFeed = feed;
+    });
+  }
+
+  // Background poll: fetches fresh data and patches `_liveFeed` directly so
+  // the feed doesn't flash back to a loading spinner every 15s.
+  Future<void> _silentRefresh() async {
+    try {
+      final feed = await _load();
+      if (!mounted) return;
+      setState(() => _liveFeed = feed);
+    } catch (_) {
+      // Keep showing the last known-good data; the next poll will retry.
+    }
   }
 
   @override
@@ -53,7 +90,7 @@ class _OrganismScreenState extends State<OrganismScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text(
-          'The Organism',
+          'Live Fleet',
           style: TextStyle(
             fontFamily: 'Geist',
             fontSize: 16,
@@ -63,49 +100,80 @@ class _OrganismScreenState extends State<OrganismScreen> {
         ),
         iconTheme: const IconThemeData(color: BSTheme.ink2),
       ),
-      body: AsyncView<OrganismFeed>(
-        future: _future,
-        onRefresh: _refresh,
-        isEmpty: (feed) => feed.fleet.isEmpty,
-        emptyMessage: 'No nodes reporting live state yet.',
-        builder: (context, feed) => ListView(
-          padding: EdgeInsets.fromLTRB(16, top + 8, 16, bottom + 24),
-          children: [
-            const Text(
-              'Right now, the network reacts on its own — clouded-out nodes '
-              'hand their targets to dark ones, and new discoveries get '
-              'confirmed automatically within seconds.',
-              style: TextStyle(
-                fontFamily: 'Geist',
-                fontSize: 13,
-                color: BSTheme.ink2,
-                height: 1.4,
-              ),
+      body: _liveFeed != null
+          ? RefreshIndicator(
+              onRefresh: _refresh,
+              child: _liveFeed!.fleet.isEmpty
+                  ? ListView(
+                      children: [
+                        const SizedBox(height: 120),
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Text(
+                              'No nodes reporting live state yet.',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : _FeedList(feed: _liveFeed!, top: top, bottom: bottom),
+            )
+          : AsyncView<LiveFleetFeed>(
+              future: _future,
+              onRefresh: _refresh,
+              isEmpty: (feed) => feed.fleet.isEmpty,
+              emptyMessage: 'No nodes reporting live state yet.',
+              builder: (context, feed) => _FeedList(feed: feed, top: top, bottom: bottom),
             ),
-            const SizedBox(height: 20),
-            _SectionLabel('FLEET · ${feed.fleet.length} NODE'
-                '${feed.fleet.length == 1 ? '' : 'S'}'),
-            const SizedBox(height: 8),
-            ...feed.fleet.map((n) => _FleetTile(node: n)),
-            const SizedBox(height: 20),
-            const _SectionLabel('REFLOWS · LAST 24H'),
-            const SizedBox(height: 8),
-            if (feed.reflows.isEmpty)
-              const _EmptyRow('No dropouts tonight — nothing needed reflowing.')
-            else
-              ...feed.reflows.map((r) => _ReflowTile(event: r)),
-            const SizedBox(height: 20),
-            const _SectionLabel('REFLEX CONFIRMATIONS · LAST 24H'),
-            const SizedBox(height: 8),
-            if (feed.reflexConfirmations.isEmpty)
-              const _EmptyRow('No candidates auto-confirmed tonight.')
-            else
-              ...feed.reflexConfirmations.map((r) => _ReflexTile(event: r)),
-          ],
-        ),
-      ),
     );
   }
+}
+
+class _FeedList extends StatelessWidget {
+  const _FeedList({required this.feed, required this.top, required this.bottom});
+
+  final LiveFleetFeed feed;
+  final double top;
+  final double bottom;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+        padding: EdgeInsets.fromLTRB(16, top + 8, 16, bottom + 24),
+        children: [
+          const Text(
+            'The network automatically reassigns work and confirms '
+            'candidates — clouded-out nodes hand their targets to dark '
+            'ones, and new discoveries get confirmed within seconds.',
+            style: TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 13,
+              color: BSTheme.ink2,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
+          _SectionLabel('FLEET · ${feed.fleet.length} NODE'
+              '${feed.fleet.length == 1 ? '' : 'S'}'),
+          const SizedBox(height: 8),
+          ...feed.fleet.map((n) => _FleetTile(node: n)),
+          const SizedBox(height: 20),
+          const _SectionLabel('REFLOWS · LAST 24H'),
+          const SizedBox(height: 8),
+          if (feed.reflows.isEmpty)
+            const _EmptyRow('No dropouts tonight — nothing needed reflowing.')
+          else
+            ...feed.reflows.map((r) => _ReflowTile(event: r)),
+          const SizedBox(height: 20),
+          const _SectionLabel('REFLEX CONFIRMATIONS · LAST 24H'),
+          const SizedBox(height: 8),
+          if (feed.reflexConfirmations.isEmpty)
+            const _EmptyRow('No candidates auto-confirmed tonight.')
+          else
+            ...feed.reflexConfirmations.map((r) => _ReflexTile(event: r)),
+        ],
+      );
 }
 
 class _SectionLabel extends StatelessWidget {

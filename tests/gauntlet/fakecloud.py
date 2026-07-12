@@ -20,7 +20,7 @@ class FakeCloud:
         self.mode = "ok"
         self.requests: list[dict] = []   # {"method", "path", "body"}
         self._lock = threading.Lock()
-        # THE ORGANISM: programmable realtime push. Tests call push("interrupt")
+        # Live fleet: programmable realtime push. Tests call push("interrupt")
         # to fire an SSE event to any node connected on /api/v1/stream, and set
         # `interrupts` to what /api/v1/interrupts returns.
         self._sse_events: "queue.Queue[str]" = queue.Queue()

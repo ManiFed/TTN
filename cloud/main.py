@@ -84,6 +84,8 @@ def start_background_loops(config: dict) -> None:
     def maintenance():
         data_pipeline.prune_raw_images(config)
         survey.prune_survey_measurements(config)
+        from cloud import moving_objects
+        moving_objects.prune_detections(config)
         ingest_worker.prune_contrib_files(config)
         live.prune_dispatch_events()
         nights.generate_pending_summaries(config)
@@ -121,6 +123,13 @@ def start_background_loops(config: dict) -> None:
         crossmatch.run_pending(config)
         crossmatch.run_pending_retro(config)
     _loop("crossmatch", 300, crossmatch_pass)
+    def moving_objects_pass():
+        from cloud import moving_objects
+        moving_objects.link_tracklets(config)
+        moving_objects.link_arcs(config)
+        moving_objects.crossmatch_pending(config)
+        moving_objects.dispatch_due_followups(config)
+    _loop("moving-objects", 300, moving_objects_pass)
     # Solving/extraction (ingest_worker.process_pending) does NOT run here —
     # it needs the astrometry.net index volume, which only exists on the
     # dedicated solver-worker service (run via `python -m cloud.ingest_worker`).

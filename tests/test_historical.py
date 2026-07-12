@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EVERY LENS ON EARTH Phase 4 — historical ingestion + retrospective discovery.
+Universal frame ingestion Phase 4 — historical ingestion + retrospective discovery.
 
 Against a throwaway local PostgreSQL:
 

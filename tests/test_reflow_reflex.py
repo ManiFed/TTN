@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THE ORGANISM Phase 2 — reflow + reflex confirmation.
+Live fleet Phase 2 — reflow + reflex confirmation.
 
 Two layers, mirroring the survey tests:
 
