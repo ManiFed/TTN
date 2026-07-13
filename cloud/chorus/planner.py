@@ -27,6 +27,7 @@ from typing import Optional
 from cloud import db, incidents, objective, registry, tuning
 from cloud.chorus import assign as assign_mod
 from cloud.chorus import backtest, cells as cellmod, horizon, ledger, perform
+from cloud.chorus import ring2
 from cloud.chorus import params as chorus_params
 from cloud.network_planner import build_node_context
 from cloud.scheduler import _save_plan
@@ -80,6 +81,7 @@ def _plan(config: dict, nodes: list, save: bool = True,
     p_exec_by_node = {nid: v["p_exec"] for nid, v in vecs.items()}
 
     targets = db.query("SELECT * FROM targets WHERE active = 1")
+    class_templates = ring2.active_templates()
 
     # ── T1: scarcity + cell compilation ───────────────────────────────────────
     fleet_rows = list(node_by_id.values())
@@ -87,6 +89,7 @@ def _plan(config: dict, nodes: list, save: bool = True,
     ephemeris_by_target: dict = {}
     target_names: dict = {}
     target_types: dict = {}
+    target_raw_by_id: dict = {}
     for t in targets:
         tid = t["target_id"]
         state = states.get(tid, {})
@@ -94,7 +97,7 @@ def _plan(config: dict, nodes: list, save: bool = True,
             s = horizon.scarcity(t, fleet_rows, p_exec_by_node, clim, ch,
                                  today=span_t0)
             cl = cellmod.compile_cells(t, state, span_t0, span_t1, ch, s,
-                                       band_union)
+                                       band_union, templates=class_templates)
         except Exception as exc:
             logger.warning("Cell compile failed for %s: %s", t.get("name"), exc)
             continue
@@ -103,6 +106,7 @@ def _plan(config: dict, nodes: list, save: bool = True,
         cells_by_target[tid] = cl
         target_names[tid] = t["name"]
         target_types[tid] = t.get("target_type", "unknown")
+        target_raw_by_id[tid] = {"target": t, "state": state, "scarcity": s}
         eph = (state.get("ephemeris") or {})
         if eph.get("period_days"):
             ephemeris_by_target[tid] = eph
@@ -174,7 +178,10 @@ def _plan(config: dict, nodes: list, save: bool = True,
     night_utc = span_t0.strftime("%Y-%m-%d")
     backtest.archive_run(night_utc, seed, contexts, opps_by_node,
                          cells_by_target, ch, stats.get("final_phi", 0.0),
-                         target_names, target_types, shadow=shadow)
+                         target_names, target_types, shadow=shadow,
+                         target_raw_by_id=target_raw_by_id,
+                         band_union=band_union,
+                         span_t0=span_t0, span_t1=span_t1)
     return plans_by_node, stats
 
 

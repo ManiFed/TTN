@@ -63,6 +63,41 @@ def _src(key="CAT-001", mag=13.0, mag_err=0.05, snr=40.0, cat_mag=13.0,
             "cat_src": "test" if matched else "", "matched": matched}
 
 
+class PosteriorConfidenceTest(unittest.TestCase):
+    """Pure-logic tests for survey._posterior_confidence — no database."""
+
+    def test_no_evidence_is_zero_confidence(self):
+        self.assertEqual(survey._posterior_confidence({}, CONFIG), 0.0)
+
+    def test_single_high_snr_node_is_reasonably_confident(self):
+        conf = survey._posterior_confidence({"node_a": 40.0}, CONFIG)
+        self.assertGreater(conf, 0.9)
+
+    def test_single_low_snr_node_is_less_confident(self):
+        low = survey._posterior_confidence({"node_a": 2.0}, CONFIG)
+        high = survey._posterior_confidence({"node_a": 40.0}, CONFIG)
+        self.assertLess(low, high)
+
+    def test_second_independent_node_raises_confidence(self):
+        one = survey._posterior_confidence({"node_a": 10.0}, CONFIG)
+        two = survey._posterior_confidence({"node_a": 10.0, "node_b": 10.0},
+                                           CONFIG)
+        self.assertGreater(two, one)
+
+    def test_repeat_from_same_node_does_not_double_count(self):
+        # snr_by_node is keyed by node — a second, even stronger, detection
+        # from the SAME node overwrites (via max()) rather than compounding
+        # as if it were independent evidence.
+        conf_single_call = survey._posterior_confidence({"node_a": 15.0}, CONFIG)
+        # Simulate what _record_detection actually does: max() the SNR for
+        # a repeat from the same node rather than treating it as a second
+        # independent entry in the dict.
+        snr_by_node = {"node_a": max(10.0, 15.0)}
+        self.assertEqual(snr_by_node, {"node_a": 15.0})
+        self.assertAlmostEqual(
+            survey._posterior_confidence(snr_by_node, CONFIG), conf_single_call)
+
+
 class DeviationThresholdsTest(unittest.TestCase):
     """The two-tier statistics, with _record_detection stubbed to capture."""
 
@@ -229,6 +264,8 @@ class SurveyLifecycleIntegrationTest(unittest.TestCase):
             "SELECT * FROM discovery_candidates WHERE source_key = 'CAT-NOVA'")
         self.assertIsNotNone(cand)
         self.assertEqual(cand["state"], "detected")
+        confidence_one_node = cand["confidence"]
+        self.assertGreater(confidence_one_node, 0.0)
 
         # Co-temporal corroboration from a second scheduled node.
         self._batch(node="node_b", bjd=2460500.510, sources=[bright])
@@ -237,6 +274,9 @@ class SurveyLifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual(cand["state"], "crossmatching")
         self.assertEqual(cand["n_nodes"], 2)
         self.assertEqual(cand["n_detections"], 2)
+        # A second independent node's SNR-weighted evidence raises confidence
+        # past what a single node's detection could support on its own.
+        self.assertGreater(cand["confidence"], confidence_one_node)
 
         # Human confirms (crossmatch found nothing — simulate by moving to
         # candidate first, as the worker would).
@@ -278,6 +318,24 @@ class SurveyLifecycleIntegrationTest(unittest.TestCase):
         cand = self.db.query_one(
             "SELECT * FROM discovery_candidates WHERE source_key = 'CAT-POISON'")
         self.assertEqual(cand["state"], "crossmatching")
+
+    def test_repeat_detection_from_same_node_does_not_inflate_confidence(self):
+        # Two detections from the SAME node (correlated systematics — same
+        # telescope, same hot pixel) must not compound confidence the way
+        # two INDEPENDENT nodes would.
+        bright = _src(key="CAT-REPEAT", mag=11.0, cat_mag=13.0, ra=182.5,
+                      dec=44.0)
+        self._batch(node="node_a", bjd=2460500.500, sources=[bright])
+        cand = self.db.query_one(
+            "SELECT * FROM discovery_candidates WHERE source_key = 'CAT-REPEAT'")
+        after_one = cand["confidence"]
+
+        self._batch(node="node_a", bjd=2460500.510, sources=[bright])
+        cand = self.db.query_one(
+            "SELECT * FROM discovery_candidates WHERE source_key = 'CAT-REPEAT'")
+        # Same SNR from the same node again -> confidence unchanged (max(),
+        # not compounded), unlike the two-independent-node case above.
+        self.assertAlmostEqual(cand["confidence"], after_one, places=4)
 
     def test_deviant_flood_cap(self):
         cfg = {"survey": dict(CONFIG["survey"], deviants_per_node_night=3)}

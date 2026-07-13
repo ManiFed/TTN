@@ -356,6 +356,35 @@ def _deviant_cap_reached(node_id: str, config: dict) -> bool:
         return False
 
 
+def _posterior_confidence(snr_by_node: dict, config: dict) -> float:
+    """SNR-weighted posterior probability this candidate is a real event
+    rather than a systematic artifact (hot pixel, cosmic ray, calibration
+    bug), combining every node's evidence instead of the raw n_nodes/
+    n_detections counts alone.
+
+    Each node's best-seen SNR is treated as independent evidence: modeling
+    a false positive's survival probability at that SNR as
+    exp(-snr / posterior_snr_scale) (higher SNR → a false positive is
+    exponentially less likely to look that clean), the combined false
+    positive probability across nodes is the product of each node's
+    survival probability, so confidence = 1 - that product.
+
+    Deliberately keyed by node_id, not by raw detection count: repeat
+    detections from the SAME node are correlated systematics (the same
+    telescope, same hot pixel, same calibration bug), not independent
+    confirmations — only each node's single best SNR contributes, the same
+    principle CHORUS's same_site_repeat_factor applies to weather
+    correlation, applied here to detection independence instead.
+    """
+    if not snr_by_node:
+        return 0.0
+    scale = max(float(_cfg(config, "posterior_snr_scale", 8.0)), 0.1)
+    false_positive_survival = 1.0
+    for snr in snr_by_node.values():
+        false_positive_survival *= math.exp(-max(0.0, float(snr)) / scale)
+    return round(1.0 - false_positive_survival, 4)
+
+
 def _record_detection(node_id: str, bjd: float, filter_name: str, s: dict,
                       kind: str, delta: Optional[float], config: dict,
                       node_tier: int = 1) -> bool:
@@ -406,16 +435,21 @@ def _record_detection(node_id: str, bjd: float, filter_name: str, s: dict,
             and n_det >= 2
         )
         peak = max(float(open_cand.get("peak_delta_mag") or 0.0), delta or 0.0)
+        snr_by_node = detail.get("snr_by_node") or {}
+        snr_by_node[node_id] = max(float(snr_by_node.get(node_id, 0.0)),
+                                   float(s.get("snr") or 0.0))
+        detail["snr_by_node"] = snr_by_node
+        confidence = _posterior_confidence(snr_by_node, config)
         db.execute(
             "UPDATE discovery_candidates SET "
             " n_detections = %s, n_nodes = %s, node_ids = %s, last_bjd = %s, "
             " last_mag = %s, peak_delta_mag = %s, state = %s, detail = %s, "
-            " updated_at = %s "
+            " confidence = %s, updated_at = %s "
             "WHERE id = %s",
             (n_det, len(node_ids), json.dumps(node_ids), bjd,
              float(s["mag"]), peak,
              "crossmatching" if promoted else open_cand["state"],
-             json.dumps(detail), now, open_cand["id"]),
+             json.dumps(detail), confidence, now, open_cand["id"]),
         )
         if promoted:
             logger.info("Discovery candidate #%s promoted to crossmatching: "
@@ -439,18 +473,20 @@ def _record_detection(node_id: str, bjd: float, filter_name: str, s: dict,
 
     if _deviant_cap_reached(node_id, config):
         return False
+    snr_by_node = {node_id: float(s.get("snr") or 0.0)}
     db.execute(
         "INSERT INTO discovery_candidates "
         "(source_key, ra_deg, dec_deg, kind, filter, first_bjd, last_bjd, "
         " n_detections, n_nodes, node_ids, peak_delta_mag, last_mag, state, "
-        " detail, created_at, updated_at) "
+        " detail, confidence, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, 1, 1, %s, %s, %s, 'detected', "
-        "        %s, %s, %s)",
+        "        %s, %s, %s, %s)",
         (s["key"], ra, dec, kind, filter_name, bjd, bjd,
          json.dumps([node_id]), delta, float(s["mag"]),
          json.dumps({"cat_mag": s.get("cat_mag"), "cat_src": s.get("cat_src"),
-                     "snr": s.get("snr"), "scheduled_seen": node_tier > 0}),
-         now, now),
+                     "snr": s.get("snr"), "scheduled_seen": node_tier > 0,
+                     "snr_by_node": snr_by_node}),
+         _posterior_confidence(snr_by_node, config), now, now),
     )
     logger.info("Deviation detected (%s): %s mag=%.2f Δ=%s node=%s",
                 kind, s["key"], float(s["mag"]),

@@ -345,13 +345,20 @@ _pier_cam_stop  = threading.Event()
 
 
 def _capture_image(fits_path: Optional[str] = None,
-                   exp_dur: Optional[float] = None) -> Optional[str]:
+                   exp_dur: Optional[float] = None,
+                   target: Optional[str] = None) -> Optional[str]:
     """Download the last camera image, store it globally, and return its b64.
 
     If fits_path is provided, also write a FITS file with the raw (un-stretched)
     pixel data and whatever header fields the camera exposes.  This is used by
     the schedule runner so the photometry pipeline has a science-grade file to
     work with rather than a display-stretched PNG.
+
+    ``target``, when given, is written to the OBJECT header keyword — this is
+    the only signal run_pipeline() and _frame_has_target() use to identify a
+    targeted exposure vs. an anonymous survey/contributor frame, so a scheduled
+    observation with no OBJECT silently falls through to the survey-only path
+    and never produces a measurement.
     """
     global _last_image_b64
     if _cam is None:
@@ -386,6 +393,8 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdr["NAXIS"]    = 2
                 hdr["NAXIS1"]   = sci.shape[1]
                 hdr["NAXIS2"]   = sci.shape[0]
+                if target:
+                    hdr["OBJECT"] = target
                 # Pull what we can from the camera device
                 if exp_dur is None:
                     with _state_lock:
@@ -3541,7 +3550,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                     duration=exp_dur, light=True,
                     cancel_check=lambda: _sched_cancelled() or _expose_cancel.is_set(),
                 )
-                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur)
+                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur, target=target)
             if b64:
                 _store_history_image(target, exp_dur, binning, frame, total, b64)
             if fits_save_path and pathlib.Path(fits_save_path).exists():

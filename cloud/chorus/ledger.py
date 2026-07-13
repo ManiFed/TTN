@@ -47,6 +47,17 @@ KAPPA_BOUNDS = (0.5, 25.0)
 SEASON_HALF_LIFE_D = 60.0    # phase-coverage residual refresh toward 1.0
 OUTBURST_DELTA_MAG = 1.0     # brighter than catalog by this → outburst state
 
+# Chronic-dropout quarantine: a night where cloud.chorus.reflow's dropout
+# detection had to move this node's own plan items elsewhere is real
+# execution-failure signal that a plain zero-delivery night can't supply on
+# its own (see the p_exec comment in refresh_node — weather and node fault
+# are otherwise indistinguishable without more signal). Repeated across
+# several nights, that signal escalates: a node that keeps needing reflow
+# has demonstrated it, not the weather, is the recurring problem.
+DROPOUT_FAIL_WEIGHT = 0.5             # exec_b pseudo-count per dropout night
+DROPOUT_STREAK_THRESHOLD = 3          # distinct dropout nights (in LOOKBACK_DAYS) to quarantine
+DROPOUT_QUARANTINE_MULTIPLIER = 2.0   # extra weight once the streak crosses the threshold
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -166,6 +177,27 @@ def refresh_node(node: dict) -> dict:
         if cls["attribution"] == "node":
             exec_b += _decay(age_d(r.get("occurred_at") or ""))
 
+    # Chronic dropouts: nights reflow had to move this node's own remaining
+    # plan items elsewhere, and the node delivered nothing that night either
+    # (so the per-item accounting above never saw it). Escalates once the
+    # node has racked up enough distinct dropout nights to look like a
+    # recurring fault rather than one cloudy night.
+    try:
+        dropout_rows = db.query(
+            "SELECT DISTINCT night, MAX(created_at) AS last_at FROM reflow_log "
+            "WHERE from_node = %s AND created_at >= %s GROUP BY night",
+            (node_id, since))
+    except Exception:
+        dropout_rows = []
+    dropout_nights = [r for r in dropout_rows
+                      if not delivered_by_night.get(r.get("night") or "")]
+    if dropout_nights:
+        quarantine = (DROPOUT_QUARANTINE_MULTIPLIER
+                     if len(dropout_nights) >= DROPOUT_STREAK_THRESHOLD else 1.0)
+        for r in dropout_nights:
+            exec_b += (DROPOUT_FAIL_WEIGHT * quarantine
+                      * _decay(age_d(r.get("last_at") or "")))
+
     # p_accept: delivered → accepted.
     acc_a, acc_b = PRIOR_A, PRIOR_B
     for m in meas:
@@ -205,6 +237,8 @@ def refresh_node(node: dict) -> dict:
         "n_measurements": len(meas), "n_planned_nights": len(seen_nights),
         "p_exec": round(p_exec, 4), "p_accept": round(p_acc, 4),
         "sd_exec": round(sd_e, 4), "sd_accept": round(sd_a, 4),
+        "dropout_nights": len(dropout_nights),
+        "dropout_quarantined": len(dropout_nights) >= DROPOUT_STREAK_THRESHOLD,
     }
     db.execute(
         """INSERT INTO chorus_node_ledger

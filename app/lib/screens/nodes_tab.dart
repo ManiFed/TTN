@@ -751,13 +751,14 @@ class _NodeDetailScreenState extends State<_NodeDetailScreen> {
                 );
               }
               final nights = snap.data ?? [];
-              final clearNights = nights.where((n) => n.wasClear).length;
+              final activeNights =
+                  nights.where((n) => n.hasObservations).length;
               final totalObs =
                   nights.fold<int>(0, (s, n) => s + n.nObservations);
               final submitted =
                   nights.fold<int>(0, (s, n) => s + n.nSubmitted);
               return _StatsRow(
-                clearNights: clearNights,
+                activeNights: activeNights,
                 totalObs: totalObs,
                 submitted: submitted,
               );
@@ -901,11 +902,11 @@ class _StatusBadge extends StatelessWidget {
 
 class _StatsRow extends StatelessWidget {
   const _StatsRow({
-    required this.clearNights,
+    required this.activeNights,
     required this.totalObs,
     required this.submitted,
   });
-  final int clearNights;
+  final int activeNights;
   final int totalObs;
   final int submitted;
 
@@ -913,7 +914,7 @@ class _StatsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _StatCell(value: '$clearNights', label: 'Clear nights'),
+        _StatCell(value: '$activeNights', label: 'Nights observed'),
         _StatCell(value: '$totalObs', label: 'Observations'),
         _StatCell(value: '$submitted', label: 'Submitted'),
       ],

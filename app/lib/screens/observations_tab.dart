@@ -166,13 +166,23 @@ class _NightTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final clear = night.wasClear;
-    final color = clear ? BSTheme.accent : BSTheme.ink3;
+    final hasData = night.hasObservations;
+    final color = hasData ? BSTheme.accent : BSTheme.ink3;
 
     String label = night.night;
     try {
       label = DateFormat('MMM d').format(DateTime.parse(night.night));
     } catch (_) {}
+
+    // Zero observations doesn't mean clouded — it just means no data arrived.
+    // The real cause (dead connection, disabled schedule, pipeline error, or
+    // genuinely bad weather) lives in the server-generated receipt; fall back
+    // to a neutral "no data" rather than guessing at a cause we don't know.
+    final subtitle = night.receiptTitle.isNotEmpty
+        ? night.receiptTitle
+        : hasData
+            ? '${night.nObservations} obs'
+            : 'No data';
 
     return Container(
       width: 72,
@@ -180,15 +190,15 @@ class _NightTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        color: color.withValues(alpha: clear ? 0.10 : 0.04),
+        color: color.withValues(alpha: hasData ? 0.10 : 0.04),
         border: Border.all(
-            color: color.withValues(alpha: clear ? 0.28 : 0.12)),
+            color: color.withValues(alpha: hasData ? 0.28 : 0.12)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            clear ? Icons.nights_stay_rounded : Icons.cloud_outlined,
+            hasData ? Icons.nights_stay_rounded : Icons.help_outline_rounded,
             size: 18,
             color: color,
           ),
@@ -204,11 +214,7 @@ class _NightTile extends StatelessWidget {
           ),
           const SizedBox(height: 3),
           Text(
-            clear && night.receiptTitle.isNotEmpty
-                ? night.receiptTitle
-                : clear
-                    ? '${night.nObservations} obs'
-                    : 'clouded',
+            subtitle,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,

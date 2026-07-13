@@ -87,6 +87,19 @@ class ReflowGreedyTest(unittest.TestCase):
         placed = reflow.greedy_place(ctxs, {"A": [opp]}, cells, _params())
         self.assertEqual(placed, [])
 
+    def test_eps_scale_relaxes_min_marginal_floor(self):
+        # A min_marginal floor set high enough to reject every real placement
+        # at eps_scale=1.0 (the default, one-off-dropout case)...
+        ctxs = {"A": _ctx("A")}
+        cells = {"T1": [_cell("T1")]}
+        opps = {"A": [_opp("A", "T1")]}
+        params = _params(min_marginal=999.0)
+        self.assertEqual(reflow.greedy_place(ctxs, opps, cells, params), [])
+        # ...but a relaxed eps_scale (chronic dropout escalation) lowers the
+        # floor to 0, so the same opportunity is accepted.
+        placed = reflow.greedy_place(ctxs, opps, cells, params, eps_scale=0.0)
+        self.assertEqual([p["target_id"] for p in placed], ["T1"])
+
 
 @unittest.skipUnless(_postgres_available(), "local postgres not reachable")
 class ReflowReflexCloudTest(unittest.TestCase):
@@ -217,9 +230,19 @@ class ReflowReflexCloudTest(unittest.TestCase):
         log = self.db.query_one("SELECT * FROM reflow_log")
         self.assertEqual((log["from_node"], log["to_node"]), ("nd_a", "nd_b"))
         self.assertEqual(log["interrupt_id"], iv["id"])
+        self.assertEqual(log["dark_streak"], 0)
         self.assertEqual(self.db.query_one(
             "SELECT COUNT(*) AS n FROM dispatch_events "
             "WHERE node_id='nd_b' AND kind='interrupt'")["n"], 1)
+
+    def test_dispatch_reflow_records_dark_streak(self):
+        placements = [{
+            "to_node": "nd_b", "target_id": "T1", "target_name": "V1",
+            "ra_deg": 120.0, "dec_deg": 5.0, "mag": 14.0, "expected_info": 0.42,
+        }]
+        reflow.dispatch_reflow("nd_a", placements, {}, dark_streak=4)
+        log = self.db.query_one("SELECT * FROM reflow_log")
+        self.assertEqual(log["dark_streak"], 4)
 
     def test_detect_dropouts_finds_clouded_node_with_remaining_plan(self):
         from cloud import live
@@ -240,6 +263,52 @@ class ReflowReflexCloudTest(unittest.TestCase):
         self.assertEqual(drop[0]["node_id"], "nd_x")
         self.assertEqual({r["target_id"] for r in drop[0]["remaining"]},
                          {"T2", "T3"})
+        # No prior measurements at all -> treated as a fresh (streak=0 is not
+        # guaranteed since it's "never seen", so just check the key exists
+        # and is a non-negative int).
+        self.assertIsInstance(drop[0]["dark_streak"], int)
+        self.assertGreaterEqual(drop[0]["dark_streak"], 0)
+
+    def test_remaining_items_filters_out_deactivated_targets(self):
+        # A stale plan (node hasn't been replanned in a while) can reference a
+        # target that's since been deactivated — reflow must not offer it.
+        self.db.execute(
+            "INSERT INTO targets (target_id, name, ra_deg, dec_deg, active) "
+            "VALUES ('T1','V1',10,20,1), ('T2','V2',30,40,0)")
+        plan = {"items": [{"target_id": "T1", "target": "V1"},
+                          {"target_id": "T2", "target": "V2"}]}
+        self.db.execute(
+            """INSERT INTO plans (plan_id, node_id, night, generated_at,
+                   plan_json, status)
+               VALUES ('p_stale','nd_stale','2026-07-01',%s,%s,'current')""",
+            (self._now(), json.dumps(plan)))
+        remaining = reflow._remaining_items("nd_stale", None)
+        self.assertEqual([r["target_id"] for r in remaining], ["T1"])
+
+    def test_consecutive_dark_nights_counts_backward_from_last_measurement(self):
+        # Node last delivered a measurement 3 nights ago -> streak of 2
+        # (yesterday and the night before had no measurement; the night with
+        # a measurement ends the streak).
+        three_nights_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        self.db.execute(
+            "INSERT INTO measurements (node_id, target_name, bjd, magnitude, "
+            " uncertainty, received_at) VALUES "
+            "('nd_streak','V1',2460500.5,13.0,0.05,%s)",
+            (three_nights_ago.isoformat(),))
+        self.assertEqual(reflow._consecutive_dark_nights("nd_streak"), 2)
+
+    def test_consecutive_dark_nights_zero_for_node_active_last_night(self):
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        self.db.execute(
+            "INSERT INTO measurements (node_id, target_name, bjd, magnitude, "
+            " uncertainty, received_at) VALUES "
+            "('nd_recent','V1',2460500.5,13.0,0.05,%s)",
+            (yesterday.isoformat(),))
+        self.assertEqual(reflow._consecutive_dark_nights("nd_recent"), 0)
+
+    def test_consecutive_dark_nights_caps_at_lookback_for_never_seen_node(self):
+        self.assertEqual(
+            reflow._consecutive_dark_nights("nd_never_seen", max_lookback=5), 5)
 
     def test_detect_dropouts_ignores_healthy_node(self):
         from cloud import live
@@ -271,6 +340,63 @@ class ReflowReflexCloudTest(unittest.TestCase):
             (self._now(), self._now()))
         drop = reflow.detect_dropouts({"scheduler": {}})
         self.assertEqual([d["node_id"] for d in drop], ["nd_sick"])
+
+    # ── Graduated auto-cap ───────────────────────────────────────────────────────
+
+    def _reconciled_night(self, night, outcome, n=1):
+        for i in range(n):
+            self.db.execute(
+                "INSERT INTO reflow_log (night, from_node, to_node, target_id, "
+                " target_name, expected_info, outcome, created_at) "
+                "VALUES (%s,'nd_a','nd_b',%s,'V1',0.4,%s,%s)",
+                (night, f"T{i}", outcome, self._now()))
+
+    def test_effective_cap_starts_low_with_no_history(self):
+        cfg = {"scheduler": {"reflow_max_per_night": 200,
+                             "reflow_grad_start_cap": 5}}
+        self.assertEqual(reflow._effective_cap(cfg), 5)
+
+    def test_effective_cap_ignores_history_when_auto_grade_disabled(self):
+        cfg = {"scheduler": {"reflow_max_per_night": 200,
+                             "reflow_auto_grade": False}}
+        self.assertEqual(reflow._effective_cap(cfg), 200)
+
+    def test_effective_cap_escalates_after_clean_nights(self):
+        cfg = {"scheduler": {"reflow_max_per_night": 200,
+                             "reflow_grad_start_cap": 5,
+                             "reflow_grad_min_nights": 3,
+                             "reflow_grad_min_delivery_rate": 0.7,
+                             "reflow_grad_step_factor": 2.0}}
+        night = datetime.now(timezone.utc)
+        for i in range(3):
+            self._reconciled_night(
+                (night - timedelta(days=i + 1)).strftime("%Y-%m-%d"), "delivered")
+        # 3 clean nights == min_nights -> one escalation step: 5 * 2.0 = 10.
+        self.assertEqual(reflow._effective_cap(cfg), 10)
+
+    def test_effective_cap_holds_at_ceiling(self):
+        cfg = {"scheduler": {"reflow_max_per_night": 12,
+                             "reflow_grad_start_cap": 5,
+                             "reflow_grad_min_nights": 3,
+                             "reflow_grad_min_delivery_rate": 0.7,
+                             "reflow_grad_step_factor": 2.0}}
+        night = datetime.now(timezone.utc)
+        for i in range(9):
+            self._reconciled_night(
+                (night - timedelta(days=i + 1)).strftime("%Y-%m-%d"), "delivered")
+        # Many escalation steps would blow past 200, but the ceiling caps it.
+        self.assertEqual(reflow._effective_cap(cfg), 12)
+
+    def test_effective_cap_drops_back_on_poor_delivery_rate(self):
+        cfg = {"scheduler": {"reflow_max_per_night": 200,
+                             "reflow_grad_start_cap": 5,
+                             "reflow_grad_min_nights": 3,
+                             "reflow_grad_min_delivery_rate": 0.7}}
+        night = datetime.now(timezone.utc)
+        for i in range(4):
+            self._reconciled_night(
+                (night - timedelta(days=i + 1)).strftime("%Y-%m-%d"), "missed")
+        self.assertEqual(reflow._effective_cap(cfg), 5)
 
     def test_reconcile_marks_delivered_and_missed(self):
         # Two reflows tonight; only one node delivered a measurement.
