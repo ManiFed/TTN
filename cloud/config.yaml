@@ -111,8 +111,9 @@ scheduler:
   replan_interval_minutes: 120
   # Live fleet: mid-night reflow. When a node clouds out/drops offline with
   # unexecuted plan items, re-value them on currently-dark nodes (reusing
-  # CHORUS best_slot) and dispatch as interrupts. Off by default.
-  reflow: false
+  # CHORUS best_slot) and dispatch as interrupts. Also tops up work-starved
+  # nodes that ran out of plan + alternates with dark time remaining.
+  reflow: true
   reflow_interval_s: 60
   reflow_max_per_night: 200      # the ceiling reflow_auto_grade escalates toward
   reflow_streak_threshold: 2     # consecutive prior dark nights before a dropout counts as chronic
@@ -125,6 +126,11 @@ scheduler:
   reflow_grad_step_factor: 2.0         # cap multiplier per escalation step
   min_score: 0.25          # targets below this never get scheduled
   max_targets_per_night: 12
+  # Never-idle knobs: how many runnable alternates ship with each plan (node-
+  # local gap/failure/end-of-plan fill) and how many items a reflow top-up
+  # sends a work-starved node per tick.
+  contingency_ladder_size: 10
+  topup_items_per_tick: 3
   sun_altitude_limit: -12  # nautical darkness
   coordination:            # seed only — auto-tuned live values live in the DB
     redundancy_decay: 0.55           # value retained per extra network obs of a target

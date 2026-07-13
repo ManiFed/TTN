@@ -552,3 +552,45 @@ def run_nightly(config: dict) -> None:
         calibrate_sites(config)
     except Exception as exc:
         logger.error("Site calibration failed: %s", exc)
+    try:
+        _record_utilization_summary()
+    except Exception as exc:
+        logger.error("Utilization summary failed: %s", exc)
+
+
+def _record_utilization_summary() -> None:
+    """Fold last night's fleet dark-time utilization into the most recent
+    plan_runs stats so the idle/observing trend is queryable per run."""
+    from cloud import live
+    night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = live.utilization_night(night)
+    if not rows:
+        return
+    dark = sum(r["dark_s"] or 0 for r in rows)
+    observing = sum(r["observing_s"] or 0 for r in rows)
+    idle = sum(r["idle_s"] or 0 for r in rows)
+    clouded = sum(r["clouded_s"] or 0 for r in rows)
+    summary = {
+        "night": night,
+        "n_nodes": len(rows),
+        "dark_s": round(dark, 1),
+        "observing_s": round(observing, 1),
+        "idle_s": round(idle, 1),
+        "clouded_s": round(clouded, 1),
+        "utilization": round(observing / dark, 4) if dark > 0 else None,
+    }
+    logger.info("Night %s utilization: %.1f%% observing, %.1f%% idle, "
+                "%.1f%% clouded over %.1f dark-hours (%d nodes)",
+                night,
+                100 * observing / dark if dark else 0,
+                100 * idle / dark if dark else 0,
+                100 * clouded / dark if dark else 0,
+                dark / 3600, len(rows))
+    run = db.query_one(
+        "SELECT run_id, stats FROM plan_runs ORDER BY ran_at DESC LIMIT 1")
+    if run is None:
+        return
+    stats = db.loads(run.get("stats"), {})
+    stats["utilization"] = summary
+    db.execute("UPDATE plan_runs SET stats = %s WHERE run_id = %s",
+               (json.dumps(stats), run["run_id"]))

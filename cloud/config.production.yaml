@@ -99,6 +99,8 @@ scheduler:
   reflow_grad_step_factor: 2.0
   min_score: 0.25
   max_targets_per_night: 12
+  contingency_ladder_size: 10
+  topup_items_per_tick: 3
   sun_altitude_limit: -12
   chorus_params:
     scarcity_gamma: 0.93

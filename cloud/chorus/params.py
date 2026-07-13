@@ -42,6 +42,11 @@ DEFAULTS = {
     # ── solver ───────────────────────────────────────────────────────────────
     "min_marginal":            0.02,   # greedy stop threshold (epsilon)
     "max_obs_per_target":      4.0,    # portfolio cap: placements per target per cycle
+    # ── night filler (dark time is never left unassigned) ────────────────────
+    "filler_min_marginal":     1e-4,   # acceptance floor for the fill pass — tiny but
+                                       # nonzero so worthless placements stay excluded
+    "filler_max_targets_per_night": 40.0,  # per-node safety valve on filler placements
+                                           # (core placements keep max_targets_per_night)
 }
 
 KEYS = tuple(DEFAULTS.keys())
@@ -64,6 +69,8 @@ BOUNDS = {
     "exploration_beta":        (0.0, 1.0),
     "min_marginal":            (0.0, 0.25),
     "max_obs_per_target":      (1.0, 12.0),
+    "filler_min_marginal":     (0.0, 0.02),
+    "filler_max_targets_per_night": (0.0, 200.0),
 }
 
 

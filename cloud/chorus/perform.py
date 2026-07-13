@@ -72,6 +72,7 @@ def sequence_node(ctx, placements: list, coord: dict) -> list:
             "top_cells": _top_cells(p.touches),
             "transition_overhead_s": round(overhead_s, 1),
             "meridian_flip": flip,
+            "tier": getattr(p, "tier", "core"),
         }
         items.append(PlanItem(
             target=opp.name,
@@ -121,6 +122,7 @@ def contingency_ladder(ctx, node_opps: list, final_state,
     alternates = []
     for val, slot, opp in ranked[:top_k]:
         start_local = ctx.slot_utc(slot) + ctx.utc_offset
+        start_hhmm = start_local.strftime("%H:%M")
         alternates.append({
             "target": opp.name,
             "target_id": opp.target_id,
@@ -130,9 +132,20 @@ def contingency_ladder(ctx, node_opps: list, final_state,
             "expCount": opp.exposure.n_sub,
             "binning": 1,
             "filter": opp.filter,
-            "earliestStart": start_local.strftime("%H:%M"),
+            "earliestStart": start_hhmm,
+            # Full schedule-item fields so an upgraded node agent can run an
+            # alternate directly (gap fill / end-of-plan fill) without any
+            # translation; legacy agents still ignore the whole block.
+            "startTime": start_hhmm,
+            "score": round(val, 4),
+            "observation_mode": opp.observation_mode,
+            "duration_minutes": (opp.duration_min
+                                 if opp.observation_mode == "time_series"
+                                 else 0.0),
+            "notes": (f"alternate type={opp.target_type} mag={opp.mag} "
+                      f"E[info]={val:.3f}"),
             "expected_info": round(val, 4),
-            "trigger": "primary item failed or sky closed at its start",
+            "trigger": "primary item failed, sky closed, or plan exhausted",
         })
     return {"alternates": alternates} if alternates else {}
 

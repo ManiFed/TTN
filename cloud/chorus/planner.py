@@ -149,11 +149,13 @@ def _plan(config: dict, nodes: list, save: bool = True,
     for p in final_state.placements:
         by_node[p.node_id].append(p)
 
+    ladder_k = int(config.get("scheduler", {}).get("contingency_ladder_size", 10))
     plans_by_node: dict = {}
     for nid, ctx in contexts.items():
         items = perform.sequence_node(ctx, by_node.get(nid, []), coord)
         contingencies = perform.contingency_ladder(
-            ctx, opps_by_node.get(nid, []), final_state, cells_by_target, ch)
+            ctx, opps_by_node.get(nid, []), final_state, cells_by_target, ch,
+            top_k=ladder_k)
         night_local = (ctx.t0 + ctx.utc_offset).strftime("%Y-%m-%d")
         plan = ObservationPlan(
             plan_id=f"plan_{uuid.uuid4().hex[:10]}",

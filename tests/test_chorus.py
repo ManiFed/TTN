@@ -357,7 +357,9 @@ class EmergentCoordinationTest(unittest.TestCase):
     def test_redundancy_suppression_under_good_weather(self):
         """Two reliable nodes under clear skies, one shared high-value target
         plus a weaker unique target each: the shared target is covered ONCE and
-        the freed capacity goes to a unique target — no redundancy_decay knob."""
+        the freed capacity goes to a unique target — no redundancy_decay knob.
+        (Core tier only: the night filler may later pack the redundant repeat
+        into otherwise-idle slots, which is the point of the filler.)"""
         contexts = {"A": _ctx("A"), "B": _ctx("B")}
         cell_map = {"shared": [_cell("shared", nu=1.0)],
                     "uniq_a": [_cell("uniq_a", nu=0.4)],
@@ -365,7 +367,7 @@ class EmergentCoordinationTest(unittest.TestCase):
         opps = {"A": [_opp("A", "shared"), _opp("A", "uniq_a")],
                 "B": [_opp("B", "shared"), _opp("B", "uniq_b")]}
         placements, _, _ = _run(contexts, opps, cell_map)
-        placed = [p.opp.target_id for p in placements]
+        placed = [p.opp.target_id for p in placements if p.tier == "core"]
         self.assertEqual(placed.count("shared"), 1, placed)
         self.assertTrue(set(placed) & {"uniq_a", "uniq_b"}, placed)
 
@@ -396,7 +398,8 @@ class EmergentCoordinationTest(unittest.TestCase):
                           _opp("A", "shared", p_sky=0.35, slots=(8, 10),
                                variant="epoch_b")]}
         placements, _, _ = _run(one_site, opps_one, cell_map, params)
-        self.assertEqual(len(placements), 1)
+        self.assertEqual(
+            len([p for p in placements if p.tier == "core"]), 1)
 
         two_sites = {"A": _ctx("A"), "B": _ctx("B")}
         cell_map2 = {"shared": [_cell("shared", nu=1.0)]}
@@ -442,7 +445,8 @@ class EmergentCoordinationTest(unittest.TestCase):
         opps = {"A": [_opp("A", "shared", p_sky=0.35)],
                "B": [_opp("B", "shared", p_sky=0.35)]}
         placements, _, _ = _run(contexts, opps, cell_map, params)
-        self.assertEqual(len(placements), 1)
+        self.assertEqual(
+            len([p for p in placements if p.tier == "core"]), 1)
 
     def test_cross_node_multi_band_pairing_emerges(self):
         """Two nodes with complementary filters (A only has 'B', B only has
@@ -515,11 +519,25 @@ class EmergentCoordinationTest(unittest.TestCase):
         self.assertGreaterEqual(stats["final_phi"], stats["greedy_phi"])
 
     def test_capacity_and_portfolio_caps_respected(self):
+        # The core value greedy honors max_targets; anything beyond the cap
+        # can only be night-filler tier (bounded by occupancy and
+        # filler_max_targets_per_night instead).
         contexts = {"A": _ctx("A", max_targets=2)}
         cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
         opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
-        placements, _, _ = _run(contexts, opps, cell_map)
+        placements, _, stats = _run(contexts, opps, cell_map)
+        core = [p for p in placements if p.tier == "core"]
+        self.assertLessEqual(len(core), 2)
+        self.assertEqual(len(placements) - len(core), stats["n_filler"])
+
+    def test_capacity_cap_hard_with_filler_disabled(self):
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        placements, _, stats = _run(contexts, opps, cell_map,
+                                    params=_params(filler_min_marginal=0.0))
         self.assertLessEqual(len(placements), 2)
+        self.assertEqual(stats["n_filler"], 0)
 
 
 # ── Tuning integration: the chorus group ──────────────────────────────────────

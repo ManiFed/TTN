@@ -703,6 +703,23 @@ _LATE_TABLES: list[str] = [
         detail         TEXT DEFAULT '{}'
     )
     """,
+    # node_night_utilization accrues per-(node, night) dark-time seconds from
+    # successive heartbeats: how much dark time was spent observing vs idle vs
+    # clouded. Written by live.record_state, read by the ledger's nightly
+    # summary — the ground truth for "is the network wasting telescope time".
+    """
+    CREATE TABLE IF NOT EXISTS node_night_utilization (
+        node_id      TEXT NOT NULL,
+        night        TEXT NOT NULL,
+        dark_s       DOUBLE PRECISION DEFAULT 0,
+        observing_s  DOUBLE PRECISION DEFAULT 0,
+        idle_s       DOUBLE PRECISION DEFAULT 0,
+        clouded_s    DOUBLE PRECISION DEFAULT 0,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (node_id, night)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_night_util ON node_night_utilization(night)",
     # dispatch_events is the append-only push log the realtime SSE service tails
     # (via LISTEN/NOTIFY) and replays from on Last-Event-ID reconnect. Rows are
     # short-lived signals ("wake up and fetch"), pruned by the maintenance loop.

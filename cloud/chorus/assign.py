@@ -85,6 +85,7 @@ class Placement:
     marginal: float = 0.0          # exact marginal value at commit time
     p: float = 0.0                 # delivery probability used
     touches: list = field(default_factory=list)   # [(cell, rho)] at commit
+    tier: str = "core"             # "core" (value greedy) | "filler" (night fill)
 
 
 # ── Capture geometry ──────────────────────────────────────────────────────────
@@ -374,13 +375,77 @@ def assign(contexts: dict, opps_by_node: dict, cells_by_target: dict,
             state, opps_by_node, cells_by_target, contexts, params,
             seed, local_search_ms, greedy_phi, max_per_target)
 
+    best_placements, n_filler = fill_night(
+        best_placements, contexts, opps_by_node, cells_by_target, params)
+
     stats = {
         "greedy_phi": round(greedy_phi, 4),
         "final_phi": round(best_phi, 4),
         "n_assignments": len(best_placements),
+        "n_filler": n_filler,
         "expected_deliveries": round(sum(p.p for p in best_placements), 2),
     }
     return best_placements, state.R, stats
+
+
+def fill_night(placements: list, contexts: dict, opps_by_node: dict,
+               cells_by_target: dict, params: dict) -> tuple:
+    """Pack the dark time the value greedy left free.
+
+    The core greedy stops at min_marginal and each node's max_targets cap —
+    correct for portfolio value, but it leaves telescopes idle on long clear
+    nights. This second lazy-greedy pass runs on a replay of the committed
+    placements and keeps placing the best still-feasible opportunity with the
+    acceptance floor dropped to filler_min_marginal, EXEMPT from the per-node
+    target cap (bounded instead by physical occupancy and a
+    filler_max_targets_per_night safety valve). max_obs_per_target still
+    holds, so filler never floods one target's photometry pipeline.
+
+    Returns (placements including filler, n_filler). Deterministic: same
+    heap/tiebreak discipline as the core greedy.
+    """
+    floor = float(params.get("filler_min_marginal", 1e-4))
+    if floor <= 0.0:
+        return list(placements), 0
+    max_per_target = max(1, int(float(params.get("max_obs_per_target", 4))))
+    filler_cap = int(float(params.get("filler_max_targets_per_night", 40)))
+    if filler_cap <= 0:
+        return list(placements), 0
+
+    st = replay(contexts, cells_by_target, placements, params)
+    filler_count = {nid: 0 for nid in contexts}
+
+    heap: list = []
+    for nid, opps in opps_by_node.items():
+        ctx = contexts.get(nid)
+        if ctx is None:
+            continue
+        for opp in opps:
+            v = optimistic_value(opp, cells_by_target, params, ctx)
+            if v > floor:
+                heapq.heappush(heap, (-v, opp.seq, opp))
+
+    n_filler = 0
+    while heap:
+        negv, seq, opp = heapq.heappop(heap)
+        if (filler_count[opp.node_id] >= filler_cap
+                or st.target_count.get(opp.target_id, 0) >= max_per_target
+                or opp.key in st.placed_keys):
+            continue
+        slot, val, tl = best_slot(opp, st, cells_by_target, params)
+        if slot is None or val < floor:
+            continue
+        next_best = -heap[0][0] if heap else 0.0
+        if val + 1e-9 < next_best:
+            heapq.heappush(heap, (-val, seq, opp))
+            continue
+        st.commit(Placement(node_id=opp.node_id, opp=opp, slot=slot,
+                            marginal=val, p=delivery_p(opp, slot),
+                            touches=tl, tier="filler"))
+        filler_count[opp.node_id] += 1
+        n_filler += 1
+
+    return st.placements, n_filler
 
 
 def replay(contexts: dict, cells_by_target: dict, placements: list,
@@ -397,7 +462,7 @@ def replay(contexts: dict, cells_by_target: dict, placements: list,
         val, tl = marginal(p.opp, p.slot, st, cells_by_target, params)
         st.commit(Placement(node_id=p.node_id, opp=p.opp, slot=p.slot,
                             marginal=val, p=delivery_p(p.opp, p.slot),
-                            touches=tl))
+                            touches=tl, tier=getattr(p, "tier", "core")))
     return st
 
 
@@ -541,7 +606,11 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
     explore = float(vec.get("explore", 0.0))
     mpsas = float(node.get("light_pollution_mpsas", 20.0) or 20.0)
     bright_limit = float(node.get("mag_bright_limit", 6.0) or 6.0)
-    eps = float(params.get("min_marginal", 0.02))
+    # Generation-time prefilter: keep opportunities down to the FILLER floor,
+    # not just min_marginal — the fill pass needs the low-value material the
+    # core greedy would ignore, or the night can't be packed.
+    eps = min(float(params.get("min_marginal", 0.02)),
+              float(params.get("filler_min_marginal", 1e-4)))
 
     opps: list = []
     seq = seq_start
