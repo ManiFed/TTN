@@ -839,19 +839,9 @@
   var aspect = innerWidth / innerHeight;
   var stops=els.map(function(s){
     var ra=parseFloat(s.dataset.ra), dec=parseFloat(s.dataset.dec), fov=parseFloat(s.dataset.fov), side=parseFloat(s.dataset.side)||0;
-    var cosDec = Math.cos(dec*Math.PI/180);
+    // Always centre the astronomical coordinate. Panels can move; the observed
+    // object must not be pushed beyond an edge to compensate for page layout.
     var cra = ra, cdec = dec;
-    if (!MOBILE && side !== 0) {
-      // Simple, robust offset so the key sky object (from data-ra/dec) appears
-      // off-center in the open area beside the glass panel. 0.24 of the horizontal
-      // fov gives a reliable "beside the text" placement regardless of screen size.
-      var horiz = fov * aspect;
-      var bias = horiz * 0.24;
-      cra = ra - side * (bias / cosDec);
-    } else if (MOBILE && side) {
-      // on mobile panels are low; lift target a bit into upper sky
-      cdec = dec - 0.28 * fov;
-    }
     return {
       ra:ra, dec:dec, fov:fov, side:side, time:s.dataset.time||'',
       cra: cra, cdec: cdec
@@ -903,7 +893,7 @@
     function moveSkySmoothly(sky,ra,dec,fov){
       cancelAnimationFrame(skyMotion);
       var from={ra:cur.ra,dec:cur.dec,fov:cur.fov};
-      var dra=shortestRaDelta(from.ra,ra), started=performance.now(), duration=1800, lastPaint=0;
+      var dra=shortestRaDelta(from.ra,ra), started=performance.now(), duration=620, lastPaint=0;
       function frame(now){
         var p=Math.min(1,(now-started)/duration);
         var e=p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
@@ -940,7 +930,10 @@
     }
     function compute(){
       var sc=scrollY||document.documentElement.scrollTop, i=0;
-      for(var j=0;j<els.length;j++){ if(sc>=els[j].offsetTop-2) i=j; }
+      // Begin the camera handoff while the next panel is entering, so its target
+      // is centred by the time the panel becomes the reading focus.
+      var lead=innerHeight*0.42;
+      for(var j=0;j<els.length;j++){ if(sc>=els[j].offsetTop-lead) i=j; }
       curSection=i;
       pdots.forEach(function(d,k){ d.classList.toggle('on', k===i); });
       prog.classList.toggle('show', i>0); clock.textContent = stops[i].time;
