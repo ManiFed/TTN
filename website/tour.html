@@ -180,6 +180,20 @@
   .panel h2{font-size:clamp(28px,3.4vw,42px); letter-spacing:-.035em; text-shadow:0 1px 30px rgba(143,217,255,.12)}
   .panel p{margin-top:18px; font-size:16.5px; line-height:1.6; color:var(--ink-2); font-weight:400}
   .panel p.lead{color:var(--ink)}
+  .chapter-visual{position:absolute;z-index:1;left:max(8vw,calc((100vw - 1120px)/2));top:18%;width:min(40vw,520px);height:34%;pointer-events:none;color:var(--warm);filter:drop-shadow(0 0 18px rgba(255,192,122,.14))}
+  .chapter-visual svg{width:100%;height:100%;overflow:visible}
+  .chapter-visual .grid{stroke:rgba(242,245,255,.09);stroke-width:1}
+  .chapter-visual .trace{fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 7px rgba(255,192,122,.55))}
+  .chapter-visual .trace-fill{fill:url(#traceGlow)}
+  .chapter-visual .event{fill:var(--warm);filter:drop-shadow(0 0 10px var(--warm))}
+  .chapter-visual .v-kicker{position:absolute;left:0;top:0;font-size:10px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--warm)}
+  .chapter-visual .v-title{position:absolute;left:0;bottom:6px;font-family:'Inter',sans-serif;font-size:clamp(27px,3.2vw,44px);font-weight:900;letter-spacing:-.05em;color:var(--ink);line-height:.92}
+  .chapter-visual .v-title small{display:block;margin-top:12px;font-family:var(--font);font-size:10px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+  .chapter-visual.network{color:var(--accent);filter:drop-shadow(0 0 24px rgba(143,217,255,.22))}
+  .chapter-visual.network .v-kicker{color:var(--accent)}
+  .chapter-visual.network .trace{filter:drop-shadow(0 0 7px rgba(143,217,255,.55))}
+  #why .chapter-visual{left:max(6vw,calc((100vw - 1240px)/2));top:13%;width:min(47vw,640px);height:43%;filter:drop-shadow(0 0 24px rgba(255,192,122,.18))}
+  #why .chapter-visual .v-title{font-size:clamp(34px,4vw,58px)}
   .readout{margin-top:24px; display:flex; align-items:center; gap:11px; font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); font-weight:450}
   .readout .live{width:7px;height:7px;border-radius:50%;background:var(--warm);box-shadow:0 0 10px var(--warm); animation:livepulse 2.2s ease-in-out infinite}
   .readout .live.cy{background:var(--accent);box-shadow:0 0 10px var(--accent)}
@@ -214,6 +228,10 @@
     .stop .wrap.split > div:empty{ display:none; }
     .glass{ backdrop-filter:blur(13px) saturate(170%) brightness(1.06); -webkit-backdrop-filter:blur(13px) saturate(170%) brightness(1.06); }
     .panel{ max-width:none; width:100%; padding:24px 22px; border-radius:22px; }
+    .chapter-visual{left:52px;right:52px;top:11%;width:auto;height:24%;filter:drop-shadow(0 0 12px rgba(255,192,122,.12))}
+    .chapter-visual .v-title{font-size:clamp(23px,7vw,32px)}
+    #why .chapter-visual{left:20px;right:20px;top:10%;width:auto;height:35%;filter:drop-shadow(0 0 16px rgba(255,192,122,.16))}
+    #why .chapter-visual .v-title{font-size:clamp(28px,9vw,42px)}
     .panel h2{ font-size:clamp(24px,6.6vw,32px); }
     .panel p{ font-size:15.5px; margin-top:14px; }
     .panel .top-row{ margin-bottom:12px; }
@@ -326,8 +344,7 @@
         </div>
         <div class="seat glass">
           <div class="top"><span class="lab">Founding network</span></div>
-          <div class="big"><span class="n" id="founding-count">7<small>joined</small></span></div>
-          <div class="bar"><div class="fill" id="founding-fill"></div></div>
+          <div class="big"><span class="n" id="founding-count">Founding<small>nodes</small></span></div>
           <div class="you">You'd be joining at the very beginning.</div>
         </div>
       </div></div>
@@ -337,7 +354,18 @@
     <!-- 1 — why it matters -->
     <section class="stop" id="why" data-ra="305.5" data-dec="40.7" data-fov="5.5" data-side="1" data-time="">
       <span class="section-index"><b>01</b> The case for a network</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">SS Cygni · brightness over six hours</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="none">
+          <defs><linearGradient id="traceGlow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFC07A" stop-opacity=".22"/><stop offset="1" stop-color="#FFC07A" stop-opacity="0"/></linearGradient></defs>
+          <g class="grid"><path d="M0 75H640M0 145H640M0 215H640M0 285H640"/><path d="M80 45V305M200 45V305M320 45V305M440 45V305M560 45V305"/></g>
+          <path class="trace-fill" d="M0 270C70 268 118 272 164 267C210 262 230 250 257 222C282 196 302 102 329 88C355 74 371 173 399 205C430 241 481 251 530 256C575 261 609 258 640 254V305H0Z"/>
+          <path class="trace" d="M0 270C70 268 118 272 164 267C210 262 230 250 257 222C282 196 302 102 329 88C355 74 371 173 399 205C430 241 481 251 530 256C575 261 609 258 640 254"/>
+          <circle class="event" cx="329" cy="88" r="5"/><path d="M329 88V42" stroke="#FFC07A" stroke-width="1" stroke-dasharray="3 4"/>
+          <text x="340" y="55" fill="#FFC07A" font-family="Geist,sans-serif" font-size="11" letter-spacing="1.4">ERUPTION CAUGHT</text>
+        </svg>
+        <div class="v-title">The sky does not wait.<small>Magnitude 12.1 → 8.4 · one event · one missing observer</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
           <span class="kicker">Why TTN exists</span>
@@ -351,7 +379,18 @@
     <!-- 2 — the idea -->
     <section class="stop" id="idea" data-ra="307" data-dec="39" data-fov="9" data-side="-1" data-time="">
       <span class="section-index"><b>02</b> One distributed instrument</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Distributed observing · longitude handoff</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><linearGradient id="skyRibbon" x1="0" x2="1"><stop stop-color="#8FD9FF" stop-opacity=".08"/><stop offset=".5" stop-color="#8FD9FF" stop-opacity=".55"/><stop offset="1" stop-color="#8FD9FF" stop-opacity=".08"/></linearGradient></defs>
+          <path d="M24 178C106 70 203 64 320 178S537 286 616 178" fill="none" stroke="url(#skyRibbon)" stroke-width="54" stroke-linecap="round"/>
+          <path d="M24 178C106 70 203 64 320 178S537 286 616 178" fill="none" stroke="#8FD9FF" stroke-opacity=".7" stroke-width="2"/>
+          <g fill="#07111e" stroke="#8FD9FF" stroke-width="2"><circle cx="99" cy="111" r="11"/><circle cx="239" cy="112" r="11"/><circle cx="399" cy="242" r="11"/><circle cx="548" cy="243" r="11"/></g>
+          <g fill="#8FD9FF"><circle cx="99" cy="111" r="3"/><circle cx="239" cy="112" r="3"/><circle cx="399" cy="242" r="3"/><circle cx="548" cy="243" r="3"/></g>
+          <g fill="rgba(242,245,255,.55)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="66" y="88">LOCAL NIGHT</text><text x="205" y="89">HANDOFF</text><text x="365" y="274">LOCAL NIGHT</text><text x="514" y="275">HANDOFF</text></g>
+        </svg>
+        <div class="v-title">Night moves through the net.<small>Each node watches locally · the network carries the observation onward</small></div>
+      </div><div class="wrap split">
         <div class="panel glass">
           <span class="kicker">The TTN principle</span>
           <h2>Small telescopes. Planet-sized advantage.</h2>
@@ -365,7 +404,21 @@
     <!-- 3 — how to join (concrete steps) -->
     <section class="stop" id="how" data-ra="56.75" data-dec="24.11" data-fov="4" data-side="1" data-time="">
       <span class="section-index"><b>03</b> Become a TTN node</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Your complete TTN node</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <g fill="rgba(5,12,26,.78)" stroke="rgba(143,217,255,.35)" stroke-width="1.5"><rect x="28" y="74" width="164" height="152" rx="24"/><rect x="238" y="74" width="164" height="152" rx="24"/><rect x="448" y="74" width="164" height="152" rx="24"/></g>
+          <g fill="none" stroke="#DFF5FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M68 178l31-49 49-30M95 134l41 35M65 190h89M88 190l-15 28M129 190l15 28M148 99l12-7"/>
+            <rect x="286" y="105" width="68" height="88" rx="9"/><path d="M299 123h42M299 139h28M299 155h36M307 178h26"/>
+            <path d="M489 168c22-49 69-69 93-62-4 40-30 74-78 84M505 155l29 29M486 203c15 0 25 5 34 15"/>
+          </g>
+          <g fill="#5FE39B"><circle cx="173" cy="94" r="5"/><circle cx="383" cy="94" r="5"/><circle cx="593" cy="94" r="5"/></g>
+          <g fill="rgba(242,245,255,.58)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.5"><text x="67" y="254">TELESCOPE</text><text x="278" y="254">NODE AGENT</text><text x="485" y="254">CLEAR SKY</text></g>
+          <path d="M192 150H238M402 150H448" stroke="#8FD9FF" stroke-width="2" stroke-dasharray="4 6"/>
+        </svg>
+        <div class="v-title">Three pieces. One node.<small>Your telescope · lightweight software · a view of the sky</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
           <span class="kicker">Your node</span><h2 style="margin-top:16px">Connect once. Contribute nightly.</h2>
@@ -381,7 +434,17 @@
     <!-- 4 — what it catches (concrete, explained) -->
     <section class="stop" id="catch" data-ra="325.68" data-dec="43.59" data-fov="1.1" data-side="-1" data-time="">
       <span class="section-index"><b>04</b> The network on watch</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">SS Cygni · three exposures</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><radialGradient id="dimStar"><stop stop-color="#fff"/><stop offset=".18" stop-color="#FFC07A" stop-opacity=".7"/><stop offset="1" stop-color="#FFC07A" stop-opacity="0"/></radialGradient></defs>
+          <g fill="rgba(3,7,17,.82)" stroke="rgba(255,192,122,.28)" stroke-width="1.5"><rect x="24" y="58" width="178" height="190" rx="18"/><rect x="231" y="58" width="178" height="190" rx="18"/><rect x="438" y="58" width="178" height="190" rx="18"/></g>
+          <g fill="rgba(230,240,255,.65)"><circle cx="67" cy="96" r="2"/><circle cx="155" cy="125" r="1.5"/><circle cx="94" cy="205" r="2"/><circle cx="274" cy="96" r="2"/><circle cx="362" cy="125" r="1.5"/><circle cx="301" cy="205" r="2"/><circle cx="481" cy="96" r="2"/><circle cx="569" cy="125" r="1.5"/><circle cx="508" cy="205" r="2"/></g>
+          <circle cx="117" cy="157" r="13" fill="url(#dimStar)"/><circle cx="324" cy="157" r="25" fill="url(#dimStar)"/><circle cx="531" cy="157" r="43" fill="url(#dimStar)"/>
+          <g fill="rgba(242,245,255,.6)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="55" y="276">00:12 · QUIET</text><text x="261" y="276">02:48 · RISING</text><text x="469" y="276">05:31 · ERUPTION</text></g>
+        </svg>
+        <div class="v-title">One star. One night. Changed.<small>The same field · the same exposure · a transient becoming visible</small></div>
+      </div><div class="wrap split">
         <div class="panel glass">
           <span class="kicker">Live target story</span><h2 style="margin-top:16px">This is what continuous watch catches.</h2>
           <p class="lead">That marked star is SS Cygni — a burned-out star 370 light-years away, quietly stealing gas from a neighbor. Every few weeks it erupts, brightening many times over in just a few hours.</p>
@@ -395,7 +458,20 @@
     <!-- 5 — your name on real science -->
     <section class="stop" id="science" data-ra="210.80" data-dec="54.35" data-fov="0.7" data-side="1" data-time="">
       <span class="section-index"><b>05</b> From node to discovery</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Verified observation · permanent record</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><radialGradient id="recordStar"><stop stop-color="#fff"/><stop offset=".2" stop-color="#8FD9FF" stop-opacity=".7"/><stop offset="1" stop-color="#8FD9FF" stop-opacity="0"/></radialGradient></defs>
+          <rect x="74" y="42" width="492" height="248" rx="22" fill="rgba(5,13,28,.82)" stroke="rgba(143,217,255,.34)" stroke-width="1.5"/>
+          <rect x="98" y="67" width="134" height="134" rx="14" fill="#050914" stroke="rgba(143,217,255,.2)"/>
+          <g fill="rgba(225,238,255,.7)"><circle cx="127" cy="91" r="2"/><circle cx="198" cy="108" r="1.5"/><circle cx="151" cy="166" r="2"/></g><circle cx="169" cy="132" r="15" fill="url(#recordStar)"/>
+          <g fill="rgba(242,245,255,.42)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="267" y="84">TARGET</text><text x="267" y="123">MEASUREMENT</text><text x="267" y="162">OBSERVER</text><text x="267" y="201">QUALITY</text></g>
+          <g fill="#F2F5FF" font-family="Geist,sans-serif" font-size="15"><text x="267" y="103">SS CYGNI</text><text x="267" y="142">11.4 MAG ± 0.03</text><text x="267" y="181">YOUR NAME</text><text x="267" y="220">VERIFIED</text></g>
+          <circle cx="520" cy="208" r="22" fill="rgba(95,227,155,.12)" stroke="#5FE39B"/><path d="M509 208l8 8 15-18" fill="none" stroke="#5FE39B" stroke-width="3"/>
+          <path d="M99 240H541" stroke="rgba(143,217,255,.18)"/><text x="99" y="264" fill="#8FD9FF" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.4">READY FOR SCIENTIFIC ARCHIVE</text>
+        </svg>
+        <div class="v-title">Your name stays with the data.<small>Target · measurement · uncertainty · observer · quality status</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
           <span class="kicker">TTN data pipeline</span>
@@ -411,7 +487,19 @@
     <!-- 6 — who it's for -->
     <section class="stop" id="forwho" data-ra="10.68" data-dec="41.27" data-fov="3.2" data-side="-1" data-time="">
       <span class="section-index"><b>06</b> Astronomy without barriers</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Observing, without going outside</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <path d="M52 258V132L181 48L310 132V258Z" fill="rgba(8,16,31,.72)" stroke="rgba(143,217,255,.28)" stroke-width="1.5"/>
+          <rect x="105" y="157" width="88" height="101" rx="4" fill="rgba(143,217,255,.08)" stroke="rgba(143,217,255,.22)"/><path d="M149 157v101M105 207h88" stroke="rgba(143,217,255,.18)"/>
+          <path d="M115 222c20-18 47-18 67 0" fill="none" stroke="#DFF5FF" stroke-width="3"/><circle cx="149" cy="191" r="9" fill="#FFC07A" opacity=".7"/>
+          <g transform="translate(405 185)" fill="none" stroke="#DFF5FF" stroke-width="2.2" stroke-linecap="round"><path d="M0 58l32-52 55-30M28 12l44 38M-3 70h99M22 70L7 98M69 70l15 28M87-24l14-8"/></g>
+          <path d="M306 132C350 89 405 58 471 54" fill="none" stroke="#8FD9FF" stroke-width="1.5" stroke-dasharray="5 7"/>
+          <path d="M505 51a31 31 0 1 1-26-45 36 36 0 0 0 26 45Z" fill="#DFF5FF" opacity=".85"/>
+          <g fill="#8FD9FF"><circle cx="357" cy="73" r="2"/><circle cx="415" cy="38" r="2"/><circle cx="565" cy="91" r="2"/></g>
+        </svg>
+        <div class="v-title">Curiosity stays awake.<small>You stay warm, safe, rested, and part of the observation</small></div>
+      </div><div class="wrap split">
         <div class="panel glass">
           <span class="kicker">A wider network</span><h2 style="margin-top:16px">Built for the people astronomy left out.</h2>
           <p class="lead">No driving to a dark field at 2am. No heavy gear, no cold nights outside, no expertise. The telescope does the part that used to demand a healthy body and a free schedule.</p>
@@ -430,7 +518,16 @@
     <!-- 7 — founding -->
     <section class="stop" id="founding" data-ra="56.75" data-dec="24.11" data-fov="1.9" data-side="1" data-time="">
       <span class="section-index"><b>07</b> Founding the network</span>
-      <div class="sticky"><div class="wrap split">
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">The founding network · still taking shape</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <g fill="none" stroke="rgba(255,192,122,.28)" stroke-width="1.5"><path d="M88 197L190 92L306 168L426 72L535 178L451 262L306 168L214 278L88 197"/><path d="M190 92L426 72M214 278L451 262"/></g>
+          <g fill="#FFC07A" opacity=".85"><circle cx="88" cy="197" r="5"/><circle cx="190" cy="92" r="5"/><circle cx="306" cy="168" r="5"/><circle cx="426" cy="72" r="5"/><circle cx="535" cy="178" r="5"/><circle cx="451" cy="262" r="5"/><circle cx="214" cy="278" r="5"/></g>
+          <circle cx="586" cy="95" r="16" fill="rgba(255,192,122,.05)" stroke="#FFC07A" stroke-width="1.5" stroke-dasharray="4 5"/><path d="M535 178L577 108" stroke="#FFC07A" stroke-width="1.5" stroke-dasharray="4 6"/>
+          <text x="543" y="65" fill="#FFC07A" font-family="Geist,sans-serif" font-size="11" letter-spacing="1.4">NEXT FOUNDING NODE</text>
+        </svg>
+        <div class="v-title">The shape is not finished.<small>Founding nodes define the network before the network defines itself</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
           <span class="kicker">Founding nodes</span><h2 style="margin-top:16px">Don't just join TTN. Help define it.</h2>
@@ -744,18 +841,15 @@
         var cap=document.getElementById('earthcap');
         if(cap) cap.innerHTML='<span class="l"></span> Autonomous node array \xb7 on watch \xb7 '+(s.nodes_online||0)+' online';
         var liveCount=document.getElementById('live-count');
-        if(liveCount) liveCount.textContent=(s.nodes_online||7)+' members';
+        if(liveCount) liveCount.textContent=s.nodes_online?'Founding nodes online':'Founding network';
         var statNodes=document.getElementById('stat-nodes');
-        if(statNodes) statNodes.textContent=s.nodes_total||7;
+        if(statNodes) statNodes.textContent='Founding';
       }).catch(function(){});
     fetch(API+'/api/v1/site/config',{mode:'cors'})
       .then(function(r){return r.ok?r.json():null;}).then(function(c){
         if(!c) return;
-        var n=c.member_count||7;
         var cnt=document.getElementById('founding-count');
-        if(cnt) cnt.innerHTML=n+'<small>joined</small>';
-        var fill=document.getElementById('founding-fill');
-        if(fill) fill.style.width=Math.min(100,n*4)+'%';
+        if(cnt) cnt.innerHTML='Founding<small>nodes</small>';
       }).catch(function(){});
   })();
 
@@ -844,11 +938,6 @@
         A.source(325.68,43.59,{name:'SS Cygni — erupting now'}),
         A.source(210.80,54.35,{name:'a galaxy where stars explode'})
       ]);
-      // the founding grid — node markers scattered across the Cygnus home field
-      var grid=A.catalog({name:'grid', shape:'square', sourceSize:11, color:cy, displayLabel:false});
-      aladin.addCatalog(grid);
-      var pts=[[303.2,41.6],[307.8,39.4],[305.1,42.7],[308.9,41.9],[302.4,38.7],[306.6,40.2],[304.0,39.0]];
-      grid.addSources(pts.map(function(p){return A.source(p[0],p[1],{});}));
     }catch(e){}
   }
 
@@ -960,7 +1049,9 @@
     if(typeof A==='undefined' || !A.init){ fallbackToEarth(); return; }   // script failed to load
     A.init.then(function(){
       var aladin=A.aladin('#sky', {
-        survey: MOBILE ? 'P/DSS2/red' : 'P/DSS2/color',
+        // Use one catalog-backed survey on every viewport. The former mobile-only
+        // P/DSS2/red alias is no longer a valid HiPS endpoint and left the sky blank.
+        survey:'P/DSS2/color',
         fov:stops[0].fov, target:stops[0].cra+' '+stops[0].dec, cooFrame:'ICRS',
         showReticle:false, showZoomControl:false, showFullscreenControl:false, showLayersControl:false,
         showGotoControl:false, showShareControl:false, showSimbadPointerControl:false, showCooGrid:false,
