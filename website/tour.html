@@ -839,9 +839,14 @@
   var aspect = innerWidth / innerHeight;
   var stops=els.map(function(s){
     var ra=parseFloat(s.dataset.ra), dec=parseFloat(s.dataset.dec), fov=parseFloat(s.dataset.fov), side=parseFloat(s.dataset.side)||0;
-    // Always centre the astronomical coordinate. Panels can move; the observed
-    // object must not be pushed beyond an edge to compensate for page layout.
     var cra = ra, cdec = dec;
+    if (!MOBILE && side !== 0) {
+      // Aladin's FoV value is already the horizontal span in this projection.
+      // Move the camera just enough to centre the object in the clear half of
+      // the screen beside its panel (rather than in the viewport centre).
+      var clearHalfBias = fov * 0.23;
+      cra = ra - side * (clearHalfBias / Math.cos(dec*Math.PI/180));
+    }
     return {
       ra:ra, dec:dec, fov:fov, side:side, time:s.dataset.time||'',
       cra: cra, cdec: cdec
