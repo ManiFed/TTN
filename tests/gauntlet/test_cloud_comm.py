@@ -9,9 +9,10 @@ import json
 import os
 import pathlib
 import unittest
+from unittest.mock import patch
 
 from src import telemetry
-from src.cloud_communicator import CloudCommunicator
+from src.cloud_communicator import CloudCommunicator, keyring
 from tests.gauntlet.fakecloud import FakeCloud
 from tests.gauntlet.util import TempCwdTestCase
 
@@ -54,12 +55,23 @@ class CloudCommGauntletTest(TempCwdTestCase):
         self.assertTrue(comm._ensure_registered())
         state = json.loads(pathlib.Path("data", "cloud_state.json").read_text())
         self.assertEqual(state["node_id"], "node_test01")
-        # Prefer keyring for api_key; headless hosts may fall back into state.
-        # Either way a restart must not re-register.
+        self.assertNotIn("api_key", state)
+        # Credentials are restored from the system keyring, not a state file.
         self.fake.clear()
         comm2 = self._comm()
         self.assertTrue(comm2._ensure_registered())
         self.assertEqual(self.fake.paths("/register"), [])
+
+    def test_keyring_failure_never_writes_api_key_to_state_file(self):
+        comm = self._comm()
+        with patch.object(
+            keyring, "set_password", side_effect=keyring.errors.KeyringError("unavailable")
+        ):
+            comm.install_credentials("node_test01", "secret-api-key")
+
+        state = json.loads(pathlib.Path("data", "cloud_state.json").read_text())
+        self.assertEqual(state["node_id"], "node_test01")
+        self.assertNotIn("api_key", state)
 
     def test_registration_failure_backs_off_instead_of_hammering(self):
         self.fake.mode = "reject"
