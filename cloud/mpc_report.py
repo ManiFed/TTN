@@ -159,12 +159,20 @@ def generate_report(cand_id: int, config: dict) -> Optional[dict]:
 
     text = _format_ades_psv(cand, detections, observatory_code, observer_name)
 
-    report_dir = Path(str(_cfg(config, "report_dir", "cloud_data/mpc_reports")))
-    date_dir = report_dir / datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    root_dir = Path(str(_cfg(config, "report_dir", "cloud_data/mpc_reports"))).resolve()
+    date_dir = (root_dir / datetime.now(timezone.utc).strftime("%Y-%m-%d")).resolve()
+    try:
+        date_dir.relative_to(root_dir)
+    except ValueError:
+        raise ValueError(f"Unsafe report date directory outside root: {date_dir}")
     date_dir.mkdir(parents=True, exist_ok=True)
     designation = cand.get("designation") or f"candidate_{cand_id}"
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in designation)
-    dest = date_dir / f"{safe_name}.psv"
+    dest = (date_dir / f"{safe_name}.psv").resolve()
+    try:
+        dest.relative_to(root_dir)
+    except ValueError:
+        raise ValueError(f"Unsafe report destination outside root: {dest}")
     dest.write_text(text)
 
     db.execute(

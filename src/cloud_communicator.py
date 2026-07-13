@@ -14,8 +14,9 @@ Reads config["cloud"]:
       upload_images: false   # also upload raw FITS after photometry
 
 Behaviour:
-    • registers automatically when no credentials exist (persisted to
-      data/cloud_state.json so re-registration never repeats)
+    • registers automatically when no credentials exist; the node ID and
+      pairing token live in data/cloud_state.json, while the API key lives in
+      the operating system credential store
     • sends heartbeats with optional local conditions from a callback
     • polls for the current observation plan; when the plan_id changes,
       invokes on_plan(items, contingencies) with node-schedule-format items
@@ -312,18 +313,17 @@ class CloudCommunicator:
             self._save_state()
 
     def _save_state(self) -> None:
-        # Prefer keyring for api_key. If unavailable (CI / sandboxed install),
-        # fall back to cloud_state.json so a restart does not re-register.
-        key_in_keyring = False
+        # API keys must never be written to cloud_state.json.  A node without
+        # a usable system credential store has to pair/register again after a
+        # restart rather than leave a reusable credential on disk.
         if self._api_key:
             try:
                 keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, self._api_key)
-                key_in_keyring = True
             except keyring.errors.KeyringError as exc:
-                logger.warning("Could not persist api_key to keyring: %s", exc)
+                logger.warning(
+                    "Could not persist cloud API key to the system keyring; "
+                    "it will not survive a restart: %s", exc)
         payload = {"node_id": self._node_id, "pair_token": self._pair_token}
-        if self._api_key and not key_in_keyring:
-            payload["api_key"] = self._api_key
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
             _STATE_FILE.write_text(json.dumps(payload, indent=2))

@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>The Telescope Net — Automated Home Telescopes for Real Astronomy</title>
+<title>TTN — The Telescope Net · The sky, watched together.</title>
 <meta name="description" content="Join The Telescope Net: a worldwide network of automated home telescopes that collect real variable-star data for astronomy. Use your telescope, get a smart telescope, or ask for funding help." />
-<meta property="og:title" content="The Telescope Net — The Founding Network" />
+<meta property="og:title" content="TTN — The sky, watched together." />
 <meta property="og:description" content="Your home telescope, running itself every clear night, helping catch stars as they flare and fade. Join the first hundred founding nodes." />
 <meta property="og:type" content="website" />
 <meta name="theme-color" content="#02030A" />
@@ -48,15 +48,25 @@
     background-size:180px 180px;}
   .scrim{position:fixed; inset:0; z-index:1; pointer-events:none;
     background:
-      radial-gradient(130% 100% at 50% 0%, rgba(2,3,10,.22), transparent 45%),
-      radial-gradient(150% 130% at 50% 50%, transparent 42%, rgba(2,3,10,.62) 100%);}
+      linear-gradient(90deg,rgba(2,3,10,.52) 0%,rgba(2,3,10,.20) 48%,rgba(2,3,10,.42) 100%),
+      radial-gradient(130% 100% at 50% 0%, rgba(2,3,10,.32), transparent 45%),
+      radial-gradient(150% 130% at 50% 50%, transparent 34%, rgba(2,3,10,.76) 100%);}
 
   main{position:relative; z-index:3;}
   .wrap{max-width:1240px; margin:0 auto; padding:0 32px; width:100%}
 
   .brandmark{position:fixed; top:24px; left:32px; z-index:30;
-    font-family:'Inter', system-ui, -apple-system, sans-serif; font-weight:900; font-size:18px;
-    letter-spacing:-.03em; color:#ffffff; text-shadow:none; line-height:1}
+    display:flex; align-items:center; gap:12px; color:#fff; text-decoration:none; line-height:1}
+  .brandmark .brand-symbol{width:38px;height:38px;flex:0 0 auto;filter:drop-shadow(0 0 16px rgba(143,217,255,.35))}
+  .brandmark .brand-type{display:flex;align-items:baseline;gap:10px}
+  .brandmark strong{font-family:'Inter',system-ui,sans-serif;font-size:20px;font-weight:900;letter-spacing:-.055em}
+  .brandmark small{font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+  .topnav{position:fixed;top:24px;right:32px;z-index:30;display:flex;align-items:center;gap:6px;padding:5px;
+    border:1px solid rgba(215,228,255,.16);border-radius:100px;background:rgba(4,8,20,.38);backdrop-filter:blur(18px)}
+  .topnav a{color:var(--ink-2);text-decoration:none;font-size:12px;font-weight:500;padding:9px 13px;border-radius:100px;transition:.2s ease}
+  .topnav a:hover{color:#fff;background:rgba(255,255,255,.09)}
+  .topnav .nav-cta{color:#06121c;background:var(--accent)}
+  .topnav .nav-cta:hover{color:#06121c;background:#dff5ff}
 
   .clock{position:fixed; right:32px; bottom:30px; z-index:30; font-size:12px; letter-spacing:.06em; color:var(--ink-3); font-variant-numeric:tabular-nums}
   .utcclock{position:fixed; right:32px; bottom:50px; z-index:30; font-size:10.5px; letter-spacing:.08em; color:var(--ink-3); font-variant-numeric:tabular-nums; opacity:0.6}
@@ -68,7 +78,7 @@
   @keyframes dotring{0%{box-shadow:0 0 10px var(--accent), 0 0 0 0px rgba(143,217,255,.5)} 100%{box-shadow:0 0 10px var(--accent), 0 0 0 8px rgba(143,217,255,0)}}
 
   /* ---------- liquid glass — clearer + glossier ---------- */
-  .glass{position:relative; background:rgba(160,185,255,.045); animation:glassbreathe 12s ease-in-out infinite;
+  .glass{position:relative; background:rgba(8,14,30,.68); animation:glassbreathe 12s ease-in-out infinite;
     backdrop-filter:blur(14px) saturate(190%) brightness(1.08); -webkit-backdrop-filter:blur(14px) saturate(190%) brightness(1.08);
     border:1px solid var(--glass-bd); border-radius:26px;
     box-shadow:0 28px 80px rgba(0,0,10,.40), inset 0 1.5px 0 rgba(255,255,255,.52),
@@ -125,7 +135,8 @@
   .stop.center .sticky{justify-content:center}
   .stop.center .wrap{max-width:780px; text-align:center; display:flex; flex-direction:column; align-items:center}
 
-  .hero h1{font-size:clamp(42px,4.8vw,68px); line-height:1.03; letter-spacing:-.045em; font-weight:600; text-wrap:balance; max-width:860px; text-shadow:0 0 80px rgba(143,217,255,.18), 0 2px 40px rgba(0,0,20,.6); animation:fadeup 1.1s ease-out .3s both}
+  .hero h1{font-size:clamp(42px,4.8vw,68px); line-height:1.03; letter-spacing:-.045em; font-weight:600; text-wrap:balance; max-width:860px; text-shadow:0 2px 18px #02030A,0 0 80px rgba(143,217,255,.20); animation:fadeup 1.1s ease-out .3s both}
+  .hero h1,.hero .sub,.hero .cta-row{position:relative;z-index:5}
   .hero h1 .a{color:var(--accent); text-shadow:0 0 60px rgba(143,217,255,.45), 0 0 120px rgba(143,217,255,.22)}
   .hero .sub{animation:fadeup 1.1s ease-out .55s both}
   .hero .cta-row{animation:fadeup 1.1s ease-out .75s both}
@@ -134,8 +145,21 @@
     border:1px solid rgba(143,217,255,.25); border-radius:10px; padding:8px 12px;
     font-size:11.5px; letter-spacing:.02em; color:var(--ink-2); white-space:nowrap}
   #node-tip.vis{opacity:1; transform:translateY(0)}
-  .hero .sub{margin-top:18px; font-size:clamp(16px,1.15vw,18px); line-height:1.52; color:var(--ink-2); max-width:58ch; font-weight:400}
+  .hero .sub{margin-top:18px; font-size:clamp(16px,1.15vw,18px); line-height:1.52; color:rgba(242,245,255,.82); max-width:58ch; font-weight:400;text-shadow:0 2px 12px #02030A}
   .hero .sub em{color:var(--ink); font-style:normal; font-weight:500}
+  .hero-lockup{display:flex;align-items:center;gap:13px;margin-bottom:24px;animation:fadeup 1.1s ease-out .12s both}
+  .hero-lockup .rule{width:42px;height:1px;background:linear-gradient(90deg,var(--accent),transparent)}
+  .hero-lockup span{font-size:11px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+  .network-word{display:block;font-family:'Inter',system-ui,sans-serif;font-weight:900;letter-spacing:-.065em;font-size:clamp(68px,10vw,142px);line-height:.76;
+    color:transparent;-webkit-text-stroke:1px rgba(207,239,255,.55);opacity:.78;margin:0 0 28px -7px;text-shadow:0 0 45px rgba(143,217,255,.12)}
+  .hero-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));max-width:650px;margin-top:32px;border-top:1px solid rgba(215,228,255,.18);border-bottom:1px solid rgba(215,228,255,.18)}
+  .hero-stat{padding:15px 18px 15px 0;position:relative}
+  .hero-stat+.hero-stat{padding-left:18px;border-left:1px solid rgba(215,228,255,.18)}
+  .hero-stat b{display:block;font-size:13px;font-weight:600;color:var(--ink)}
+  .hero-stat span{display:block;margin-top:4px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+  .section-index{position:absolute;top:50%;left:max(32px,calc((100vw - 1240px)/2));transform:translateY(-50%);writing-mode:vertical-rl;
+    font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:rgba(242,245,255,.28)}
+  .section-index b{color:var(--accent);font-weight:600;margin-bottom:10px}
   .cta-row{display:flex; gap:14px; margin-top:36px; flex-wrap:wrap}
 
   .seat{padding:28px 30px; align-self:start; margin-top:28px}
@@ -156,6 +180,20 @@
   .panel h2{font-size:clamp(28px,3.4vw,42px); letter-spacing:-.035em; text-shadow:0 1px 30px rgba(143,217,255,.12)}
   .panel p{margin-top:18px; font-size:16.5px; line-height:1.6; color:var(--ink-2); font-weight:400}
   .panel p.lead{color:var(--ink)}
+  .chapter-visual{position:absolute;z-index:1;left:max(8vw,calc((100vw - 1120px)/2));top:18%;width:min(40vw,520px);height:34%;pointer-events:none;color:var(--warm);filter:drop-shadow(0 0 18px rgba(255,192,122,.14))}
+  .chapter-visual svg{width:100%;height:100%;overflow:visible}
+  .chapter-visual .grid{stroke:rgba(242,245,255,.09);stroke-width:1}
+  .chapter-visual .trace{fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 7px rgba(255,192,122,.55))}
+  .chapter-visual .trace-fill{fill:url(#traceGlow)}
+  .chapter-visual .event{fill:var(--warm);filter:drop-shadow(0 0 10px var(--warm))}
+  .chapter-visual .v-kicker{position:absolute;left:0;top:0;font-size:10px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--warm)}
+  .chapter-visual .v-title{position:absolute;left:0;bottom:6px;font-family:'Inter',sans-serif;font-size:clamp(27px,3.2vw,44px);font-weight:900;letter-spacing:-.05em;color:var(--ink);line-height:.92}
+  .chapter-visual .v-title small{display:block;margin-top:12px;font-family:var(--font);font-size:10px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+  .chapter-visual.network{color:var(--accent);filter:drop-shadow(0 0 24px rgba(143,217,255,.22))}
+  .chapter-visual.network .v-kicker{color:var(--accent)}
+  .chapter-visual.network .trace{filter:drop-shadow(0 0 7px rgba(143,217,255,.55))}
+  #why .chapter-visual{left:max(6vw,calc((100vw - 1240px)/2));top:13%;width:min(47vw,640px);height:43%;filter:drop-shadow(0 0 24px rgba(255,192,122,.18))}
+  #why .chapter-visual .v-title{font-size:clamp(34px,4vw,58px)}
   .readout{margin-top:24px; display:flex; align-items:center; gap:11px; font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); font-weight:450}
   .readout .live{width:7px;height:7px;border-radius:50%;background:var(--warm);box-shadow:0 0 10px var(--warm); animation:livepulse 2.2s ease-in-out infinite}
   .readout .live.cy{background:var(--accent);box-shadow:0 0 10px var(--accent)}
@@ -167,20 +205,33 @@
   .cue .ln{width:1px; height:36px; background:linear-gradient(var(--accent), transparent); animation:cuedrop 1.9s ease-in-out infinite}
   @keyframes cuedrop{0%,100%{opacity:0.5;transform:scaleY(1) translateY(0)} 55%{opacity:1;transform:scaleY(1.18) translateY(4px)}}
   @keyframes kickershine{0%{background-position:200% center} 100%{background-position:0% center}}
-  @keyframes glassbreathe{0%,100%{background:rgba(160,185,255,.045)} 50%{background:rgba(160,185,255,.065)}}
+  @keyframes glassbreathe{0%,100%{background:rgba(8,14,30,.68)} 50%{background:rgba(11,19,39,.76)}}
+
+  /* The final chapter should end with the viewport, not another full scroll runway. */
+  #join{min-height:100vh}
 
   @media (max-width:860px){
     .clock, .utcclock, .progress, .cue{ display:none !important; }
-    .brandmark{ top:18px; left:20px; font-size:14px; }
+    .brandmark{ top:16px; left:20px; }
+    .brandmark .brand-symbol{width:32px;height:32px}
+    .brandmark strong{font-size:17px}
+    .brandmark small,.topnav a:not(.nav-cta){display:none}
+    .topnav{top:16px;right:18px;padding:3px}
+    .topnav .nav-cta{display:block;padding:8px 12px;font-size:11px}
     .wrap{ padding:0 20px; }
     /* sky panels: full-width glass, sitting low so the real sky shows above them */
     .stop{ min-height:128svh; }
+    #join{min-height:100svh}
     .stop .sticky{ height:100svh; align-items:flex-end; padding-bottom:34px; }
     .stop.center .sticky{ align-items:center; padding-bottom:0; }
     .stop .wrap.split{ display:block; }
     .stop .wrap.split > div:empty{ display:none; }
     .glass{ backdrop-filter:blur(13px) saturate(170%) brightness(1.06); -webkit-backdrop-filter:blur(13px) saturate(170%) brightness(1.06); }
     .panel{ max-width:none; width:100%; padding:24px 22px; border-radius:22px; }
+    .chapter-visual{left:52px;right:52px;top:11%;width:auto;height:24%;filter:drop-shadow(0 0 12px rgba(255,192,122,.12))}
+    .chapter-visual .v-title{font-size:clamp(23px,7vw,32px)}
+    #why .chapter-visual{left:20px;right:20px;top:10%;width:auto;height:35%;filter:drop-shadow(0 0 16px rgba(255,192,122,.16))}
+    #why .chapter-visual .v-title{font-size:clamp(28px,9vw,42px)}
     .panel h2{ font-size:clamp(24px,6.6vw,32px); }
     .panel p{ font-size:15.5px; margin-top:14px; }
     .panel .top-row{ margin-bottom:12px; }
@@ -190,6 +241,11 @@
     /* hero: flows naturally, centred, sized to fit a phone */
     .hero .sticky{ position:relative; height:auto; min-height:100svh; align-items:center; padding:96px 0 40px; }
     .hero h1{ font-size:clamp(33px,8.4vw,48px); line-height:1.02; max-width:none; }
+    .network-word{font-size:clamp(58px,21vw,92px);margin-bottom:22px}
+    .hero-lockup{margin-bottom:18px}
+    .hero-stats{grid-template-columns:1fr 1fr;margin-top:24px}
+    .hero-stat:last-child{display:none}
+    .section-index{display:none}
     .hero .sub{ font-size:16px; margin-top:18px; max-width:none; }
     .seat{ margin-top:26px; max-width:none; padding:20px 22px; }
     .seat .n{ font-size:34px; }
@@ -249,9 +305,20 @@
   <div id="sky"></div>
   <div class="scrim"></div>
   <canvas id="earth"></canvas>
-  <div id="earthcap"><span class="l"></span> Autonomous node array · on watch</div>
 
-  <div class="brandmark"><span class="gm"></span> The Telescope Net</div>
+  <a class="brandmark" href="#top" aria-label="TTN — The Telescope Net, home">
+    <svg class="brand-symbol" viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="24" r="20" fill="none" stroke="rgba(143,217,255,.28)"/>
+      <circle cx="24" cy="24" r="3" fill="#8FD9FF"/>
+      <circle cx="13" cy="17" r="2.5" fill="#fff"/><circle cx="36" cy="14" r="2.5" fill="#fff"/><circle cx="35" cy="34" r="2.5" fill="#fff"/>
+      <path d="M14.8 18.1 21.5 22M26.4 21.7l7.6-6.4M26.5 26.3l6.8 6.1" fill="none" stroke="#8FD9FF" stroke-width="1.5"/>
+      <path d="M8 30c8 5.5 24 5.5 32 0" fill="none" stroke="rgba(255,192,122,.8)" stroke-width="1.2"/>
+    </svg>
+    <span class="brand-type"><strong>TTN</strong><small>The Telescope Net</small></span>
+  </a>
+  <nav class="topnav" aria-label="Primary navigation">
+    <a href="#idea">The network</a><a href="#how">How it works</a><a href="#science">The science</a><a class="nav-cta" href="#join">Join TTN</a>
+  </nav>
   <div class="progress" id="progress"></div>
   <div class="utcclock" id="utcclock"></div>
   <div class="clock" id="clock"></div>
@@ -261,19 +328,23 @@
     <section class="stop hero" id="top" data-ra="305.5" data-dec="40.5" data-fov="7" data-side="0" data-time="" aria-label="What is The Telescope Net">
       <div class="sticky"><div class="wrap split">
         <div>
-          <span class="kicker">A worldwide network of home telescopes</span>
-          <h1 style="margin-top:20px">Each member watches a patch of sky. <span class="a">Together we cover what no observatory can.</span></h1>
-          <p class="sub">The Telescope Net connects self-driving telescopes in members' homes across the planet. Each one runs automatically every clear night — picking targets, photographing them, and uploading data to a scientific database used by professional astronomers. <em>No experience. Virtually no effort. Just your telescope's idle nights, put to work for science.</em></p>
+          <div class="hero-lockup"><span class="rule"></span><span>A planetary instrument, built at home</span></div>
+          <span class="network-word" aria-hidden="true">TTN</span>
+          <h1>The sky is too big for one telescope. <span class="a">So we built a network.</span></h1>
+          <p class="sub">TTN turns home telescopes into one shared scientific instrument—coordinating what to watch, verifying every image, and sending useful measurements to astronomers. <em>You provide a view of the sky. We make it count.</em></p>
           <div class="cta-row">
-            <a class="btn btn-p" href="#join">Download node software</a>
-            <a class="btn btn-g" href="#why">Watch the sky lift off ↓</a>
+            <a class="btn btn-p" href="#join">Put your telescope on the map</a>
+            <a class="btn btn-g" href="#why">Tour the network ↓</a>
           </div>
-          <p style="margin-top:16px; font-size:12.5px; color:var(--ink-3)">A handful of people are already on watch · join them at the very start</p>
+          <div class="hero-stats" aria-label="TTN network highlights">
+            <div class="hero-stat"><b>Autonomous</b><span>Clear-night operation</span></div>
+            <div class="hero-stat"><b>Scientific</b><span>AAVSO-ready data</span></div>
+            <div class="hero-stat"><b>Real sky</b><span>Live survey imagery</span></div>
+          </div>
         </div>
         <div class="seat glass">
           <div class="top"><span class="lab">Founding network</span></div>
-          <div class="big"><span class="n" id="founding-count">7<small>joined</small></span></div>
-          <div class="bar"><div class="fill" id="founding-fill"></div></div>
+          <div class="big"><span class="n" id="founding-count">Founding<small>nodes</small></span></div>
           <div class="you">You'd be joining at the very beginning.</div>
         </div>
       </div></div>
@@ -282,23 +353,48 @@
 
     <!-- 1 — why it matters -->
     <section class="stop" id="why" data-ra="305.5" data-dec="40.7" data-fov="5.5" data-side="1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>01</b> The case for a network</span>
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">SS Cygni · brightness over six hours</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="none">
+          <defs><linearGradient id="traceGlow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFC07A" stop-opacity=".22"/><stop offset="1" stop-color="#FFC07A" stop-opacity="0"/></linearGradient></defs>
+          <g class="grid"><path d="M0 75H640M0 145H640M0 215H640M0 285H640"/><path d="M80 45V305M200 45V305M320 45V305M440 45V305M560 45V305"/></g>
+          <path class="trace-fill" d="M0 270C70 268 118 272 164 267C210 262 230 250 257 222C282 196 302 102 329 88C355 74 371 173 399 205C430 241 481 251 530 256C575 261 609 258 640 254V305H0Z"/>
+          <path class="trace" d="M0 270C70 268 118 272 164 267C210 262 230 250 257 222C282 196 302 102 329 88C355 74 371 173 399 205C430 241 481 251 530 256C575 261 609 258 640 254"/>
+          <circle class="event" cx="329" cy="88" r="5"/><path d="M329 88V42" stroke="#FFC07A" stroke-width="1" stroke-dasharray="3 4"/>
+          <text x="340" y="55" fill="#FFC07A" font-family="Geist,sans-serif" font-size="11" letter-spacing="1.4">ERUPTION CAUGHT</text>
+        </svg>
+        <div class="v-title">The sky does not wait.<small>Magnitude 12.1 → 8.4 · one event · one missing observer</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
-          <h2>The sky changes — and almost no one is watching.</h2>
+          <span class="kicker">Why TTN exists</span>
+          <h2 style="margin-top:16px">The sky changes. Our coverage doesn't.</h2>
           <p class="lead">Stars aren't fixed points. Some pulse, some suddenly brighten, some explode entirely. Astronomers can't predict exactly when, so to catch these moments you need telescopes pointed at the sky all night, everywhere at once.</p>
           <p>The world's giant observatories are few, costly, and booked years ahead. So most of what happens up there is simply missed.</p>
-          <p>Meanwhile, millions of capable telescopes sit idle — in closets, on balconies, in gardens — dark on exactly the nights the sky does something remarkable. That's the gap this network closes: <b style="color:var(--ink); font-weight:500">your telescope's downtime is the coverage astronomy is missing.</b></p>
+          <p>Meanwhile, millions of capable telescopes sit idle — in closets, on balconies, in gardens — dark on exactly the nights the sky does something remarkable. That's the gap TTN closes: <b style="color:var(--ink); font-weight:500">your telescope's downtime is the coverage astronomy is missing.</b></p>
         </div>
       </div></div>
     </section>
 
     <!-- 2 — the idea -->
     <section class="stop" id="idea" data-ra="307" data-dec="39" data-fov="9" data-side="-1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>02</b> One distributed instrument</span>
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Distributed observing · longitude handoff</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><linearGradient id="skyRibbon" x1="0" x2="1"><stop stop-color="#8FD9FF" stop-opacity=".08"/><stop offset=".5" stop-color="#8FD9FF" stop-opacity=".55"/><stop offset="1" stop-color="#8FD9FF" stop-opacity=".08"/></linearGradient></defs>
+          <path d="M24 178C106 70 203 64 320 178S537 286 616 178" fill="none" stroke="url(#skyRibbon)" stroke-width="54" stroke-linecap="round"/>
+          <path d="M24 178C106 70 203 64 320 178S537 286 616 178" fill="none" stroke="#8FD9FF" stroke-opacity=".7" stroke-width="2"/>
+          <g fill="#07111e" stroke="#8FD9FF" stroke-width="2"><circle cx="99" cy="111" r="11"/><circle cx="239" cy="112" r="11"/><circle cx="399" cy="242" r="11"/><circle cx="548" cy="243" r="11"/></g>
+          <g fill="#8FD9FF"><circle cx="99" cy="111" r="3"/><circle cx="239" cy="112" r="3"/><circle cx="399" cy="242" r="3"/><circle cx="548" cy="243" r="3"/></g>
+          <g fill="rgba(242,245,255,.55)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="66" y="88">LOCAL NIGHT</text><text x="205" y="89">HANDOFF</text><text x="365" y="274">LOCAL NIGHT</text><text x="514" y="275">HANDOFF</text></g>
+        </svg>
+        <div class="v-title">Night moves through the net.<small>Each node watches locally · the network carries the observation onward</small></div>
+      </div><div class="wrap split">
         <div class="panel glass">
-          <span class="kicker">The idea</span>
-          <h2>Lots of small eyes beat a few giant ones.</h2>
+          <span class="kicker">The TTN principle</span>
+          <h2>Small telescopes. Planet-sized advantage.</h2>
           <p class="lead">One little telescope isn't much. But thousands of them, spread across the planet and running every clear night, become an instrument no single observatory can match.</p>
           <p>That's the network. Everyone watches their own patch of sky — and together, we cover the whole thing. Those green markers are members already on watch tonight.</p>
         </div>
@@ -308,10 +404,25 @@
 
     <!-- 3 — how to join (concrete steps) -->
     <section class="stop" id="how" data-ra="56.75" data-dec="24.11" data-fov="4" data-side="1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>03</b> Become a TTN node</span>
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Your complete TTN node</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <g fill="rgba(5,12,26,.78)" stroke="rgba(143,217,255,.35)" stroke-width="1.5"><rect x="28" y="74" width="164" height="152" rx="24"/><rect x="238" y="74" width="164" height="152" rx="24"/><rect x="448" y="74" width="164" height="152" rx="24"/></g>
+          <g fill="none" stroke="#DFF5FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M68 178l31-49 49-30M95 134l41 35M65 190h89M88 190l-15 28M129 190l15 28M148 99l12-7"/>
+            <rect x="286" y="105" width="68" height="88" rx="9"/><path d="M299 123h42M299 139h28M299 155h36M307 178h26"/>
+            <path d="M489 168c22-49 69-69 93-62-4 40-30 74-78 84M505 155l29 29M486 203c15 0 25 5 34 15"/>
+          </g>
+          <g fill="#5FE39B"><circle cx="173" cy="94" r="5"/><circle cx="383" cy="94" r="5"/><circle cx="593" cy="94" r="5"/></g>
+          <g fill="rgba(242,245,255,.58)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.5"><text x="67" y="254">TELESCOPE</text><text x="278" y="254">NODE AGENT</text><text x="485" y="254">CLEAR SKY</text></g>
+          <path d="M192 150H238M402 150H448" stroke="#8FD9FF" stroke-width="2" stroke-dasharray="4 6"/>
+        </svg>
+        <div class="v-title">Three pieces. One node.<small>Your telescope · lightweight software · a view of the sky</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
-          <h2>Three steps, then you're done.</h2>
+          <span class="kicker">Your node</span><h2 style="margin-top:16px">Connect once. Contribute nightly.</h2>
           <ol class="steps">
             <li><span class="nm">1</span><span class="tx"><b>Use the telescope you have, or get a small smart telescope.</b> Seestar, Vespera, Dwarf, Unistellar, Celestron Origin, and many ALPACA/ASCOM setups can join. No telescope budget? We help members look for funding.</span></li>
             <li><span class="nm">2</span><span class="tx"><b>Install the node software once.</b> The dashboard helps you enter your activation code, choose your telescope, and download the star catalog for plate solving.</span></li>
@@ -322,20 +433,7 @@
       </div></div>
     </section>
 
-    <!-- 4 — what it catches (concrete, explained) -->
-    <section class="stop" id="catch" data-ra="325.68" data-dec="43.59" data-fov="1.1" data-side="-1" data-time="">
-      <div class="sticky"><div class="wrap split">
-        <div class="panel glass">
-          <h2>A real example, happening right now.</h2>
-          <p class="lead">That marked star is SS Cygni — a burned-out star 370 light-years away, quietly stealing gas from a neighbor. Every few weeks it erupts, brightening many times over in just a few hours.</p>
-          <p>Astronomers want every eruption on record, but only a handful of telescopes catch each one. Tonight, yours could be one of them — recording the whole thing automatically while you sleep.</p>
-          <div class="readout"><span class="live"></span> ← Your telescope · SS Cyg · <span id="mag-live" style="font-variant-numeric:tabular-nums; color:var(--warm); font-weight:500">11.4 mag</span> · catching it brighten</div>
-        </div>
-        <div></div>
-      </div></div>
-    </section>
-
-    <!-- 5 — what we research -->
+    <!-- 3.5 — what we research -->
     <section class="stop center" id="research" data-ra="83.82" data-dec="-5.39" data-fov="9" data-side="0" data-time="">
       <div class="sticky"><div class="wrap">
         <span class="kicker">What we research</span>
@@ -352,13 +450,51 @@
       </div></div>
     </section>
 
-    <!-- 6 — your name on real science -->
+    <!-- 4 — what it catches (concrete, explained) -->
+    <section class="stop" id="catch" data-ra="325.68" data-dec="43.59" data-fov="1.1" data-side="-1" data-time="">
+      <span class="section-index"><b>04</b> The network on watch</span>
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">SS Cygni · three exposures</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><radialGradient id="dimStar"><stop stop-color="#fff"/><stop offset=".18" stop-color="#FFC07A" stop-opacity=".7"/><stop offset="1" stop-color="#FFC07A" stop-opacity="0"/></radialGradient></defs>
+          <g fill="rgba(3,7,17,.82)" stroke="rgba(255,192,122,.28)" stroke-width="1.5"><rect x="24" y="58" width="178" height="190" rx="18"/><rect x="231" y="58" width="178" height="190" rx="18"/><rect x="438" y="58" width="178" height="190" rx="18"/></g>
+          <g fill="rgba(230,240,255,.65)"><circle cx="67" cy="96" r="2"/><circle cx="155" cy="125" r="1.5"/><circle cx="94" cy="205" r="2"/><circle cx="274" cy="96" r="2"/><circle cx="362" cy="125" r="1.5"/><circle cx="301" cy="205" r="2"/><circle cx="481" cy="96" r="2"/><circle cx="569" cy="125" r="1.5"/><circle cx="508" cy="205" r="2"/></g>
+          <circle cx="117" cy="157" r="13" fill="url(#dimStar)"/><circle cx="324" cy="157" r="25" fill="url(#dimStar)"/><circle cx="531" cy="157" r="43" fill="url(#dimStar)"/>
+          <g fill="rgba(242,245,255,.6)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="55" y="276">00:12 · QUIET</text><text x="261" y="276">02:48 · RISING</text><text x="469" y="276">05:31 · ERUPTION</text></g>
+        </svg>
+        <div class="v-title">One star. One night. Changed.<small>The same field · the same exposure · a transient becoming visible</small></div>
+      </div><div class="wrap split">
+        <div class="panel glass">
+          <span class="kicker">Live target story</span><h2 style="margin-top:16px">This is what continuous watch catches.</h2>
+          <p class="lead">That marked star is SS Cygni — a burned-out star 370 light-years away, quietly stealing gas from a neighbor. Every few weeks it erupts, brightening many times over in just a few hours.</p>
+          <p>Astronomers want every eruption on record, but only a handful of telescopes catch each one. Tonight, yours could be one of them — recording the whole thing automatically while you sleep.</p>
+          <div class="readout"><span class="live"></span> ← Your telescope · SS Cyg · <span id="mag-live" style="font-variant-numeric:tabular-nums; color:var(--warm); font-weight:500">11.4 mag</span> · catching it brighten</div>
+        </div>
+        <div></div>
+      </div></div>
+    </section>
+
+    <!-- 5 — your name on real science -->
     <section class="stop" id="science" data-ra="210.80" data-dec="54.35" data-fov="0.7" data-side="1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>05</b> From node to discovery</span>
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Verified observation · permanent record</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <defs><radialGradient id="recordStar"><stop stop-color="#fff"/><stop offset=".2" stop-color="#8FD9FF" stop-opacity=".7"/><stop offset="1" stop-color="#8FD9FF" stop-opacity="0"/></radialGradient></defs>
+          <rect x="74" y="42" width="492" height="248" rx="22" fill="rgba(5,13,28,.82)" stroke="rgba(143,217,255,.34)" stroke-width="1.5"/>
+          <rect x="98" y="67" width="134" height="134" rx="14" fill="#050914" stroke="rgba(143,217,255,.2)"/>
+          <g fill="rgba(225,238,255,.7)"><circle cx="127" cy="91" r="2"/><circle cx="198" cy="108" r="1.5"/><circle cx="151" cy="166" r="2"/></g><circle cx="169" cy="132" r="15" fill="url(#recordStar)"/>
+          <g fill="rgba(242,245,255,.42)" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.2"><text x="267" y="84">TARGET</text><text x="267" y="123">MEASUREMENT</text><text x="267" y="162">OBSERVER</text><text x="267" y="201">QUALITY</text></g>
+          <g fill="#F2F5FF" font-family="Geist,sans-serif" font-size="15"><text x="267" y="103">SS CYGNI</text><text x="267" y="142">11.4 MAG ± 0.03</text><text x="267" y="181">YOUR NAME</text><text x="267" y="220">VERIFIED</text></g>
+          <circle cx="520" cy="208" r="22" fill="rgba(95,227,155,.12)" stroke="#5FE39B"/><path d="M509 208l8 8 15-18" fill="none" stroke="#5FE39B" stroke-width="3"/>
+          <path d="M99 240H541" stroke="rgba(143,217,255,.18)"/><text x="99" y="264" fill="#8FD9FF" font-family="Geist,sans-serif" font-size="10" letter-spacing="1.4">READY FOR SCIENTIFIC ARCHIVE</text>
+        </svg>
+        <div class="v-title">Your name stays with the data.<small>Target · measurement · uncertainty · observer · quality status</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
-          <span class="kicker">What you get</span>
-          <h2>Your name, on real science.</h2>
+          <span class="kicker">TTN data pipeline</span>
+          <h2>Your telescope. Your data. Real science.</h2>
           <p class="lead">Every measurement your telescope makes is checked and filed into a 100-year-old scientific database that professional astronomers — and even NASA missions — actually use. Your name is attached to each one.</p>
           <p>This isn't a game or clicking on photos. It's real data that real research is built on. This galaxy, for instance, is a place supernovae keep appearing — exactly what a network like ours catches first.</p>
           <p style="margin-top:14px; font-size:14px; color:var(--ink-3); line-height:1.5">We submit every observation to the <b style="color:var(--ink-2); font-weight:500">American Association of Variable Star Observers</b> (AAVSO) — the 100-year-old archive that NASA, ESA, and professional observatories depend on.</p>
@@ -367,11 +503,24 @@
       </div></div>
     </section>
 
-    <!-- 7 — who it's for -->
+    <!-- 6 — who it's for -->
     <section class="stop" id="forwho" data-ra="10.68" data-dec="41.27" data-fov="3.2" data-side="-1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>06</b> Astronomy without barriers</span>
+      <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
+        <span class="v-kicker">Observing, without going outside</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <path d="M52 258V132L181 48L310 132V258Z" fill="rgba(8,16,31,.72)" stroke="rgba(143,217,255,.28)" stroke-width="1.5"/>
+          <rect x="105" y="157" width="88" height="101" rx="4" fill="rgba(143,217,255,.08)" stroke="rgba(143,217,255,.22)"/><path d="M149 157v101M105 207h88" stroke="rgba(143,217,255,.18)"/>
+          <path d="M115 222c20-18 47-18 67 0" fill="none" stroke="#DFF5FF" stroke-width="3"/><circle cx="149" cy="191" r="9" fill="#FFC07A" opacity=".7"/>
+          <g transform="translate(405 185)" fill="none" stroke="#DFF5FF" stroke-width="2.2" stroke-linecap="round"><path d="M0 58l32-52 55-30M28 12l44 38M-3 70h99M22 70L7 98M69 70l15 28M87-24l14-8"/></g>
+          <path d="M306 132C350 89 405 58 471 54" fill="none" stroke="#8FD9FF" stroke-width="1.5" stroke-dasharray="5 7"/>
+          <path d="M505 51a31 31 0 1 1-26-45 36 36 0 0 0 26 45Z" fill="#DFF5FF" opacity=".85"/>
+          <g fill="#8FD9FF"><circle cx="357" cy="73" r="2"/><circle cx="415" cy="38" r="2"/><circle cx="565" cy="91" r="2"/></g>
+        </svg>
+        <div class="v-title">Curiosity stays awake.<small>You stay warm, safe, rested, and part of the observation</small></div>
+      </div><div class="wrap split">
         <div class="panel glass">
-          <h2>Built for the people astronomy left out.</h2>
+          <span class="kicker">A wider network</span><h2 style="margin-top:16px">Built for the people astronomy left out.</h2>
           <p class="lead">No driving to a dark field at 2am. No heavy gear, no cold nights outside, no expertise. The telescope does the part that used to demand a healthy body and a free schedule.</p>
           <p>If you live with a disability, a chronic illness, or just a full life, this was made for you. You bring the curiosity; the network does the rest. (That's our neighbor galaxy, Andromeda — your telescope can reach it too.)</p>
           <ul style="margin-top:18px; list-style:none; display:flex; flex-direction:column; gap:10px; font-size:14.5px; color:var(--ink-2); line-height:1.45">
@@ -385,12 +534,22 @@
       </div></div>
     </section>
 
-    <!-- 8 — founding -->
+    <!-- 7 — founding -->
     <section class="stop" id="founding" data-ra="56.75" data-dec="24.11" data-fov="1.9" data-side="1" data-time="">
-      <div class="sticky"><div class="wrap split">
+      <span class="section-index"><b>07</b> Founding the network</span>
+      <div class="sticky"><div class="chapter-visual" aria-hidden="true">
+        <span class="v-kicker">The founding network · still taking shape</span>
+        <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+          <g fill="none" stroke="rgba(255,192,122,.28)" stroke-width="1.5"><path d="M88 197L190 92L306 168L426 72L535 178L451 262L306 168L214 278L88 197"/><path d="M190 92L426 72M214 278L451 262"/></g>
+          <g fill="#FFC07A" opacity=".85"><circle cx="88" cy="197" r="5"/><circle cx="190" cy="92" r="5"/><circle cx="306" cy="168" r="5"/><circle cx="426" cy="72" r="5"/><circle cx="535" cy="178" r="5"/><circle cx="451" cy="262" r="5"/><circle cx="214" cy="278" r="5"/></g>
+          <circle cx="586" cy="95" r="16" fill="rgba(255,192,122,.05)" stroke="#FFC07A" stroke-width="1.5" stroke-dasharray="4 5"/><path d="M535 178L577 108" stroke="#FFC07A" stroke-width="1.5" stroke-dasharray="4 6"/>
+          <text x="543" y="65" fill="#FFC07A" font-family="Geist,sans-serif" font-size="11" letter-spacing="1.4">NEXT FOUNDING NODE</text>
+        </svg>
+        <div class="v-title">The shape is not finished.<small>Founding nodes define the network before the network defines itself</small></div>
+      </div><div class="wrap split">
         <div></div>
         <div class="panel glass">
-          <h2>Join us in our mission.</h2>
+          <span class="kicker">Founding nodes</span><h2 style="margin-top:16px">Don't just join TTN. Help define it.</h2>
           <p class="lead">We're just getting started. The people who join now are the founding network — your name goes on the founding charter, and your telescope helps shape how the whole thing works.</p>
           <p>There are only a few of us right now. That's the point. You'd be one of the people who were there at the beginning, before anyone had heard of this.</p>
           <div class="readout" style="margin-top:22px"><span class="live cy"></span> A few founders on watch right now</div>
@@ -398,11 +557,11 @@
       </div></div>
     </section>
 
-    <!-- 9 — join -->
+    <!-- 8 — join -->
     <section class="stop center" id="join" data-ra="266.4" data-dec="-29.0" data-fov="11" data-side="0" data-time="">
       <div class="sticky"><div class="wrap">
-        <span class="kicker">Ready to start?</span>
-        <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Take your founding spot.</h1>
+        <span class="kicker">The sky is on. Are you?</span>
+        <h1 style="font-size:clamp(42px,6vw,78px); margin-top:18px; letter-spacing:-.045em">Become a TTN node.</h1>
         <p class="sub" style="margin:24px auto 0; max-width:46ch; font-size:19px; color:var(--ink-2)">Create a member account, get your activation code, and connect your first telescope. If you need gear or funding help, tell us — the founding network is meant to include people who were left out of astronomy before.</p>
         <div class="cta-row" style="justify-content:center; margin-top:34px">
           <a class="btn btn-g" href="https://api.thetelescope.net/download/node-agent/macos"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2.01.77-3.28.79-1.35.02-2.37-1.24-3.2-2.48C4.1 16.69 3.4 11.44 4.7 8.4c.65-1.52 1.82-2.48 3.08-2.5 1.21-.02 2.36.8 3.1.8.75 0 2.15-1.03 3.63-.88.62.03 2.35.25 3.46 1.9-3.05 1.88-2.56 5.72.6 6.8.03.01.06.01.09.02zM13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg> Download for macOS</a>
@@ -425,8 +584,8 @@
   var nodeData=[
     [0.05,.04,.30],[0.20,.08,.44],[0.38,.06,.40],[0.50,.05,.36],[0.60,.07,.42],[0.78,.09,.46],[0.92,.05,.32],
     [0.13,.24,.70],[0.32,.21,.65],[0.50,.19,.62],[0.70,.22,.68],[0.87,.25,.73],
-    [0.08,.48,1.25],[0.28,.55,1.55],[0.78,.55,1.60],[0.93,.50,1.30],
-    [0.53,.68,3.80]
+    [0.08,.48,1.10],[0.28,.55,1.32],[0.78,.55,1.38],[0.93,.50,1.12],
+    [0.53,.68,2.55]
   ];
   var phases=nodeData.map(function(){return{beam:Math.random()*Math.PI*2,led:Math.random()*Math.PI*2};});
   var starField=(function(){
@@ -503,45 +662,47 @@
 
   function drawNode(x,y,s,t,ph,hover){
     var burst=burstUntil>0&&t<burstUntil?Math.sin(Math.max(0,(t-(burstUntil-0.9)))*Math.PI/0.9)*1.1:0;
-    var bA=(0.52+0.32*Math.sin(t*.72+ph.beam))*(1+(hover||0)*0.6)*(1+burst), lA=0.88+0.12*Math.sin(t*1.5+ph.led);
-    // slow sky-tracking tilt — each telescope drifts a few degrees over time
-    var tilt=Math.sin(t*0.04+ph.beam)*0.06;
-    ex.save(); ex.translate(x,y); ex.rotate(tilt); ex.scale(s,s);
-    var bh=280;
-    // core beam — wide, vivid
-    var bg=ex.createLinearGradient(0,-28,0,-bh);
-    bg.addColorStop(0,'rgba(160,224,255,'+bA.toFixed(2)+')');
-    bg.addColorStop(.18,'rgba(143,217,255,'+(bA*.58).toFixed(2)+')');
-    bg.addColorStop(.60,'rgba(130,210,255,'+(bA*.18).toFixed(2)+')');
-    bg.addColorStop(1,'rgba(130,210,255,0)');
-    ex.fillStyle=bg; ex.beginPath(); ex.moveTo(-4,-26); ex.lineTo(4,-26); ex.lineTo(17,-bh); ex.lineTo(-17,-bh); ex.closePath(); ex.fill();
-    // outer bloom
-    var bg2=ex.createLinearGradient(0,-26,0,-bh*.52);
-    bg2.addColorStop(0,'rgba(143,217,255,'+(bA*.24).toFixed(2)+')'); bg2.addColorStop(1,'rgba(143,217,255,0)');
-    ex.fillStyle=bg2; ex.beginPath(); ex.moveTo(-15,-26); ex.lineTo(15,-26); ex.lineTo(50,-bh*.52); ex.lineTo(-50,-bh*.52); ex.closePath(); ex.fill();
-    // lens flare at objective
-    ex.fillStyle='rgba(200,235,255,'+(bA*.60).toFixed(2)+')'; ex.beginPath(); ex.arc(0,-15,7.5,0,6.28); ex.fill();
-    // ground glow (warm) + shadow
-    ex.fillStyle='rgba(255,150,50,.12)'; ex.beginPath(); ex.ellipse(0,16,28,6,0,0,6.28); ex.fill();
-    ex.fillStyle='rgba(0,0,0,.68)'; ex.beginPath(); ex.ellipse(0,18,16,4,0,0,6.28); ex.fill();
-    // tripod
-    ex.strokeStyle='#0c1018'; ex.lineWidth=3.2; ex.lineCap='round';
-    ex.beginPath(); ex.moveTo(-6,0); ex.lineTo(-14,18); ex.moveTo(6,0); ex.lineTo(14,18); ex.moveTo(0,2); ex.lineTo(0,19); ex.stroke();
-    // body
-    ex.fillStyle='#0c1018';
-    ex.beginPath(); ex.moveTo(-7,2); ex.lineTo(-7,-18); ex.quadraticCurveTo(-7,-26,0,-26); ex.quadraticCurveTo(7,-26,7,-18); ex.lineTo(7,2); ex.closePath(); ex.fill();
-    // cool blue rim (left — sky light)
-    ex.strokeStyle='rgba(160,210,255,.72)'; ex.lineWidth=1.4;
-    ex.beginPath(); ex.moveTo(-7,2); ex.lineTo(-7,-18); ex.quadraticCurveTo(-7,-26,0,-26); ex.stroke();
-    // warm amber rim (right — horizon glow)
-    ex.strokeStyle='rgba(255,155,55,.55)'; ex.lineWidth=1.2;
-    ex.beginPath(); ex.moveTo(7,2); ex.lineTo(7,-18); ex.quadraticCurveTo(7,-26,0,-26); ex.stroke();
-    // lens
-    ex.fillStyle='#081020'; ex.beginPath(); ex.arc(0,-15,5,0,6.28); ex.fill();
-    ex.fillStyle='rgba(180,228,255,.88)'; ex.beginPath(); ex.arc(-1.6,-16.8,2.2,0,6.28); ex.fill();
-    // LED — bright, pulsing
-    ex.fillStyle='rgba(95,240,155,'+(0.44*lA).toFixed(2)+')'; ex.beginPath(); ex.arc(4.8,-4,5,0,6.28); ex.fill();
-    ex.fillStyle='rgba(160,255,210,'+lA.toFixed(2)+')'; ex.beginPath(); ex.arc(4.8,-4,(1.9+.3*lA),0,6.28); ex.fill();
+    var bA=(.10+.035*Math.sin(t*.72+ph.beam))*(1+(hover||0)*1.1)*(1+burst*.7), lA=.82+.18*Math.sin(t*1.5+ph.led);
+    var track=Math.sin(t*.035+ph.beam)*.055, tubeAngle=-.72+track;
+    ex.save(); ex.translate(x,y); ex.scale(s,s);
+    // Contact shadow and a faint pool from the mount's status light.
+    ex.fillStyle='rgba(0,0,0,.78)'; ex.beginPath(); ex.ellipse(0,17,25,5.5,0,0,6.28); ex.fill();
+    var pool=ex.createRadialGradient(3,9,0,3,9,24);
+    pool.addColorStop(0,'rgba(95,227,155,.10)');pool.addColorStop(1,'rgba(95,227,155,0)');
+    ex.fillStyle=pool;ex.beginPath();ex.ellipse(3,10,24,8,0,0,6.28);ex.fill();
+    // A restrained field-of-view cone: telescopes collect light; they do not throw searchlights.
+    ex.save();ex.translate(-2,-16);ex.rotate(tubeAngle);
+    var cone=ex.createLinearGradient(-10,0,-190,0);
+    cone.addColorStop(0,'rgba(143,217,255,'+bA.toFixed(3)+')');cone.addColorStop(1,'rgba(143,217,255,0)');
+    ex.fillStyle=cone;ex.beginPath();ex.moveTo(-9,-4);ex.lineTo(-9,4);ex.lineTo(-190,12);ex.lineTo(-190,-12);ex.closePath();ex.fill();
+    // Optical tube: layered graphite cylinder, objective cell and dew shield.
+    var tg=ex.createLinearGradient(0,-6,0,6);tg.addColorStop(0,'#263343');tg.addColorStop(.45,'#101722');tg.addColorStop(1,'#05080d');
+    ex.fillStyle=tg;ex.beginPath();ex.roundRect(-31,-6,44,12,4);ex.fill();
+    ex.strokeStyle='rgba(174,207,232,.38)';ex.lineWidth=.8;ex.stroke();
+    ex.fillStyle='#070b11';ex.fillRect(-34,-7,8,14);
+    ex.strokeStyle='rgba(255,255,255,.20)';ex.strokeRect(-34,-7,8,14);
+    var lens=ex.createRadialGradient(-33,-1,1,-33,0,6);
+    lens.addColorStop(0,'#d7f5ff');lens.addColorStop(.28,'#5ca3cb');lens.addColorStop(.7,'#183755');lens.addColorStop(1,'#05090f');
+    ex.fillStyle=lens;ex.beginPath();ex.ellipse(-33,0,3.2,6,0,0,6.28);ex.fill();
+    ex.fillStyle='#111923';ex.fillRect(8,-7,6,14);ex.restore();
+    // Alt-az mount head and fork, with the tube pivot visible.
+    var mg=ex.createLinearGradient(-8,-15,9,5);mg.addColorStop(0,'#314154');mg.addColorStop(.45,'#151e2a');mg.addColorStop(1,'#080c12');
+    ex.fillStyle=mg;ex.beginPath();ex.roundRect(-8,-16,16,22,5);ex.fill();
+    ex.strokeStyle='rgba(160,204,235,.42)';ex.lineWidth=1;ex.stroke();
+    ex.fillStyle='#0a1018';ex.beginPath();ex.arc(0,-15,5,0,6.28);ex.fill();
+    ex.strokeStyle='rgba(184,220,244,.55)';ex.beginPath();ex.arc(0,-15,4,0,6.28);ex.stroke();
+    // Tripod hub, spreader and tapered legs with tiny feet.
+    ex.fillStyle='#111923';ex.beginPath();ex.roundRect(-7,3,14,6,2);ex.fill();
+    ex.strokeStyle='#111923';ex.lineWidth=3.4;ex.lineCap='round';
+    ex.beginPath();ex.moveTo(-4,7);ex.lineTo(-18,20);ex.moveTo(4,7);ex.lineTo(18,20);ex.moveTo(0,8);ex.lineTo(1,22);ex.stroke();
+    ex.strokeStyle='rgba(147,185,211,.38)';ex.lineWidth=.8;
+    ex.beginPath();ex.moveTo(-4,8);ex.lineTo(-17,19);ex.moveTo(4,8);ex.lineTo(17,19);ex.stroke();
+    ex.strokeStyle='#080b10';ex.lineWidth=2.5;ex.beginPath();ex.moveTo(-21,20);ex.lineTo(-15,20);ex.moveTo(15,20);ex.lineTo(21,20);ex.moveTo(-2,22);ex.lineTo(4,22);ex.stroke();
+    // A loose handset/power cable adds scale and keeps the rig from feeling icon-like.
+    ex.strokeStyle='rgba(18,24,31,.9)';ex.lineWidth=1.2;ex.beginPath();ex.moveTo(7,-2);ex.bezierCurveTo(15,3,9,11,15,15);ex.stroke();
+    // Quiet green network indicator.
+    ex.fillStyle='rgba(95,240,155,'+(lA*.18).toFixed(2)+')';ex.beginPath();ex.arc(5,-3,4,0,6.28);ex.fill();
+    ex.fillStyle='rgba(150,255,202,'+lA.toFixed(2)+')';ex.beginPath();ex.arc(5,-3,1.25,0,6.28);ex.fill();
     ex.restore();
   }
 
@@ -636,22 +797,22 @@
     }
     ridge(hz+26,11,1.0,'#110E08','rgba(210,130,46,.16)');
     ridge(hz+80,17,3.4,'#0B0906','rgba(168,100,34,.08)');
-    // node array — all beams on, animated; cursor proximity boosts beam
+    // node array — physical telescope rigs at several depths; cursor proximity reveals activity
     var tipNode=-1;
     nodeData.forEach(function(n,i){
       var nx=n[0]*W, ny=hz+n[1]*gh;
       var dx=mouseX-nx, dy=mouseY-ny;
       var hover=Math.max(0,1-Math.sqrt(dx*dx+dy*dy)/180);
       if(hover>0.5) tipNode=i;
-      // faint ground scatter — each beam leaves a subtle blue smear on the dune in front
-      var bpA=(0.20+0.10*Math.sin(t*.72+phases[i].beam))*(1+(hover||0)*0.4)*Math.min(1,n[2]);
+      // Subtle cool sky reflection under each rig anchors it to the terrain.
+      var bpA=(0.055+0.018*Math.sin(t*.72+phases[i].beam))*(1+(hover||0)*0.6)*Math.min(1,n[2]);
       var bgnd=ex.createRadialGradient(nx,ny+n[2]*8,0,nx,ny+n[2]*8,n[2]*55);
       bgnd.addColorStop(0,'rgba(130,200,255,'+bpA.toFixed(3)+')'); bgnd.addColorStop(1,'rgba(130,200,255,0)');
       ex.fillStyle=bgnd; ex.beginPath(); ex.ellipse(nx,ny+n[2]*8,n[2]*28,n[2]*10,0,0,6.28); ex.fill();
       drawNode(nx,ny,n[2],t,phases[i],hover);
     });
-    // acquisition scan line — appears on section 4 (what it catches) to suggest imaging
-    if(curSection===4){
+    // acquisition scan line — appears on section 5 (what it catches) to suggest imaging
+    if(curSection===5){
       var scanY=hz*0.5+Math.sin(t*0.55)*hz*0.35;
       var sl=ex.createLinearGradient(0,scanY-1,0,scanY+1);
       sl.addColorStop(0,'rgba(143,217,255,0)'); sl.addColorStop(.5,'rgba(143,217,255,0.12)'); sl.addColorStop(1,'rgba(143,217,255,0)');
@@ -699,18 +860,15 @@
         var cap=document.getElementById('earthcap');
         if(cap) cap.innerHTML='<span class="l"></span> Autonomous node array \xb7 on watch \xb7 '+(s.nodes_online||0)+' online';
         var liveCount=document.getElementById('live-count');
-        if(liveCount) liveCount.textContent=(s.nodes_online||7)+' members';
+        if(liveCount) liveCount.textContent=s.nodes_online?'Founding nodes online':'Founding network';
         var statNodes=document.getElementById('stat-nodes');
-        if(statNodes) statNodes.textContent=s.nodes_total||7;
+        if(statNodes) statNodes.textContent='Founding';
       }).catch(function(){});
     fetch(API+'/api/v1/site/config',{mode:'cors'})
       .then(function(r){return r.ok?r.json():null;}).then(function(c){
         if(!c) return;
-        var n=c.member_count||7;
         var cnt=document.getElementById('founding-count');
-        if(cnt) cnt.innerHTML=n+'<small>joined</small>';
-        var fill=document.getElementById('founding-fill');
-        if(fill) fill.style.width=Math.min(100,n*4)+'%';
+        if(cnt) cnt.innerHTML='Founding<small>nodes</small>';
       }).catch(function(){});
   })();
 
@@ -799,11 +957,6 @@
         A.source(325.68,43.59,{name:'SS Cygni — erupting now'}),
         A.source(210.80,54.35,{name:'a galaxy where stars explode'})
       ]);
-      // the founding grid — node markers scattered across the Cygnus home field
-      var grid=A.catalog({name:'grid', shape:'square', sourceSize:11, color:cy, displayLabel:false});
-      aladin.addCatalog(grid);
-      var pts=[[303.2,41.6],[307.8,39.4],[305.1,42.7],[308.9,41.9],[302.4,38.7],[306.6,40.2],[304.0,39.0]];
-      grid.addSources(pts.map(function(p){return A.source(p[0],p[1],{});}));
     }catch(e){}
   }
 
@@ -822,15 +975,47 @@
     var cur={ra:stops[0].cra,dec:stops[0].cdec,fov:stops[0].fov};
     var tgt={ra:cur.ra,dec:cur.dec,fov:cur.fov};
     var activeSkySection=-1;
+    var skyMotion=0;
+    function shortestRaDelta(from,to){
+      var d=(to-from)%360;
+      if(d>180)d-=360;
+      if(d<-180)d+=360;
+      return d;
+    }
+    function moveSkySmoothly(sky,ra,dec,fov){
+      cancelAnimationFrame(skyMotion);
+      var from={ra:cur.ra,dec:cur.dec,fov:cur.fov};
+      var dra=shortestRaDelta(from.ra,ra), started=performance.now(), duration=1800, lastPaint=0;
+      function frame(now){
+        var p=Math.min(1,(now-started)/duration);
+        var e=p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
+        cur.ra=(from.ra+dra*e+360)%360;
+        cur.dec=lerp(from.dec,dec,e);
+        // Interpolate zoom logarithmically so wide and narrow fields feel equally fluid.
+        cur.fov=from.fov*Math.pow(fov/from.fov,e);
+        if(now-lastPaint>30||p===1){
+          sky.gotoRaDec(cur.ra,cur.dec);
+          sky.setFoV(cur.fov);
+          lastPaint=now;
+        }
+        if(p<1) skyMotion=requestAnimationFrame(frame);
+      }
+      skyMotion=requestAnimationFrame(frame);
+    }
     function applySkySection(i, force){
       var a=stops[i], sky=aladinInstance;
       tgt.ra=a.cra; tgt.dec=a.cdec; tgt.fov=a.fov;
-      cur.ra=tgt.ra; cur.dec=tgt.dec; cur.fov=tgt.fov;
       if(sky && (force || i!==activeSkySection)){
-        sky.gotoRaDec(tgt.ra, tgt.dec);
-        // Aladin Lite v3 spells this setFoV (capital V). Calling the old casing
-        // throws on the first scroll update and leaves the tour view frozen.
-        sky.setFoV(tgt.fov);
+        if(force || activeSkySection<0){
+          cancelAnimationFrame(skyMotion);
+          cur.ra=tgt.ra; cur.dec=tgt.dec; cur.fov=tgt.fov;
+          sky.gotoRaDec(cur.ra,cur.dec);
+          sky.setFoV(cur.fov);
+        }else{
+          moveSkySmoothly(sky,tgt.ra,tgt.dec,tgt.fov);
+        }
+      }else if(!sky){
+        cur.ra=tgt.ra; cur.dec=tgt.dec; cur.fov=tgt.fov;
       }
       activeSkySection=i;
       window.__tourState = {section:i, ra:tgt.ra, dec:tgt.dec, fov:tgt.fov, aladinActive:!!sky};
@@ -883,7 +1068,9 @@
     if(typeof A==='undefined' || !A.init){ fallbackToEarth(); return; }   // script failed to load
     A.init.then(function(){
       var aladin=A.aladin('#sky', {
-        survey: MOBILE ? 'P/DSS2/red' : 'P/DSS2/color',
+        // Use one catalog-backed survey on every viewport. The former mobile-only
+        // P/DSS2/red alias is no longer a valid HiPS endpoint and left the sky blank.
+        survey:'P/DSS2/color',
         fov:stops[0].fov, target:stops[0].cra+' '+stops[0].dec, cooFrame:'ICRS',
         showReticle:false, showZoomControl:false, showFullscreenControl:false, showLayersControl:false,
         showGotoControl:false, showShareControl:false, showSimbadPointerControl:false, showCooGrid:false,
