@@ -11,7 +11,7 @@
 
 ## The Mission
 
-The Telescope Net is an accessible astronomy charity that operates a distributed,
+The Telescope Net is an astronomy charity that operates a distributed,
 global network of donated telescopes to observe targets professional observatories
 miss. Seestar smart telescope owners donate their telescope's nights to the network.
 Our pipeline automatically schedules observations of scientifically valuable targets,
@@ -25,9 +25,9 @@ or significant cost.
 ## The Problem
 
 Traditional amateur astronomy requires carrying heavy equipment to dark locations,
-standing in the cold for hours, operating fine controls with precision, looking through
-an eyepiece with functional vision, and traveling to sites inaccessible to wheelchairs.
-Every one of those requirements excludes someone.
+standing in the cold for hours, operating fine controls with precision, and living
+somewhere with clear, dark skies. Most people don't have the time, money, equipment,
+or location to do any of that.
 
 Existing citizen science programs offer classifications of existing images — clicking on
 galaxies, identifying craters. This is not astronomy. Contributors are not named on
@@ -35,7 +35,7 @@ scientific outputs. They do not collect original data. They are not astronomers.
 
 Professional telescope networks like Las Cumbres Observatory are inaccessible to the
 public. Consumer smart telescope networks like Unistellar are closed platforms with
-proprietary hardware costing thousands of dollars and no accessibility focus.
+proprietary hardware costing thousands of dollars.
 
 No existing service addresses this combination of barriers.
 
@@ -46,10 +46,10 @@ No existing service addresses this combination of barriers.
 The Telescope Net is a three-part system:
 
 1. A distributed network of donated Seestar telescopes operating autonomously overnight
-2. An AI-driven pipeline that decides what to observe, processes the data, and submits
+2. An AI-supported pipeline that decides what to observe, processes the data, and submits
    it to science
-3. A fully accessible mobile app that gives anyone — regardless of physical ability —
-   a genuine connection to the science their telescope produces
+3. An easy-to-use mobile app that gives anyone a genuine connection to the science
+   their telescope produces
 
 Members contribute their telescope's nights to the network, which schedules the
 observations, processes the data, and submits it to AAVSO under the member's name.
@@ -73,7 +73,6 @@ Establishes the mission in one sentence and directs each visitor type to their p
   scheduling, real AAVSO submissions) with a live counter of active nodes and
   recent AAVSO submissions from the network.
 - Three clear entry points: Join the Network / See the Science / Support the Mission.
-- Accessibility statement prominently placed (not buried in a footer).
 
 ---
 
@@ -190,16 +189,14 @@ Fields: STARID, DATE, MAGNITUDE, MAGERR, FILTER, TRANSFORMED, MTYPE,
 ### Page: The App
 
 The mobile app (Flutter, iOS + Android + PWA) is the primary member experience.
-It is designed from the ground up to run unattended overnight — no expertise, no dark-field trips, just
-scratch around the question: how do disabled people experience astronomy and what do
-they need?
+It is designed from the ground up to run unattended overnight — no expertise, no
+dark-field trips required.
 
 **Design principles:**
 1. **Autonomous-first** — every decision starts with whether the network can run without user intervention
 2. **Multiple modalities** — every piece of information available as visual, audio,
    haptic, and text
-3. **No required precision** — every interaction achievable with one finger, voice
-   command, single switch, or eye gaze
+3. **Simple interactions** — every interaction achievable with one finger or a single tap
 4. **Patience** — no time limits, no auto-advancing content, user controls the pace
 5. **Plain language** — jargon defined when used, reading level adjustable, audio
    available for all text
@@ -222,22 +219,13 @@ links to ATels and papers that used the member's data, achievements system
 - Night Owl (500 observations)
 - Supernova Hunter (observed 3 supernovae)
 
-**Accessibility feature checklist:**
+**App polish features:**
 
-*Visual:* Full VoiceOver (iOS) and TalkBack (Android) support; dynamic text sizing;
-high contrast mode; reduced motion mode; color-blind safe palette; alt text on all
-images; text/table alternatives for all charts; dark mode; OpenDyslexic font option.
-
-*Motor:* Single-tap navigation; switch control; voice control with unique labels on all
-interactive elements; eye gaze compatible (44×44pt minimum touch targets); no time-limited
-interactions; no required motion gestures.
-
-*Cognitive:* Consistent navigation structure; plain language throughout; reading level
-selector (child / standard / expert); jargon definitions on tap; no unexpected
-interruptions; reduce visual complexity mode; no auto-playing content.
-
-*Hearing:* No audio-only information; all sounds have visual equivalents; captions on
-all video; vibration alternatives for audio alerts.
+Full VoiceOver (iOS) and TalkBack (Android) support; dynamic text sizing; high
+contrast mode; reduced motion mode; color-blind safe palette; alt text on all images;
+text/table alternatives for all charts; dark mode; captions on all video; consistent
+navigation structure; plain language throughout; jargon definitions on tap; no
+unexpected interruptions; no auto-playing content.
 
 *Novel features:*
 - Audio descriptions of all data (three depth levels)
@@ -245,7 +233,6 @@ all video; vibration alternatives for audio alerts.
 - Haptic light curves
 - Spatial audio sky map (hold phone up, hear what's overhead)
 - Patience mode (no rushing, ever)
-- Proxy observation support (caregiver setup, member receives results)
 
 **Tech stack:** Flutter/Dart; fl_chart (light curves); flutter_tts (audio descriptions);
 vibration package (haptic patterns); sensors_plus (accelerometer for sky map);
@@ -285,7 +272,7 @@ CTA: **Download Node Agent** → triggers installer download + account creation 
 
 Every free node gets a Node Activation Code (e.g., BS-2026-XYZ) that auto-registers
 on first boot and ties the node to the member's account. Delivered digitally at signup;
-optionally printed on a physical card for members who prefer it (accessibility option).
+optionally printed on a physical card for members who prefer it.
 
 ---
 
@@ -351,7 +338,7 @@ layer — the Node Agent works identically without it.
 - Matte black vinyl wrap with The Telescope Net logo + QR plate
 - Custom boot splash and Node Agent branding on Pi builds
 - Premium constellation-themed packaging for gifted/loaned units
-- Activation card (large print + audio QR) included in all shipped kits
+- Activation card included in all shipped kits
 
 ---
 
@@ -391,11 +378,7 @@ The organization, founding story, and partner logos.
 | Partner | Ask | Offer |
 |---------|-----|-------|
 | ZWO | Official API docs, telescope donations for loan program, co-marketing | Marketing story ("Seestar does real science"), community of engaged users |
-| AAVSO | Multi-node observer code, programmatic submission API, possible fiscal sponsorship | Significant submission volume increase, new demographics, accessible astronomy alignment |
-| American Foundation for the Blind | User testing pool, community access | Genuine astronomy access, novel accessible technology |
-| National Federation of the Blind | Same | Same |
-| Christopher & Dana Reeve Foundation | Co-grant applications, endorsement | Named participation in real science |
-| Perkins School for the Blind | Node hosting, student participants | Free network access, curriculum materials, student names on scientific outputs |
+| AAVSO | Multi-node observer code, programmatic submission API, possible fiscal sponsorship | Significant submission volume increase, new demographics |
 
 ---
 
@@ -409,9 +392,6 @@ Grant-oriented funding model with individual donation option.
 - Simons Foundation (astronomy + education)
 - Chan Zuckerberg Initiative (science)
 - Google.org
-- Apple accessibility grants
-- American Foundation for the Blind
-- Christopher & Dana Reeve Foundation
 - Astronomical Society of the Pacific
 
 **In-kind donation targets:**
@@ -576,7 +556,7 @@ Goal: Build the real multi-node system.
 - [ ] Service management (Windows Service / launchd / systemd)
 - [ ] Member account system (user table, login, node association)
 - [ ] Night summary generation and push notification dispatch
-- [ ] First Flutter app (basic dashboard, accessibility-first)
+- [ ] First Flutter app (basic dashboard)
 - [ ] 3–5 beta nodes running
 - [ ] First multi-node coordinated observation
 - [ ] Public read API endpoints live
@@ -605,7 +585,7 @@ Goal: 200 nodes, recognised scientific instrument.
 - [ ] 100 → 200 active nodes, 25+ countries
 - [ ] 10,000+ AAVSO submissions
 - [ ] Network paper submitted
-- [ ] Disabled astronomer's data cited in peer-reviewed paper
+- [ ] Network member's data cited in peer-reviewed paper
 - [ ] Telescope loan program active (10+ scopes loaned)
 - [ ] LIGO / gravitational wave follow-up participation
 - [ ] Tier 2 filtered nodes introduced

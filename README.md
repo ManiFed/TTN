@@ -5,9 +5,9 @@ scientifically valuable targets, processes the data into calibrated photometry, 
 submits it to AAVSO under the contributor's name. Members do real astronomy — no
 manual intervention required.
 
-> **The Telescope Net** is an accessible astronomy charity that gives people with
-> disabilities access to real telescope time. AI schedules variable-star observations,
-> processes photometry, and submits to AAVSO on each member's behalf.
+> **The Telescope Net** is an astronomy charity that gives anyone access to real
+> telescope time. Automated software, with AI support, schedules variable-star
+> observations, processes photometry, and submits to AAVSO on each member's behalf.
 
 ---
 
