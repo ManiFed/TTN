@@ -24,9 +24,12 @@ class AppConfig {
   static String get apiBase {
     if (_definedApiBase.isNotEmpty) return _definedApiBase;
     if (_legacyDefinedApiBase.isNotEmpty) return _legacyDefinedApiBase;
-    final origin = Uri.base.origin;
-    if (origin.isEmpty || origin == 'null') return _productionBase;
-    return origin;
+    // Uri.origin throws for non-http(s) schemes instead of returning empty,
+    // and native builds report Uri.base as a file:// URI — check the scheme
+    // first rather than relying on a caught/empty origin.
+    final base = Uri.base;
+    if (base.scheme != 'http' && base.scheme != 'https') return _productionBase;
+    return base.origin;
   }
 
   static Uri uri(String path, [Map<String, dynamic>? query]) {
