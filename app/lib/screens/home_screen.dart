@@ -142,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const LiveDot(color: BSTheme.accent, size: 7),
                 const SizedBox(width: 10),
                 Text(
-                  'TELESCOPE // ${_tabs[_index].title.toUpperCase()}',
+                  'TTN // ${_tabs[_index].title.toUpperCase()}',
                   style: const TextStyle(
                     fontFamily: 'Geist',
                     fontSize: 14,
