@@ -2,27 +2,76 @@ name: Release macOS installer
 
 # Builds the node agent + the Flutter member app together and publishes the
 # combined installer to GitHub Releases. This is the only path that produces
-# a public download — running it on every version tag means the installer
-# linked from tour.html / cloud/server.py can never drift out of sync with
-# the app/cloud source the way the manually-built v1.0.4 release did.
+# a public download.
+#
+# Runs automatically on every push to main that touches app/src/build code --
+# NOT just on manually pushed tags. A hotfix session that fixed real bugs but
+# forgot to also cut a release tag is exactly how a member re-downloaded the
+# installer and got yesterday's build with none of the fixes: the source was
+# right, nobody told the release pipeline to run. Auto-incrementing removes
+# the "don't forget to tag" step entirely; workflow_dispatch/manual tags are
+# still supported for an explicit version bump (e.g. a minor/major bump).
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths:
+      - "app/**"
+      - "src/**"
+      - "build/**"
+      - "requirements.txt"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to release (e.g. v1.0.5)"
-        required: true
+        description: "Version tag to release (e.g. v1.1.0). Leave blank to auto-bump the patch version."
+        required: false
 
 permissions:
   contents: write
 
 jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve release tag
+        id: resolve
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            if [[ -n "${{ inputs.tag }}" ]]; then
+              TAG="${{ inputs.tag }}"
+            else
+              LATEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+              LATEST=${LATEST:-v0.0.0}
+              IFS='.' read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+              TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
+            # Idempotent: covers both auto-bump and an explicit
+            # workflow_dispatch tag input that doesn't exist yet.
+            if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+              git tag "$TAG"
+              git push origin "$TAG"
+            fi
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
   node-agent-macos:
+    needs: resolve-version
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -38,18 +87,12 @@ jobs:
           if-no-files-found: error
 
   flutter-macos:
+    needs: resolve-version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve app version
-        id: ver
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.32.4'
@@ -87,7 +130,7 @@ jobs:
         run: |
           flutter build macos --release \
             --dart-define=API_BASE=https://api.thetelescope.net \
-            --dart-define=APP_VERSION=${{ steps.ver.outputs.version }}
+            --dart-define=APP_VERSION=${{ needs.resolve-version.outputs.version }}
       - name: Stage macOS .app
         run: |
           SRC=""
@@ -112,20 +155,12 @@ jobs:
           if-no-files-found: error
 
   assemble-and-release:
-    needs: [node-agent-macos, flutter-macos]
+    needs: [resolve-version, node-agent-macos, flutter-macos]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve release tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           name: node-agent-macos
@@ -136,7 +171,7 @@ jobs:
           path: dist
       - name: Assemble .pkg installer
         env:
-          VERSION: ${{ steps.tag.outputs.version }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           chmod +x dist/TelescopeNetNode
           unzip -o dist/TelescopeNet-macos.app.zip -d dist
@@ -146,8 +181,8 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.tag.outputs.version }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
         run: |
           gh release create "${TAG}" \
             "dist/TelescopeNetNode-${VERSION}-macOS.pkg" \
