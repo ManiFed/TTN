@@ -186,6 +186,25 @@ _sched_state: dict = {
     "items":           [],   # full observation list for the current run
 }
 
+# ── Never-idle state: the plan's contingency alternates + starvation flag ──────
+# Alternates are the cloud plan's contingency ladder — pre-valued fallback
+# observations the node runs locally (no cloud round-trip) to fill schedule
+# gaps, failed items, and leftover dark time after the plan is exhausted.
+_alternates_lock = threading.Lock()
+_alternates: list[dict] = []           # validated, ordered by expected_info
+_alternates_used: set[int] = set()     # indexes into _alternates already run
+# Set when plan + alternates are exhausted with dark time remaining; reported
+# in the heartbeat detail so cloud reflow can top this node up. Cleared on any
+# new plan or interrupt.
+_work_starved = threading.Event()
+# Snapshot of the un-run remainder of a cloud schedule cancelled by a safety
+# trip, so the unsafe→safe transition can resume it without waiting for the
+# next plan poll: {"items": [...], "at": monotonic}.
+_resume_lock = threading.Lock()
+_resume_after_safe: Optional[dict] = None
+# Slew + settle margin assumed when deciding if an alternate fits a gap.
+_GAP_FILL_MARGIN_S = 120.0
+
 # ── Image history ─────────────────────────────────────────────────────────────
 
 _img_history: list[dict] = []          # metadata + thumbnail b64
@@ -345,13 +364,20 @@ _pier_cam_stop  = threading.Event()
 
 
 def _capture_image(fits_path: Optional[str] = None,
-                   exp_dur: Optional[float] = None) -> Optional[str]:
+                   exp_dur: Optional[float] = None,
+                   target: Optional[str] = None) -> Optional[str]:
     """Download the last camera image, store it globally, and return its b64.
 
     If fits_path is provided, also write a FITS file with the raw (un-stretched)
     pixel data and whatever header fields the camera exposes.  This is used by
     the schedule runner so the photometry pipeline has a science-grade file to
     work with rather than a display-stretched PNG.
+
+    ``target``, when given, is written to the OBJECT header keyword — this is
+    the only signal run_pipeline() and _frame_has_target() use to identify a
+    targeted exposure vs. an anonymous survey/contributor frame, so a scheduled
+    observation with no OBJECT silently falls through to the survey-only path
+    and never produces a measurement.
     """
     global _last_image_b64
     if _cam is None:
@@ -386,6 +412,8 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdr["NAXIS"]    = 2
                 hdr["NAXIS1"]   = sci.shape[1]
                 hdr["NAXIS2"]   = sci.shape[0]
+                if target:
+                    hdr["OBJECT"] = target
                 # Pull what we can from the camera device
                 if exp_dur is None:
                     with _state_lock:
@@ -932,6 +960,10 @@ def _cloud_state() -> dict:
                 out["plan_item_idx"] = idx
     if out["phase"] == "idle" and not is_dark:
         out["phase"] = "daylight"
+    if _work_starved.is_set() and is_dark:
+        # Cloud reflow's detect_starved requires this explicit flag — an idle
+        # phase alone races between plan items and means nothing.
+        out["detail"] = {"work_starved": True}
     return out
 
 
@@ -1007,16 +1039,19 @@ def _cloud_disconnect_tick() -> None:
         threading.Thread(target=_park, daemon=True, name="cloud-disco-park").start()
 
 
-def _on_cloud_plan(items: list) -> None:
+def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
     """A new observation plan arrived from the cloud.  Validate it with the
     same gate as /api/schedule/run; execute it only when auto_run_plans is on
-    and no schedule is already running."""
+    and no schedule is already running.  The plan's contingency alternates are
+    stored (validated) for local gap/failure/end-of-plan fill."""
     valid, err = _validate_schedule_items(items)
     if err is not None:
         logger.warning("Cloud plan rejected by validator: %s", err)
         _telemetry.event("plan_rejected", severity="error",
                          detail={"reason": err, "items": len(items)})
         return
+    _store_alternates(contingencies or {})
+    _work_starved.clear()
     _telemetry.event("plan_received", severity="info",
                      detail={"items": len(valid)})
     cfg = _load_config()
@@ -1116,6 +1151,7 @@ def _on_cloud_interrupt(item: dict) -> None:
 
     logger.warning("Interrupt queued: %s (%.1fs × %d, time_critical=%s)",
                    name, exp_dur, exp_count, time_critical)
+    _work_starved.clear()   # new work arrived — no longer starved
     _interrupt_queue.put_nowait(sched_item)
 
     if time_critical:
@@ -3376,6 +3412,101 @@ def _sched_cancelled() -> bool:
         return _sched_state["cancelled"]
 
 
+# ── Never-idle: alternates, gap fill, starvation ───────────────────────────────
+
+def _store_alternates(contingencies: dict) -> None:
+    """Validate and stash the plan's contingency ladder. Replaced wholesale on
+    each new plan; invalid alternates are dropped individually."""
+    raw = contingencies.get("alternates") or []
+    kept: list[dict] = []
+    for alt in raw:
+        if not isinstance(alt, dict):
+            continue
+        valid, err = _validate_schedule_items([alt])
+        if err is not None:
+            logger.debug("Alternate %s dropped by validator: %s",
+                         alt.get("target", "?"), err)
+            continue
+        item = valid[0]
+        item["expected_info"] = float(alt.get("expected_info", 0.0) or 0.0)
+        kept.append(item)
+    kept.sort(key=lambda a: -a["expected_info"])
+    with _alternates_lock:
+        _alternates.clear()
+        _alternates.extend(kept)
+        _alternates_used.clear()
+    if kept:
+        logger.info("Stored %d plan alternates for local fill", len(kept))
+
+
+def _estimated_dwell_s(item: dict) -> float:
+    """Estimated wall-clock cost of running an item now: exposures plus a
+    slew/settle margin. time_series items cost their full window."""
+    dur_min = float(item.get("duration_minutes", 0.0) or 0.0)
+    if str(item.get("observation_mode", "")) == "time_series" and dur_min > 0:
+        return dur_min * 60.0 + _GAP_FILL_MARGIN_S
+    exp = float(item.get("expDur", 60) or 60)
+    count = int(item.get("expCount", 1) or 1)
+    return exp * count + _GAP_FILL_MARGIN_S
+
+
+def _pick_gap_filler(alternates: list, gap_s: float, used: set) -> Optional[int]:
+    """Index of the best unused alternate whose estimated dwell fits inside
+    gap_s, or None. Pure — unit-testable without device state."""
+    for i, alt in enumerate(alternates):
+        if i in used:
+            continue
+        if _estimated_dwell_s(alt) <= gap_s:
+            return i
+    return None
+
+
+def _next_alternate(gap_s: Optional[float] = None) -> Optional[dict]:
+    """Pop the best unused alternate (optionally constrained to fit a gap),
+    marking it used. Returns a copy safe to mutate."""
+    with _alternates_lock:
+        if gap_s is None:
+            idx = next((i for i in range(len(_alternates))
+                        if i not in _alternates_used), None)
+        else:
+            idx = _pick_gap_filler(_alternates, gap_s, _alternates_used)
+        if idx is None:
+            return None
+        _alternates_used.add(idx)
+        return dict(_alternates[idx])
+
+
+def _is_dark_now() -> bool:
+    """True when the sun is below the observing threshold (best-effort)."""
+    if _safety_mgr is None:
+        return False
+    try:
+        s = _safety_mgr.status()
+    except Exception:
+        return False
+    sun = s.get("sun_elevation")
+    thr = s.get("dawn_threshold", -18.0)
+    if not isinstance(sun, (int, float)) or not isinstance(thr, (int, float)):
+        return False
+    return sun <= thr
+
+
+def _mark_work_starved() -> None:
+    """Plan + alternates exhausted with dark time left: raise the flag the
+    heartbeat carries so cloud reflow tops this node up within ~1 tick."""
+    if _work_starved.is_set():
+        return
+    _work_starved.set()
+    logger.info("Work-starved: plan and alternates exhausted with dark "
+                "time remaining — signalling cloud for top-up")
+    _telemetry.event("work_starved", severity="info", detail={})
+    if _cloud is not None:
+        try:
+            _cloud.request_heartbeat()
+        except Exception:
+            pass
+
+
 def _start_wait_seconds(start_str: str, now: Optional[time.struct_time] = None) -> float:
     """Seconds to wait before an item's HH:MM local start time.
 
@@ -3541,7 +3672,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                     duration=exp_dur, light=True,
                     cancel_check=lambda: _sched_cancelled() or _expose_cancel.is_set(),
                 )
-                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur)
+                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur, target=target)
             if b64:
                 _store_history_image(target, exp_dur, binning, frame, total, b64)
             if fits_save_path and pathlib.Path(fits_save_path).exists():
@@ -3682,8 +3813,38 @@ def _run_schedule_bg(items: list, source: str = "manual",
 
     _sched_prepare_mount()
 
+    gap_fill_min_s = 900.0
+    try:
+        gap_fill_min_s = float(_load_config().get("cloud", {})
+                               .get("gap_fill_min_s", 900))
+    except Exception:
+        pass
+
     try:
         for idx, item in enumerate(items):
+            if _sched_cancelled():
+                break
+            # ── Gap fill: a dead wait before this item's start time is spent
+            # on an alternate that fits, instead of sleeping (cloud plans only;
+            # never shave the margin before a time-series window).
+            if source == "cloud":
+                while not _sched_cancelled():
+                    wait_s = _start_wait_seconds(item.get("startTime", ""))
+                    if wait_s < gap_fill_min_s:
+                        break
+                    filler = _next_alternate(gap_s=wait_s - _GAP_FILL_MARGIN_S)
+                    if filler is None:
+                        break
+                    filler["startTime"] = ""   # run now — we ARE the gap
+                    logger.info("Schedule: filling %.0f s gap before %s with "
+                                "alternate %s", wait_s,
+                                item.get("target", "?"),
+                                filler.get("target", "?"))
+                    try:
+                        _run_schedule_observation(idx, filler)
+                    except Exception as exc:
+                        logger.error("Schedule: gap-fill %s failed: %s",
+                                     filler.get("target", "?"), exc)
             if _sched_cancelled():
                 break
             try:
@@ -3698,6 +3859,27 @@ def _run_schedule_bg(items: list, source: str = "manual",
                 _sched_state["completed"] = idx + 1
             logger.info("Schedule: ✓ %s (%d/%d)",
                         item.get("target", "?"), idx + 1, len(items))
+
+        # ── End-of-plan fill: the plan is exhausted but the night isn't.
+        # Run remaining alternates (ignoring their start times) until dawn,
+        # cancellation, or exhaustion; then signal work starvation so cloud
+        # reflow tops us up.
+        if source == "cloud" and not _sched_cancelled():
+            fill_idx = len(items)
+            while not _sched_cancelled() and _is_dark_now():
+                alt = _next_alternate()
+                if alt is None:
+                    _mark_work_starved()
+                    break
+                alt["startTime"] = ""   # run now — leftover dark time
+                logger.info("Schedule: plan exhausted, dark time left — "
+                            "running alternate %s", alt.get("target", "?"))
+                try:
+                    _run_schedule_observation(fill_idx, alt)
+                except Exception as exc:
+                    logger.error("Schedule: end-of-plan alternate %s failed: %s",
+                                 alt.get("target", "?"), exc)
+                fill_idx += 1
     except Exception as exc:
         logger.error("Schedule crashed: %s", exc)
         with _sched_lock:

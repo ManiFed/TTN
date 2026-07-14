@@ -802,11 +802,10 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
         logger.warning("Astrometry.net solve failed — falling back to ASTAP")
         if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
             return "solved_astap"
-        return None
-
-    logger.info("Running ASTAP plate solver")
-    if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
-        return "solved_astap"
+    else:
+        logger.info("Running ASTAP plate solver")
+        if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+            return "solved_astap"
 
     # No plate solver available — fall back to constructing a simple TAN WCS
     # from the telescope's reported pointing and the known pixel scale.  This

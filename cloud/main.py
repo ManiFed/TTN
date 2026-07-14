@@ -111,6 +111,15 @@ def start_background_loops(config: dict) -> None:
             except Exception as exc:
                 logger.error("CHORUS ledger maintenance failed: %s", exc)
         tuning.run_nightly(config)
+        if sched_cfg.get("chorus") or sched_cfg.get("chorus_shadow"):
+            # Ring 2: backtest and apply/reject any pending structural class
+            # template proposals — fully autonomous, gated the same way
+            # Ring 1's scalar tuning already is.
+            try:
+                from cloud.chorus import ring2
+                ring2.run_pending(config)
+            except Exception as exc:
+                logger.error("CHORUS Ring 2 maintenance failed: %s", exc)
 
     _loop("alert-ingest",
           float(alerts_cfg.get("interval_minutes", 60)) * 60, ingest_and_rescore)

@@ -432,6 +432,15 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # a tracklet is linked/merged (cloud/moving_objects.py).
     ("asteroid_candidates", "priority", "TEXT DEFAULT 'normal'"),
     ("asteroid_candidates", "object_type", "TEXT DEFAULT 'asteroid'"),
+    # How many consecutive prior nights the dropped node had already gone
+    # dark for, recorded at dispatch time (cloud/chorus/reflow.py) so a
+    # chronic dropout is distinguishable from a one-off cloud-out in the
+    # audit trail.
+    ("reflow_log", "dark_streak", "INTEGER DEFAULT 0"),
+    # SNR-weighted posterior probability this candidate is real, combining
+    # every reflex-triggered confirmation instead of the raw n_nodes/
+    # n_detections counts alone (cloud/survey.py::_posterior_confidence).
+    ("discovery_candidates", "confidence", "DOUBLE PRECISION DEFAULT 0.0"),
 ]
 
 # Tables added after initial schema — created idempotently in init().
@@ -555,6 +564,25 @@ _LATE_TABLES: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_chorus_archive_night ON chorus_run_archive(night)",
+    # CHORUS Ring 2 — structural evolution (CHORUS.md §7): declarative,
+    # per-family cell-generation knobs (cloud/chorus/ring2.py) that cells.py
+    # reads instead of the hardcoded literals it used to fall back to. One
+    # row per proposal/revision; only the newest 'live' row per family is
+    # active (cloud.chorus.ring2.active_templates).
+    """
+    CREATE TABLE IF NOT EXISTS class_templates (
+        id              SERIAL PRIMARY KEY,
+        family          TEXT NOT NULL,
+        params          TEXT DEFAULT '{}',
+        stage           TEXT DEFAULT 'advisory',
+        note            TEXT DEFAULT '',
+        backtest_detail TEXT DEFAULT '{}',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_class_templates_family_stage "
+    "ON class_templates(family, stage, id)",
     """
     CREATE TABLE IF NOT EXISTS science_program_suggestions (
         id               SERIAL PRIMARY KEY,
@@ -675,6 +703,23 @@ _LATE_TABLES: list[str] = [
         detail         TEXT DEFAULT '{}'
     )
     """,
+    # node_night_utilization accrues per-(node, night) dark-time seconds from
+    # successive heartbeats: how much dark time was spent observing vs idle vs
+    # clouded. Written by live.record_state, read by the ledger's nightly
+    # summary — the ground truth for "is the network wasting telescope time".
+    """
+    CREATE TABLE IF NOT EXISTS node_night_utilization (
+        node_id      TEXT NOT NULL,
+        night        TEXT NOT NULL,
+        dark_s       DOUBLE PRECISION DEFAULT 0,
+        observing_s  DOUBLE PRECISION DEFAULT 0,
+        idle_s       DOUBLE PRECISION DEFAULT 0,
+        clouded_s    DOUBLE PRECISION DEFAULT 0,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (node_id, night)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_night_util ON node_night_utilization(night)",
     # dispatch_events is the append-only push log the realtime SSE service tails
     # (via LISTEN/NOTIFY) and replays from on Last-Event-ID reconnect. Rows are
     # short-lived signals ("wake up and fetch"), pruned by the maintenance loop.

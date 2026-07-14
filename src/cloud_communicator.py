@@ -19,7 +19,8 @@ Behaviour:
       the operating system credential store
     • sends heartbeats with optional local conditions from a callback
     • polls for the current observation plan; when the plan_id changes,
-      invokes on_plan(items) with node-schedule-format items
+      invokes on_plan(items, contingencies) with node-schedule-format items
+      plus the plan's contingency ladder (alternates for local gap/failure fill)
     • polls interrupts; invokes on_interrupt(item) for unacked ones, then acks
     • submit_measurement() uploads each photometry result immediately;
       failures queue to disk and retry on the heartbeat cadence
@@ -80,7 +81,7 @@ class CloudCommunicator:
         self,
         config: dict,
         get_conditions: Optional[Callable[[], dict]] = None,
-        on_plan: Optional[Callable[[list], None]] = None,
+        on_plan: Optional[Callable[[list, dict], None]] = None,
         on_interrupt: Optional[Callable[[dict], None]] = None,
         get_telescope_specs: Optional[Callable[[], dict]] = None,
         get_state: Optional[Callable[[], dict]] = None,
@@ -544,11 +545,14 @@ class CloudCommunicator:
             return
         self._last_plan_id = plan_id
         items = plan.get("items", [])
-        logger.info("New plan from cloud: %s (%d items, night %s)",
-                    plan_id, len(items), plan.get("night", "?"))
+        contingencies = plan.get("contingencies") or {}
+        logger.info("New plan from cloud: %s (%d items, %d alternates, night %s)",
+                    plan_id, len(items),
+                    len(contingencies.get("alternates", [])),
+                    plan.get("night", "?"))
         if self._on_plan and items:
             try:
-                self._on_plan(items)
+                self._on_plan(items, contingencies)
             except Exception as exc:
                 logger.error("on_plan callback raised: %s", exc)
 

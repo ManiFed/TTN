@@ -367,6 +367,7 @@
           <h2 style="margin-top:16px">The sky changes. Our coverage doesn't.</h2>
           <p class="lead">Stars aren't fixed points. Some pulse, some suddenly brighten, some explode entirely. Astronomers can't predict exactly when, so to catch these moments you need telescopes pointed at the sky all night, everywhere at once.</p>
           <p>The world's giant observatories are few, costly, and booked years ahead. So most of what happens up there is simply missed.</p>
+          <p>Meanwhile, millions of capable telescopes sit idle — in closets, on balconies, in gardens — dark on exactly the nights the sky does something remarkable. That's the gap TTN closes: <b style="color:var(--ink); font-weight:500">your telescope's downtime is the coverage astronomy is missing.</b></p>
         </div>
       </div></div>
     </section>
@@ -408,6 +409,24 @@
             <li><span class="nm">2</span><span class="tx"><b>Install the node software once.</b> Sign in to the app, tap Connect telescope, choose your telescope, and download the star catalog for plate solving — no code to copy.</span></li>
             <li><span class="nm">3</span><span class="tx"><b>Let it run.</b> Every clear night it picks targets, photographs them, checks the measurements, and uploads the results automatically.</span></li>
           </ol>
+          <div class="cost">After setup, your part is done. The network turns your telescope's <b>downtime into discoveries</b> — it wakes, observes, and reports while you sleep.</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 3.5 — what we research -->
+    <section class="stop center" id="research" data-ra="83.82" data-dec="-5.39" data-fov="9" data-side="0" data-time="">
+      <div class="sticky"><div class="wrap">
+        <span class="kicker">What we research</span>
+        <h2 style="font-size:clamp(30px,4vw,52px); margin-top:16px; letter-spacing:-.04em">One network, a whole sky's worth of science.</h2>
+        <p style="margin:18px auto 0; max-width:54ch; font-size:17px; line-height:1.55; color:var(--ink-2)">Eruptions like SS Cygni are only the start. Each night the network picks the right target for your telescope from live research programs:</p>
+        <div class="trust-list" style="width:100%; max-width:720px; margin-top:30px; text-align:left">
+          <div class="trust-item"><b>Erupting stars</b><span>Cataclysmic variables that flare many times brighter in hours — caught mid-outburst.</span></div>
+          <div class="trust-item"><b>Pulsating &amp; eclipsing stars</b><span>Timing brightness beats and eclipses that reveal how stars are built.</span></div>
+          <div class="trust-item"><b>Supernovae</b><span>Watching nearby galaxies for the sudden appearance of an exploding star.</span></div>
+          <div class="trust-item"><b>Asteroids</b><span>Positions reported to the Minor Planet Center, plus light curves that reveal their spin.</span></div>
+          <div class="trust-item"><b>Comets &amp; near-Earth objects</b><span>Flagging outbursts and following up newly found rocks that pass close to Earth.</span></div>
+          <div class="trust-item"><b>Exoplanet transits</b><span>Measuring the tiny dips in starlight as planets cross in front of their suns.</span></div>
         </div>
       </div></div>
     </section>
@@ -710,8 +729,8 @@
       ex.fillStyle=bgnd; ex.beginPath(); ex.ellipse(nx,ny+n[2]*8,n[2]*28,n[2]*10,0,0,6.28); ex.fill();
       drawNode(nx,ny,n[2],t,phases[i],hover);
     });
-    // acquisition scan line — appears on section 4 (what it catches) to suggest imaging
-    if(curSection===4){
+    // acquisition scan line — appears on section 5 (what it catches) to suggest imaging
+    if(curSection===5){
       var scanY=hz*0.5+Math.sin(t*0.55)*hz*0.35;
       var sl=ex.createLinearGradient(0,scanY-1,0,scanY+1);
       sl.addColorStop(0,'rgba(143,217,255,0)'); sl.addColorStop(.5,'rgba(143,217,255,0.12)'); sl.addColorStop(1,'rgba(143,217,255,0)');

@@ -61,7 +61,8 @@ class LiveFleetCloudTest(unittest.TestCase):
         admin.close()
 
     def setUp(self):
-        for table in ("node_live_state", "dispatch_events"):
+        for table in ("node_live_state", "dispatch_events",
+                      "node_night_utilization"):
             self.db.execute(f"DELETE FROM {table}")
 
     # ── Live fleet state ────────────────────────────────────────────────────────
@@ -105,6 +106,67 @@ class LiveFleetCloudTest(unittest.TestCase):
         self.assertIn("dark1", pool)
         self.assertNotIn("cloudy", pool)   # clouded excluded
         self.assertNotIn("day1", pool)     # not dark
+
+    # ── Dark-time utilization accounting ────────────────────────────────────────
+
+    def _backdate(self, node_id, seconds):
+        then = (datetime.now(timezone.utc)
+                - timedelta(seconds=seconds)).isoformat()
+        self.db.execute(
+            "UPDATE node_live_state SET updated_at = %s WHERE node_id = %s",
+            (then, node_id))
+
+    def test_utilization_accrues_observing_and_idle(self):
+        from cloud import live
+        night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        live.record_state("nd_u", {"phase": "exposing", "is_dark": True},
+                          heartbeat_s=5)
+        self._backdate("nd_u", 5)     # 5 s spent exposing while dark
+        live.record_state("nd_u", {"phase": "idle", "is_dark": True},
+                          heartbeat_s=5)
+        self._backdate("nd_u", 4)     # 4 s spent idle while dark
+        live.record_state("nd_u", {"phase": "slewing", "is_dark": True},
+                          heartbeat_s=5)
+        u = live.utilization_for("nd_u", night)
+        self.assertIsNotNone(u)
+        self.assertAlmostEqual(u["observing_s"], 5.0, delta=1.5)
+        self.assertAlmostEqual(u["idle_s"], 4.0, delta=1.5)
+        self.assertAlmostEqual(u["dark_s"], 9.0, delta=2.5)
+
+    def test_utilization_not_accrued_in_daylight(self):
+        from cloud import live
+        night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        live.record_state("nd_day", {"phase": "idle", "is_dark": False},
+                          heartbeat_s=5)
+        self._backdate("nd_day", 30)
+        live.record_state("nd_day", {"phase": "idle", "is_dark": False},
+                          heartbeat_s=5)
+        self.assertIsNone(live.utilization_for("nd_day", night))
+
+    def test_utilization_gap_clamped_to_heartbeat_multiple(self):
+        from cloud import live
+        night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        live.record_state("nd_gap", {"phase": "exposing", "is_dark": True},
+                          heartbeat_s=5)
+        self._backdate("nd_gap", 600)   # a 10-minute heartbeat hole
+        live.record_state("nd_gap", {"phase": "exposing", "is_dark": True},
+                          heartbeat_s=5)
+        u = live.utilization_for("nd_gap", night)
+        # Clamped to 3 × heartbeat_s = 15 s, never 600 s of phantom time.
+        self.assertLessEqual(u["dark_s"], 15.0 + 1e-6)
+        self.assertGreater(u["dark_s"], 0.0)
+
+    def test_utilization_night_lists_per_node(self):
+        from cloud import live
+        night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for nid in ("nd_1", "nd_2"):
+            live.record_state(nid, {"phase": "exposing", "is_dark": True},
+                              heartbeat_s=5)
+            self._backdate(nid, 5)
+            live.record_state(nid, {"phase": "exposing", "is_dark": True},
+                              heartbeat_s=5)
+        rows = live.utilization_night(night)
+        self.assertEqual([r["node_id"] for r in rows], ["nd_1", "nd_2"])
 
     # ── Dispatch bus: NOTIFY round-trip ─────────────────────────────────────────
 

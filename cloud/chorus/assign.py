@@ -85,6 +85,7 @@ class Placement:
     marginal: float = 0.0          # exact marginal value at commit time
     p: float = 0.0                 # delivery probability used
     touches: list = field(default_factory=list)   # [(cell, rho)] at commit
+    tier: str = "core"             # "core" (value greedy) | "filler" (night fill)
 
 
 # ── Capture geometry ──────────────────────────────────────────────────────────
@@ -118,22 +119,81 @@ def delivery_p(opp: ChorusOpportunity, slot: int) -> float:
     return max(0.0, min(1.0, se.p_sky * opp.p_exec * opp.p_accept))
 
 
+# ── Weather-correlation-aware redundancy ────────────────────────────────────────
+
+def _ground_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle surface distance in km — a cheap proxy for how likely two
+    sites are to share the same cloud deck."""
+    r1, r2 = math.radians(lat1), math.radians(lat2)
+    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+        + math.cos(r1) * math.cos(r2) * math.sin(dlon / 2) ** 2)
+    return 6371.0 * 2.0 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def weather_corr_factor(node_a: str, node_b: str, contexts: dict,
+                        params: dict) -> float:
+    """Repeat-value multiplier for node_b's placement on a cell node_a already
+    touched — 1.0 (no discount) when the two sites are weather-independent,
+    same_site_repeat_factor (the existing same-node discount) when they're
+    close enough to be treated as sharing a sky.
+
+    Before this, only an EXACT node_id match against a cell drew the
+    same-site discount (§4.3) — two different nodes a few km apart, almost
+    as weather-correlated as one node repeating, got full undiscounted
+    value for "confirming" each other. This interpolates by ground distance
+    instead of by node identity, using each NodeContext's lat/lon (already
+    built for astrometry, reused here for nothing more than a proxy — no
+    empirical cloud-correlation model; see the docstring on _State for why
+    that's a deliberate, separate follow-on).
+    """
+    if node_a == node_b:
+        return float(params.get("same_site_repeat_factor", 0.25))
+    ctx_a, ctx_b = contexts.get(node_a), contexts.get(node_b)
+    if ctx_a is None or ctx_b is None:
+        return 1.0
+    full_km = float(params.get("weather_corr_radius_km", 50.0))
+    if full_km <= 0:
+        return 1.0
+    ssf = float(params.get("same_site_repeat_factor", 0.25))
+    dist_km = _ground_distance_km(ctx_a.lat, ctx_a.lon, ctx_b.lat, ctx_b.lon)
+    frac = max(0.0, min(1.0, dist_km / full_km))
+    return ssf + (1.0 - ssf) * frac
+
+
 # ── Solver state ──────────────────────────────────────────────────────────────
 
 class _State:
     """Mutable assignment state: occupancy grids, the residual ledger R, the
-    same-site touch set, per-node/target counters."""
+    weather-correlated touch map, per-node/target counters.
+
+    site_touched maps cell_id -> the set of nodes that have already drawn it
+    down. A new touch on that cell is discounted by the strongest
+    (smallest) weather_corr_factor against any node already in that set —
+    not just an exact node_id repeat. Building an actual empirical
+    correlation model from cloud.live's reported sky conditions (rather
+    than this geographic-distance proxy) is a real, separate follow-on that
+    needs an accumulated time-series cloud.live doesn't currently keep
+    (node_live_state is a single upserted row per node, not a history) —
+    out of scope here.
+    """
 
     def __init__(self, contexts: dict, cells_by_target: dict,
-                 same_site_factor: float = 0.25):
+                 same_site_factor: float = 0.25, params: Optional[dict] = None):
         self.contexts = contexts
         self.same_site_factor = same_site_factor
+        # Full params (for weather_corr_factor's weather_corr_radius_km) when
+        # the caller has them; falls back to a minimal dict carrying just the
+        # same-node factor so existing same-node-only behavior is preserved
+        # for any caller that hasn't been updated to pass params through.
+        self.params = params if params is not None else \
+            {"same_site_repeat_factor": same_site_factor, "weather_corr_radius_km": 0.0}
         self.free = {nid: [True] * ctx.n_slots for nid, ctx in contexts.items()}
         self.node_count = {nid: 0 for nid in contexts}
         self.target_count: dict = {}
         self.R = {c.cell_id: max(0.0, min(1.0, c.residual))
                   for cl in cells_by_target.values() for c in cl}
-        self.site_touched: set = set()     # (cell_id, node_id)
+        self.site_touched: dict = {}       # cell_id -> set(node_id)
         self.placed_keys: set = set()
         self.placements: list = []
 
@@ -153,10 +213,12 @@ class _State:
         self.placements.append(p)
         for cell, rho in p.touches:
             eff = p.p * rho
-            if (cell.cell_id, p.node_id) in self.site_touched:
-                eff *= self.same_site_factor
+            others = self.site_touched.get(cell.cell_id)
+            if others:
+                eff *= min(weather_corr_factor(p.node_id, o, self.contexts, self.params)
+                          for o in others)
             self.R[cell.cell_id] *= (1.0 - eff)
-            self.site_touched.add((cell.cell_id, p.node_id))
+            self.site_touched.setdefault(cell.cell_id, set()).add(p.node_id)
 
 
 def marginal(opp: ChorusOpportunity, slot: int, state: _State,
@@ -167,13 +229,15 @@ def marginal(opp: ChorusOpportunity, slot: int, state: _State,
     ctx = state.contexts[opp.node_id]
     tl = touches(opp, slot, ctx, cells_by_target.get(opp.target_id, []), params)
     p = delivery_p(opp, slot)
-    ssf = float(params.get("same_site_repeat_factor", 0.25))
     gain = 0.0
     for cell, rho in tl:
         contrib = cell.nu * state.R.get(cell.cell_id, 1.0) * p * rho
-        if (cell.cell_id, opp.node_id) in state.site_touched:
-            # A same-site repeat cannot harvest weather-survival (§4.3).
-            contrib *= ssf
+        others = state.site_touched.get(cell.cell_id)
+        if others:
+            # A weather-correlated repeat (same node, or a close-enough one)
+            # cannot harvest weather-survival (§4.3).
+            contrib *= min(weather_corr_factor(opp.node_id, o, state.contexts, params)
+                          for o in others)
         gain += contrib
     beta = float(params.get("exploration_beta", 0.15))
     k = state.node_count[opp.node_id]
@@ -226,8 +290,7 @@ def phi(placements: list, cells_by_target: dict, contexts: dict,
         for c in cl:
             base[c.cell_id] = c
             R[c.cell_id] = max(0.0, min(1.0, c.residual))
-    site_seen: set = set()
-    ssf = float(params.get("same_site_repeat_factor", 0.25))
+    site_seen: dict = {}      # cell_id -> set(node_id)
     total = 0.0
     node_counts: dict = {}
     # Deterministic order: by (node, slot, target).
@@ -241,12 +304,15 @@ def phi(placements: list, cells_by_target: dict, contexts: dict,
         for cell, rho in tl:
             eff = pr * rho
             contrib = cell.nu * R[cell.cell_id] * eff
-            if (cell.cell_id, p.node_id) in site_seen:
-                contrib *= ssf
-                eff *= ssf
+            others = site_seen.get(cell.cell_id)
+            if others:
+                factor = min(weather_corr_factor(p.node_id, o, contexts, params)
+                            for o in others)
+                contrib *= factor
+                eff *= factor
             total += contrib
             R[cell.cell_id] *= (1.0 - eff)
-            site_seen.add((cell.cell_id, p.node_id))
+            site_seen.setdefault(cell.cell_id, set()).add(p.node_id)
         node_counts[p.node_id] = node_counts.get(p.node_id, 0) + 1
     beta = float(params.get("exploration_beta", 0.15))
     for nid, k in node_counts.items():
@@ -272,7 +338,7 @@ def assign(contexts: dict, opps_by_node: dict, cells_by_target: dict,
     eps = float(params.get("min_marginal", 0.02))
     max_per_target = max(1, int(float(params.get("max_obs_per_target", 4))))
     state = _State(contexts, cells_by_target,
-                   float(params.get("same_site_repeat_factor", 0.25)))
+                   float(params.get("same_site_repeat_factor", 0.25)), params=params)
 
     heap: list = []
     for nid, opps in opps_by_node.items():
@@ -309,13 +375,77 @@ def assign(contexts: dict, opps_by_node: dict, cells_by_target: dict,
             state, opps_by_node, cells_by_target, contexts, params,
             seed, local_search_ms, greedy_phi, max_per_target)
 
+    best_placements, n_filler = fill_night(
+        best_placements, contexts, opps_by_node, cells_by_target, params)
+
     stats = {
         "greedy_phi": round(greedy_phi, 4),
         "final_phi": round(best_phi, 4),
         "n_assignments": len(best_placements),
+        "n_filler": n_filler,
         "expected_deliveries": round(sum(p.p for p in best_placements), 2),
     }
     return best_placements, state.R, stats
+
+
+def fill_night(placements: list, contexts: dict, opps_by_node: dict,
+               cells_by_target: dict, params: dict) -> tuple:
+    """Pack the dark time the value greedy left free.
+
+    The core greedy stops at min_marginal and each node's max_targets cap —
+    correct for portfolio value, but it leaves telescopes idle on long clear
+    nights. This second lazy-greedy pass runs on a replay of the committed
+    placements and keeps placing the best still-feasible opportunity with the
+    acceptance floor dropped to filler_min_marginal, EXEMPT from the per-node
+    target cap (bounded instead by physical occupancy and a
+    filler_max_targets_per_night safety valve). max_obs_per_target still
+    holds, so filler never floods one target's photometry pipeline.
+
+    Returns (placements including filler, n_filler). Deterministic: same
+    heap/tiebreak discipline as the core greedy.
+    """
+    floor = float(params.get("filler_min_marginal", 1e-4))
+    if floor <= 0.0:
+        return list(placements), 0
+    max_per_target = max(1, int(float(params.get("max_obs_per_target", 4))))
+    filler_cap = int(float(params.get("filler_max_targets_per_night", 40)))
+    if filler_cap <= 0:
+        return list(placements), 0
+
+    st = replay(contexts, cells_by_target, placements, params)
+    filler_count = {nid: 0 for nid in contexts}
+
+    heap: list = []
+    for nid, opps in opps_by_node.items():
+        ctx = contexts.get(nid)
+        if ctx is None:
+            continue
+        for opp in opps:
+            v = optimistic_value(opp, cells_by_target, params, ctx)
+            if v > floor:
+                heapq.heappush(heap, (-v, opp.seq, opp))
+
+    n_filler = 0
+    while heap:
+        negv, seq, opp = heapq.heappop(heap)
+        if (filler_count[opp.node_id] >= filler_cap
+                or st.target_count.get(opp.target_id, 0) >= max_per_target
+                or opp.key in st.placed_keys):
+            continue
+        slot, val, tl = best_slot(opp, st, cells_by_target, params)
+        if slot is None or val < floor:
+            continue
+        next_best = -heap[0][0] if heap else 0.0
+        if val + 1e-9 < next_best:
+            heapq.heappush(heap, (-val, seq, opp))
+            continue
+        st.commit(Placement(node_id=opp.node_id, opp=opp, slot=slot,
+                            marginal=val, p=delivery_p(opp, slot),
+                            touches=tl, tier="filler"))
+        filler_count[opp.node_id] += 1
+        n_filler += 1
+
+    return st.placements, n_filler
 
 
 def replay(contexts: dict, cells_by_target: dict, placements: list,
@@ -326,13 +456,13 @@ def replay(contexts: dict, cells_by_target: dict, placements: list,
     incremental repair) a consistent residual ledger and honest per-item
     expected-information values even for placements the local search moved."""
     st = _State(contexts, cells_by_target,
-                float(params.get("same_site_repeat_factor", 0.25)))
+                float(params.get("same_site_repeat_factor", 0.25)), params=params)
     for p in sorted(placements,
                     key=lambda p: (p.node_id, p.slot, p.opp.target_id)):
         val, tl = marginal(p.opp, p.slot, st, cells_by_target, params)
         st.commit(Placement(node_id=p.node_id, opp=p.opp, slot=p.slot,
                             marginal=val, p=delivery_p(p.opp, p.slot),
-                            touches=tl))
+                            touches=tl, tier=getattr(p, "tier", "core")))
     return st
 
 
@@ -476,7 +606,11 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
     explore = float(vec.get("explore", 0.0))
     mpsas = float(node.get("light_pollution_mpsas", 20.0) or 20.0)
     bright_limit = float(node.get("mag_bright_limit", 6.0) or 6.0)
-    eps = float(params.get("min_marginal", 0.02))
+    # Generation-time prefilter: keep opportunities down to the FILLER floor,
+    # not just min_marginal — the fill pass needs the low-value material the
+    # core greedy would ignore, or the night can't be packed.
+    eps = min(float(params.get("min_marginal", 0.02)),
+              float(params.get("filler_min_marginal", 1e-4)))
 
     opps: list = []
     seq = seq_start

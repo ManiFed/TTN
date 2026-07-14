@@ -603,8 +603,14 @@ class NightSummary {
             : <String, dynamic>{},
       );
 
-  bool get wasClear => nObservations > 0;
+  /// Whether the node captured any measurements this night. A zero here
+  /// means no data arrived — it does NOT mean the sky was cloudy; the real
+  /// cause could be a dead connection, a disabled schedule, or a pipeline
+  /// error just as easily as weather. Use [receiptTitle]/[receiptLead] for
+  /// the actual reason instead of inferring one from this flag.
+  bool get hasObservations => nObservations > 0;
   String get receiptTitle => _asStr(receipt['title']);
+  String get receiptLead => _asStr(receipt['lead']);
 }
 
 /// An in-app notification (GET /me/notifications).

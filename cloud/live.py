@@ -45,6 +45,9 @@ _VALID_PHASES = {
     "clouded", "offline", "daylight", "parked",
 }
 
+# Phases that count as productive use of dark time.
+_OBSERVING_PHASES = {"slewing", "exposing", "stacking"}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -74,6 +77,12 @@ def record_state(node_id: str, state: dict, heartbeat_s: float = _DEFAULT_HEARTB
     if len(detail_json) > 2000:
         detail_json = "{}"
 
+    try:
+        _accrue_utilization(node_id, phase, bool(state.get("is_dark")),
+                            float(heartbeat_s or _DEFAULT_HEARTBEAT_S))
+    except Exception as exc:  # accounting must never break the heartbeat
+        logger.debug("Utilization accrual failed for %s: %s", node_id, exc)
+
     db.execute(
         """INSERT INTO node_live_state
                (node_id, phase, target_name, plan_item_idx, exposure_ends_at,
@@ -94,6 +103,63 @@ def record_state(node_id: str, state: dict, heartbeat_s: float = _DEFAULT_HEARTB
          1 if state.get("is_dark") else 0, float(heartbeat_s or _DEFAULT_HEARTBEAT_S),
          _now(), detail_json),
     )
+
+
+def _accrue_utilization(node_id: str, phase: str, is_dark: bool,
+                        heartbeat_s: float) -> None:
+    """Fold the time since the previous heartbeat into per-night dark-time
+    accounting. Each increment is clamped to 3× the node's heartbeat cadence so
+    an offline gap never accrues phantom dark hours; the categories are only
+    accrued while the *previous* report said the sky was dark (the elapsed
+    interval belongs to the state we were in, not the one we just entered).
+    """
+    prev = db.query_one(
+        "SELECT phase, is_dark, updated_at FROM node_live_state WHERE node_id = %s",
+        (node_id,))
+    if prev is None or not prev.get("is_dark"):
+        return
+    try:
+        elapsed = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(prev["updated_at"])).total_seconds()
+    except (TypeError, ValueError):
+        return
+    cap = _STALE_MULTIPLIER * max(heartbeat_s, 5.0)
+    elapsed = min(max(elapsed, 0.0), cap)
+    if elapsed <= 0:
+        return
+    prev_phase = str(prev.get("phase") or "idle")
+    observing = elapsed if prev_phase in _OBSERVING_PHASES else 0.0
+    clouded = elapsed if prev_phase == "clouded" else 0.0
+    idle = elapsed if prev_phase in ("idle", "parked") else 0.0
+    night = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    db.execute(
+        """INSERT INTO node_night_utilization
+               (node_id, night, dark_s, observing_s, idle_s, clouded_s, updated_at)
+           VALUES (%s,%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (node_id, night) DO UPDATE SET
+               dark_s = node_night_utilization.dark_s + EXCLUDED.dark_s,
+               observing_s = node_night_utilization.observing_s + EXCLUDED.observing_s,
+               idle_s = node_night_utilization.idle_s + EXCLUDED.idle_s,
+               clouded_s = node_night_utilization.clouded_s + EXCLUDED.clouded_s,
+               updated_at = EXCLUDED.updated_at""",
+        (node_id, night, elapsed, observing, idle, clouded, _now()),
+    )
+
+
+def utilization_for(node_id: str, night: str) -> dict | None:
+    """Dark-time accounting for one node on one night, or None."""
+    return db.query_one(
+        """SELECT node_id, night, dark_s, observing_s, idle_s, clouded_s
+           FROM node_night_utilization WHERE node_id = %s AND night = %s""",
+        (node_id, night))
+
+
+def utilization_night(night: str) -> list[dict]:
+    """Per-node dark-time accounting for a night."""
+    return db.query(
+        """SELECT node_id, night, dark_s, observing_s, idle_s, clouded_s
+           FROM node_night_utilization WHERE night = %s ORDER BY node_id""",
+        (night,))
 
 
 def publish(node_id: str, kind: str, payload: dict | None = None) -> int:

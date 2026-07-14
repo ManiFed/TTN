@@ -43,9 +43,17 @@ def _node(**kw):
     return n
 
 
+def _lon_for(node_id: str) -> float:
+    """Deterministic, well-separated synthetic longitude per node_id (not a
+    real site) — distinct test nodes must sit far enough apart that
+    assign.weather_corr_factor treats them as weather-independent by
+    default, the way genuinely different sites would in production."""
+    return float((sum(ord(c) for c in node_id) * 37) % 360)
+
+
 def _ctx(node_id, max_targets=1):
     return NodeContext(
-        node={}, node_id=node_id, lat=40.0, lon=0.0,
+        node={}, node_id=node_id, lat=40.0, lon=_lon_for(node_id),
         t0=BASE, t1=END, n_slots=N_SLOTS, utc_offset=timedelta(0),
         min_alt=25.0, horizon_mask=[], filters=["CV"], cooled=False,
         mount_type="alt_az", cloud_relax=0.0, max_targets=max_targets)
@@ -61,7 +69,8 @@ _SEQ = [0]
 
 
 def _opp(node_id, target_id, *, p_sky=0.95, sigma=0.02, p_exec=0.9,
-         p_accept=0.95, slots=(0, 2, 4, 6), variant="epoch", explore=0.0):
+         p_accept=0.95, slots=(0, 2, 4, 6), variant="epoch", explore=0.0,
+         filter="CV"):
     _SEQ[0] += 1
     return ChorusOpportunity(
         node_id=node_id, target_id=target_id, name=target_id,
@@ -70,7 +79,7 @@ def _opp(node_id, target_id, *, p_sky=0.95, sigma=0.02, p_exec=0.9,
         need=1,
         slots={s: SlotEval(p_sky=p_sky, sigma=sigma, alt=60.0, az=120.0)
                for s in slots},
-        filter="CV", p_exec=p_exec, p_accept=p_accept, explore=explore,
+        filter=filter, p_exec=p_exec, p_accept=p_accept, explore=explore,
         node_lon=0.0, variant=variant, duration_min=5.0, seq=_SEQ[0])
 
 
@@ -186,11 +195,106 @@ class CellTemplateTest(unittest.TestCase):
         self.assertFalse([c for c in no_bands if c.kind == "band"])
         self.assertTrue([c for c in with_v if c.kind == "band"])
 
+    def test_default_family_also_gets_band_cells_for_cross_node_color(self):
+        # Ordinary field variables (family "default", e.g. target_type "VAR")
+        # get the same cross-node multi-band opportunity as transients —
+        # previously band cells only existed for the transient family.
+        t = self._target("VAR")
+        no_bands = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                       band_union={"CV"})
+        with_bands = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                         band_union={"CV", "B", "V"})
+        self.assertFalse([c for c in no_bands if c.kind == "band"])
+        band_cells = [c for c in with_bands if c.kind == "band"]
+        self.assertEqual({c.band for c in band_cells}, {"B", "V"})
+        # Cadence cells are untouched — bands are purely additive.
+        self.assertEqual(len([c for c in with_bands if c.kind != "band"]),
+                         len([c for c in no_bands if c.kind != "band"]))
+
     def test_scarcity_scales_value(self):
         t = self._target("VAR")
         abundant = cells.compile_cells(t, {}, BASE, END, _params(), 0.2)
         rare = cells.compile_cells(t, {}, BASE, END, _params(), 1.0)
         self.assertLess(abundant[0].nu, rare[0].nu)
+
+    def test_ring2_template_overrides_default_band_multiplier(self):
+        t = self._target("VAR")
+        default = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                      band_union={"B"})
+        overridden = cells.compile_cells(
+            t, {}, BASE, END, _params(), 1.0, band_union={"B"},
+            templates={"default": {"band_value_mult": 0.9}})
+        band_default = next(c for c in default if c.kind == "band")
+        band_overridden = next(c for c in overridden if c.kind == "band")
+        self.assertGreater(band_overridden.nu, band_default.nu)
+
+    def test_ring2_template_overrides_transient_age_segments(self):
+        t = self._target("SN", discovered_at=BASE.isoformat())
+        # discovered "now" -> the recent segment applies by default (age 0
+        # days < 5). Override seg_recent_days to 0 so it falls straight to
+        # the mid segment instead, and seg_mid_mult so the effect is visible.
+        default = cells.compile_cells(t, {}, BASE, END, _params(), 1.0)
+        overridden = cells.compile_cells(
+            t, {}, BASE, END, _params(), 1.0,
+            templates={"transient": {"seg_recent_days": 0.0,
+                                     "seg_mid_mult": 3.0}})
+        self.assertLess(default[0].nu, overridden[0].nu)
+
+    def test_ring2_template_overrides_lpv_min_width(self):
+        t = self._target("LPV", cadence_hours=1.0)
+        default = cells.compile_cells(t, {}, BASE, END, _params(), 1.0)
+        overridden = cells.compile_cells(
+            t, {}, BASE, END, _params(), 1.0,
+            templates={"lpv": {"min_width_h": 999.0}})
+        # cadence_hours=1.0 is far below both floors, so width_h is exactly
+        # the floor in each case — a much larger override floor should
+        # produce a materially wider (fewer, broader) set of cells.
+        self.assertLessEqual(len(overridden), len(default))
+
+    def test_ring2_no_template_matches_todays_hardcoded_defaults(self):
+        # templates=None (or missing the family) must reproduce exactly
+        # today's literals — Ring 2 is purely additive until a template is
+        # actually promoted to 'live'.
+        t = self._target("VAR")
+        no_arg = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                     band_union={"B"})
+        empty_templates = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                              band_union={"B"}, templates={})
+        self.assertEqual([c.nu for c in no_arg], [c.nu for c in empty_templates])
+
+    def test_scarcity_urgency_power_default_is_linear(self):
+        # scarcity_urgency_power defaults to 1.0 — a no-op, identical to the
+        # pre-existing linear scarcity scaling.
+        p = _params()
+        self.assertEqual(p["scarcity_urgency_power"], 1.0)
+        self.assertAlmostEqual(cells._urgency(0.7, p), 0.7)
+
+    def test_scarcity_urgency_power_sharpens_last_chance_targets(self):
+        # A last-chance target (S near 1) and a merely-scarce one (S=0.7) are
+        # 0.3 apart under the raw linear multiplier. Raising the urgency
+        # power should widen that separation (S=1 is a fixed point of x**p,
+        # so the near-1 target barely moves while the 0.7 one is suppressed
+        # further), converting "somewhat scarce" into a comparatively much
+        # smaller share of value than "truly last chance."
+        t = self._target("VAR")
+        linear = _params(scarcity_urgency_power=1.0)
+        sharpened = _params(scarcity_urgency_power=3.0)
+
+        last_chance_linear = cells.compile_cells(t, {}, BASE, END, linear, 0.98)[0].nu
+        scarce_linear = cells.compile_cells(t, {}, BASE, END, linear, 0.7)[0].nu
+        last_chance_sharp = cells.compile_cells(t, {}, BASE, END, sharpened, 0.98)[0].nu
+        scarce_sharp = cells.compile_cells(t, {}, BASE, END, sharpened, 0.7)[0].nu
+
+        ratio_linear = last_chance_linear / scarce_linear
+        ratio_sharp = last_chance_sharp / scarce_sharp
+        self.assertGreater(ratio_sharp, ratio_linear)
+
+    def test_urgency_clamps_and_floors_power_at_one(self):
+        # scarcity is clamped to [0,1] and power floors at 1.0 (no inversion).
+        self.assertAlmostEqual(cells._urgency(1.4, _params()), 1.0)
+        self.assertAlmostEqual(cells._urgency(-0.5, _params()), 0.0)
+        self.assertAlmostEqual(
+            cells._urgency(0.5, _params(scarcity_urgency_power=0.2)), 0.5)
 
     def test_kernel_point_semantics_and_event_coverage(self):
         c = _cell("T1")
@@ -253,7 +357,9 @@ class EmergentCoordinationTest(unittest.TestCase):
     def test_redundancy_suppression_under_good_weather(self):
         """Two reliable nodes under clear skies, one shared high-value target
         plus a weaker unique target each: the shared target is covered ONCE and
-        the freed capacity goes to a unique target — no redundancy_decay knob."""
+        the freed capacity goes to a unique target — no redundancy_decay knob.
+        (Core tier only: the night filler may later pack the redundant repeat
+        into otherwise-idle slots, which is the point of the filler.)"""
         contexts = {"A": _ctx("A"), "B": _ctx("B")}
         cell_map = {"shared": [_cell("shared", nu=1.0)],
                     "uniq_a": [_cell("uniq_a", nu=0.4)],
@@ -261,7 +367,7 @@ class EmergentCoordinationTest(unittest.TestCase):
         opps = {"A": [_opp("A", "shared"), _opp("A", "uniq_a")],
                 "B": [_opp("B", "shared"), _opp("B", "uniq_b")]}
         placements, _, _ = _run(contexts, opps, cell_map)
-        placed = [p.opp.target_id for p in placements]
+        placed = [p.opp.target_id for p in placements if p.tier == "core"]
         self.assertEqual(placed.count("shared"), 1, placed)
         self.assertTrue(set(placed) & {"uniq_a", "uniq_b"}, placed)
 
@@ -292,7 +398,8 @@ class EmergentCoordinationTest(unittest.TestCase):
                           _opp("A", "shared", p_sky=0.35, slots=(8, 10),
                                variant="epoch_b")]}
         placements, _, _ = _run(one_site, opps_one, cell_map, params)
-        self.assertEqual(len(placements), 1)
+        self.assertEqual(
+            len([p for p in placements if p.tier == "core"]), 1)
 
         two_sites = {"A": _ctx("A"), "B": _ctx("B")}
         cell_map2 = {"shared": [_cell("shared", nu=1.0)]}
@@ -300,6 +407,67 @@ class EmergentCoordinationTest(unittest.TestCase):
                     "B": [_opp("B", "shared", p_sky=0.35)]}
         placements2, _, _ = _run(two_sites, opps_two, cell_map2, params)
         self.assertEqual(len(placements2), 2)
+
+    def test_weather_corr_factor_exact_same_node_uses_same_site_factor(self):
+        p = _params(same_site_repeat_factor=0.3)
+        contexts = {"A": _ctx("A")}
+        self.assertAlmostEqual(
+            assign.weather_corr_factor("A", "A", contexts, p), 0.3)
+
+    def test_weather_corr_factor_far_apart_nodes_are_independent(self):
+        p = _params(weather_corr_radius_km=50.0)
+        contexts = {"A": _ctx("A"), "B": _ctx("B")}
+        self.assertAlmostEqual(
+            assign.weather_corr_factor("A", "B", contexts, p), 1.0, places=2)
+
+    def test_weather_corr_factor_close_nodes_interpolate_toward_same_site(self):
+        # Two sites 1 km apart (well inside a 50 km correlation radius) should
+        # land close to the same-site factor, not full independence.
+        p = _params(same_site_repeat_factor=0.25, weather_corr_radius_km=50.0)
+        contexts = {"A": _ctx("A"), "B": _ctx("B")}
+        # ~1 km of latitude ≈ 0.009 deg.
+        contexts["B"].lat = contexts["A"].lat
+        contexts["B"].lon = contexts["A"].lon + 0.009
+        factor = assign.weather_corr_factor("A", "B", contexts, p)
+        self.assertLess(factor, 0.4)
+        self.assertGreaterEqual(factor, 0.25)
+
+    def test_nearby_node_repeat_suppressed_like_same_site(self):
+        # Two DIFFERENT nodes, but close enough (per weather_corr_radius_km)
+        # to be treated as sharing a sky: a second booking of the same
+        # target on the nearby node should be suppressed the same way a
+        # same-node repeat is, not treated as an independent weather hedge.
+        params = _params(min_marginal=0.1, weather_corr_radius_km=50.0)
+        contexts = {"A": _ctx("A"), "B": _ctx("B")}
+        contexts["B"].lat = contexts["A"].lat
+        contexts["B"].lon = contexts["A"].lon + 0.009   # ~1 km away
+        cell_map = {"shared": [_cell("shared", nu=1.0)]}
+        opps = {"A": [_opp("A", "shared", p_sky=0.35)],
+               "B": [_opp("B", "shared", p_sky=0.35)]}
+        placements, _, _ = _run(contexts, opps, cell_map, params)
+        self.assertEqual(
+            len([p for p in placements if p.tier == "core"]), 1)
+
+    def test_cross_node_multi_band_pairing_emerges(self):
+        """Two nodes with complementary filters (A only has 'B', B only has
+        'V') on the same bright generic-family target: each captures the
+        band cell only it can, so the fleet ends up with one epoch's
+        color/SED data instead of two identical single-band measurements —
+        no special-cased pairing logic, just each node chasing the cell
+        its own filter can touch (cells.kernel's band-match gate)."""
+        t = {"target_id": "T1", "name": "T1", "target_type": "VAR",
+            "priority": 0.8, "cadence_hours": 4.0, "mag": 12.0,
+            "ra_deg": 10.0, "dec_deg": 40.0}
+        cell_list = cells.compile_cells(t, {}, BASE, END, _params(), 1.0,
+                                        band_union={"B", "V"})
+        self.assertTrue(any(c.kind == "band" for c in cell_list))
+        contexts = {"A": _ctx("A"), "B": _ctx("B")}
+        opps = {"A": [_opp("A", "T1", filter="B", variant="band_b")],
+               "B": [_opp("B", "T1", filter="V", variant="band_v")]}
+        placements, _, _ = _run(contexts, opps, {"T1": cell_list},
+                                _params(max_obs_per_target=2))
+        placed_filters = {p.node_id: p.opp.filter for p in placements}
+        self.assertEqual(placed_filters, {"A": "B", "B": "V"})
 
     def test_hardware_routes_faint_work_to_the_capable_scope(self):
         """One faint-demand cell (σ_ref 0.02): the node whose physics delivers
@@ -351,11 +519,123 @@ class EmergentCoordinationTest(unittest.TestCase):
         self.assertGreaterEqual(stats["final_phi"], stats["greedy_phi"])
 
     def test_capacity_and_portfolio_caps_respected(self):
+        # The core value greedy honors max_targets; anything beyond the cap
+        # can only be night-filler tier (bounded by occupancy and
+        # filler_max_targets_per_night instead).
         contexts = {"A": _ctx("A", max_targets=2)}
         cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
         opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
-        placements, _, _ = _run(contexts, opps, cell_map)
+        placements, _, stats = _run(contexts, opps, cell_map)
+        core = [p for p in placements if p.tier == "core"]
+        self.assertLessEqual(len(core), 2)
+        self.assertEqual(len(placements) - len(core), stats["n_filler"])
+
+    def test_capacity_cap_hard_with_filler_disabled(self):
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        placements, _, stats = _run(contexts, opps, cell_map,
+                                    params=_params(filler_min_marginal=0.0))
         self.assertLessEqual(len(placements), 2)
+        self.assertEqual(stats["n_filler"], 0)
+
+
+# ── Night filler: dark time is never left unassigned ──────────────────────────
+
+class NightFillerTest(unittest.TestCase):
+    def test_filler_packs_otherwise_free_slots(self):
+        # One node capped at a single core target but with four free windows:
+        # the fill pass must occupy them with the remaining targets.
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(4)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(4)]}
+        placements, _, stats = _run(contexts, opps, cell_map)
+        self.assertEqual(len(placements), 4)
+        self.assertEqual(stats["n_filler"], 3)
+        slots = sorted(p.slot for p in placements)
+        self.assertEqual(len(set(slots)), 4)   # distinct occupancy, no overlap
+
+    def test_sub_min_marginal_places_only_as_filler(self):
+        # Value below the core greedy's floor but above the filler floor:
+        # nothing lands as core, everything that fits lands as filler.
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {"t0": [_cell("t0", nu=0.01)]}
+        opps = {"A": [_opp("A", "t0")]}
+        placements, _, stats = _run(contexts, opps, cell_map)
+        self.assertTrue(placements)
+        self.assertTrue(all(p.tier == "filler" for p in placements))
+        self.assertEqual(stats["n_filler"], len(placements))
+
+    def test_filler_bounded_by_safety_valve(self):
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        placements, _, stats = _run(
+            contexts, opps, cell_map,
+            params=_params(filler_max_targets_per_night=2.0))
+        self.assertEqual(stats["n_filler"], 2)
+        self.assertLessEqual(len(placements), 3)   # 1 core + 2 filler
+
+    def test_filler_respects_max_obs_per_target(self):
+        # Two variants of the same low-value target: the filler must not stack
+        # epochs past the per-target portfolio cap.
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {"t0": [_cell("t0", nu=0.01)]}
+        opps = {"A": [_opp("A", "t0", slots=(0, 2)),
+                      _opp("A", "t0", slots=(8, 10), variant="epoch_b")]}
+        placements, _, _ = _run(contexts, opps, cell_map,
+                                params=_params(max_obs_per_target=1.0))
+        self.assertLessEqual(len(placements), 1)
+
+    def test_filler_is_deterministic(self):
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(4)}
+        runs = []
+        for _ in range(2):
+            opps = {"A": [_opp("A", f"t{i}") for i in range(4)]}
+            placements, _, _ = _run(contexts, opps, cell_map)
+            runs.append(sorted((p.opp.target_id, p.slot, p.tier)
+                               for p in placements))
+        self.assertEqual(runs[0], runs[1])
+
+
+class ContingencyLadderTest(unittest.TestCase):
+    def test_ladder_size_and_runnable_fields(self):
+        from cloud.chorus import assign as assign_mod
+        from cloud.chorus import perform
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        params = _params(filler_min_marginal=0.0)   # leave opps uncommitted
+        placements, _, _ = _run(contexts, opps, cell_map, params=params)
+        final_state = assign_mod.replay(contexts, cell_map, placements, params)
+
+        ladder = perform.contingency_ladder(
+            contexts["A"], opps["A"], final_state, cell_map, params, top_k=3)
+        alts = ladder.get("alternates", [])
+        self.assertEqual(len(alts), 3)
+        for alt in alts:
+            # Every alternate is directly runnable as a node schedule item.
+            for key in ("target", "ra", "dec", "expDur", "expCount", "filter",
+                        "startTime", "score", "observation_mode",
+                        "duration_minutes", "expected_info"):
+                self.assertIn(key, alt)
+            self.assertGreater(alt["expected_info"], 0.0)
+
+    def test_ladder_ranked_by_value(self):
+        from cloud.chorus import assign as assign_mod
+        from cloud.chorus import perform
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {"big": [_cell("big", nu=1.0)],
+                    "small": [_cell("small", nu=0.3)]}
+        opps = {"A": [_opp("A", "big"), _opp("A", "small")]}
+        # Nothing committed at all: an empty replay leaves both as alternates.
+        final_state = assign_mod.replay(contexts, cell_map, [], _params())
+        ladder = perform.contingency_ladder(
+            contexts["A"], opps["A"], final_state, cell_map, _params(),
+            top_k=2)
+        names = [a["target"] for a in ladder["alternates"]]
+        self.assertEqual(names, ["big", "small"])
 
 
 # ── Tuning integration: the chorus group ──────────────────────────────────────

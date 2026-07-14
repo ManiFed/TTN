@@ -205,6 +205,23 @@ def _eb_phase_cells(target: dict, state: dict, nu_base: float) -> list:
     return cells
 
 
+def _urgency(scarcity: float, params: dict) -> float:
+    """Shape the T1 scarcity multiplier before it scales nu.
+
+    Raw scarcity S already favors a use-it-or-lose-it target over an
+    easily-recapturable one (horizon.scarcity's docstring), but that scaling
+    is linear — S=0.98 (days of window left) and S=0.7 (recapturable most
+    nights for months) only differ by 0.28x in value. scarcity_urgency_power
+    (default 1.0, a no-op) raises S to a power >1 when an operator wants
+    truly last-chance targets to pull further ahead of merely-scarce ones;
+    since S ∈ [0,1], any power >1 leaves S≈1 nearly unchanged while
+    suppressing everything below it more steeply.
+    """
+    s = max(0.0, min(1.0, scarcity))
+    power = max(1.0, float(params.get("scarcity_urgency_power", 1.0) or 1.0))
+    return s ** power
+
+
 def _hours_since(iso: Optional[str], now: datetime) -> float:
     if not iso:
         return 24.0 * 30.0
@@ -216,21 +233,33 @@ def _hours_since(iso: Optional[str], now: datetime) -> float:
 
 def compile_cells(target: dict, state: dict, t0: datetime, t1: datetime,
                   params: dict, scarcity: float,
-                  band_union: Optional[set] = None) -> list:
+                  band_union: Optional[set] = None,
+                  templates: Optional[dict] = None) -> list:
     """Tonight's information cells for one target (CHORUS.md §5).
 
     target — targets-table row; state — chorus_target_state dict (may be {});
     [t0, t1] — the fleet-wide planning span; scarcity — the T1 multiplier;
     band_union — filters available anywhere in tonight's fleet (band cells
     only exist when someone can capture them).
+
+    templates — {family: {knob: value}} declarative overrides for the
+    per-family structural knobs below (transient age-segment thresholds/
+    multipliers, the default/transient band-cell value multiplier, the LPV
+    cadence floor) — CHORUS Ring 2 (CHORUS.md §7): "a class template
+    revision... a different cell layout for CVs," proposed and backtest-
+    gated by cloud.chorus.ring2 instead of hand-edited here. None/missing
+    keys fall back to exactly today's hardcoded defaults — this module
+    stays pure/DB-free; the caller (cloud/chorus/planner.py, reflow.py)
+    fetches the active templates once per run and passes them through.
     """
     fam = family_of(target.get("target_type", ""))
     priority = max(0.05, min(1.0, float(target.get("priority", 0.5) or 0.5)))
     vs = chorus_params.value_scale(params, fam)
-    nu_base = vs * priority * max(0.0, min(1.0, scarcity))
+    nu_base = vs * priority * _urgency(scarcity, params)
     cadence_h = max(0.5, float(target.get("cadence_hours", 24.0) or 24.0))
     ephemeris = state.get("ephemeris") or {}
     now = t0 if t0.tzinfo else t0.replace(tzinfo=timezone.utc)
+    tmpl = (templates or {}).get(fam) or {}
 
     if fam == "eb" and ephemeris.get("period_days"):
         return _eb_phase_cells(target, state, nu_base)
@@ -252,8 +281,14 @@ def compile_cells(target: dict, state: dict, t0: datetime, t1: datetime,
                          t0=t0, t1=t1, label="quiescent detection")]
 
     if fam == "transient":
+        recent_d = float(tmpl.get("seg_recent_days", 5.0))
+        mid_d = float(tmpl.get("seg_mid_days", 20.0))
+        recent_mult = float(tmpl.get("seg_recent_mult", 1.5))
+        mid_mult = float(tmpl.get("seg_mid_mult", 1.0))
+        old_mult = float(tmpl.get("seg_old_mult", 0.6))
+        band_mult = float(tmpl.get("band_value_mult", 0.4))
         age_d = _hours_since(target.get("discovered_at"), now) / 24.0
-        seg = 1.5 if age_d < 5 else (1.0 if age_d < 20 else 0.6)
+        seg = recent_mult if age_d < recent_d else (mid_mult if age_d < mid_d else old_mult)
         out = _time_cells(target, t0, t1, width_h=cadence_h,
                           nu=nu_base * seg, sigma_ref=0.05,
                           kind_label="lightcurve")
@@ -262,17 +297,37 @@ def compile_cells(target: dict, state: dict, t0: datetime, t1: datetime,
             tid = target["target_id"]
             out.append(InfoCell(
                 cell_id=f"{tid}:band:{b}", target_id=tid, kind="band",
-                nu=nu_base * 0.4 * seg, sigma_ref=0.06,
+                nu=nu_base * band_mult * seg, sigma_ref=0.06,
                 t0=t0, t1=t1, band=b, label=f"color {b}"))
         return out
 
     if fam == "lpv":
-        return _time_cells(target, t0, t1, width_h=max(cadence_h, 24.0),
+        min_width_h = float(tmpl.get("min_width_h", 24.0))
+        return _time_cells(target, t0, t1, width_h=max(cadence_h, min_width_h),
                            nu=nu_base, sigma_ref=0.08, kind_label="lpv")
 
     # default (generic variables, EBs without an ephemeris, unknowns)
-    return _time_cells(target, t0, t1, width_h=cadence_h,
-                       nu=nu_base, sigma_ref=0.05, kind_label="cadence")
+    band_mult = float(tmpl.get("band_value_mult", 0.4))
+    out = _time_cells(target, t0, t1, width_h=cadence_h,
+                      nu=nu_base, sigma_ref=0.05, kind_label="cadence")
+    # Color cells exist only when someone in tonight's fleet has the band —
+    # the same cross-node opportunity the transient family already models
+    # (§5): a CV-only node can't capture these, but when a complementary-
+    # filter node is also eligible for this target tonight, the emergent
+    # greedy naturally routes each node to the band only it can capture
+    # (separate cells, each requiring a filter match in cells.kernel) rather
+    # than piling every node onto the same brightness measurement — one
+    # epoch's color/SED data from the fleet's combined filter complement,
+    # not just a single-band light curve. Previously only wired for
+    # transients; ordinary AAVSO field variables benefit from color
+    # monitoring just as much and are a much larger share of the programme.
+    for b in sorted((band_union or set()) & {"B", "V", "R"}):
+        tid = target["target_id"]
+        out.append(InfoCell(
+            cell_id=f"{tid}:band:{b}", target_id=tid, kind="band",
+            nu=nu_base * band_mult, sigma_ref=0.06, t0=t0, t1=t1, band=b,
+            label=f"color {b}"))
+    return out
 
 
 def transit_cells(target_id: str, name: str, t_mid: datetime,
@@ -283,7 +338,7 @@ def transit_cells(target_id: str, name: str, t_mid: datetime,
     ingress/egress carry the timing science (CHORUS.md §5)."""
     vs = chorus_params.value_scale(params, "exoplanet")
     depth_factor = max(0.5, min(1.5, (depth_ppt or 5.0) / 10.0))
-    nu = vs * depth_factor * max(0.0, min(1.0, scarcity))
+    nu = vs * depth_factor * _urgency(scarcity, params)
     sigma_ref = max(0.004, 1.0857 * max(depth_ppt or 5.0, 1.0) / 1000.0 / 3.0)
     half = timedelta(hours=max(duration_hours, 0.2) / 2.0)
     third = timedelta(hours=max(duration_hours, 0.2) / 3.0)

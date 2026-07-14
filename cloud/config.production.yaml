@@ -89,13 +89,24 @@ scheduler:
   reflow: true
   reflow_interval_s: 60
   reflow_max_per_night: 200
+  reflow_streak_threshold: 2
+  reflow_streak_eps_relax: 0.5
+  reflow_auto_grade: true
+  reflow_grad_start_cap: 5
+  reflow_grad_min_nights: 3
+  reflow_grad_min_delivery_rate: 0.7
+  reflow_grad_lookback_nights: 14
+  reflow_grad_step_factor: 2.0
   min_score: 0.25
   max_targets_per_night: 12
+  contingency_ladder_size: 10
+  topup_items_per_tick: 3
   sun_altitude_limit: -12
   chorus_params:
     scarcity_gamma: 0.93
     exploration_beta: 0.15
     same_site_repeat_factor: 0.25
+    weather_corr_radius_km: 50.0
 
 aavso:
   observer_code: 'EGBA'

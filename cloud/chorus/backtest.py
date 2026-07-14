@@ -16,6 +16,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from cloud import db
 from cloud.chorus import assign as assign_mod
@@ -108,9 +109,23 @@ def _cell_family(cell, target_types: dict) -> str:
 def archive_run(night: str, seed: int, contexts: dict, opps_by_node: dict,
                 cells_by_target: dict, ch_params: dict, phi_expected: float,
                 target_names: dict, target_types: dict,
-                shadow: bool = False) -> None:
+                shadow: bool = False, target_raw_by_id: Optional[dict] = None,
+                band_union: Optional[set] = None,
+                span_t0: Optional[datetime] = None,
+                span_t1: Optional[datetime] = None) -> None:
     """Persist one run's full deterministic inputs for later replay.
-    Best-effort — never fails plan generation."""
+    Best-effort — never fails plan generation.
+
+    target_raw_by_id — {target_id: {"target": targets-row dict, "state":
+    chorus_target_state dict, "scarcity": float}}, the raw T1 inputs behind
+    each target's already-compiled cells. Ring 1's gate() only ever needs to
+    RESCALE archived cells (a value_scale_* change is a pure multiplier), but
+    a Ring 2 structural template change (cloud/chorus/ring2.py) alters how
+    many cells exist and their relative shape — that can only be tested by
+    recompiling cells.compile_cells from these raw inputs, not by rescaling
+    the already-compiled ones. Optional and additive: existing Ring-1-only
+    callers/replays are unaffected when omitted.
+    """
     try:
         forecast_by_node = {}
         for nid, opps in opps_by_node.items():
@@ -128,6 +143,10 @@ def archive_run(night: str, seed: int, contexts: dict, opps_by_node: dict,
             "params": ch_params,
             "forecast_by_node": forecast_by_node,
             "target_names": target_names,
+            "target_raw": target_raw_by_id or {},
+            "band_union": sorted(band_union or set()),
+            "span_t0": span_t0.isoformat() if span_t0 else None,
+            "span_t1": span_t1.isoformat() if span_t1 else None,
         }
         db.execute(
             """INSERT INTO chorus_run_archive
