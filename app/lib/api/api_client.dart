@@ -31,31 +31,33 @@ class ApiClient {
         if (_auth.token != null) 'Authorization': 'Bearer ${_auth.token}',
       };
 
+  /// Caps every request so a dead/slow API fails fast instead of hanging on
+  /// the OS-level socket timeout (which can be a minute or more).
+  static const Duration _timeout = Duration(seconds: 10);
+
   Future<Map<String, dynamic>> _get(String path, [Map<String, dynamic>? query]) async {
-    final res = await _http.get(AppConfig.uri(path, query), headers: _headers);
+    final res =
+        await _http.get(AppConfig.uri(path, query), headers: _headers).timeout(_timeout);
     return _decode(res);
   }
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) async {
-    final res = await _http.post(
-      AppConfig.uri(path),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
+    final res = await _http
+        .post(AppConfig.uri(path), headers: _headers, body: jsonEncode(body))
+        .timeout(_timeout);
     return _decode(res);
   }
 
   Future<Map<String, dynamic>> _put(String path, Map<String, dynamic> body) async {
-    final res = await _http.put(
-      AppConfig.uri(path),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
+    final res = await _http
+        .put(AppConfig.uri(path), headers: _headers, body: jsonEncode(body))
+        .timeout(_timeout);
     return _decode(res);
   }
 
   Future<Map<String, dynamic>> _delete(String path) async {
-    final res = await _http.delete(AppConfig.uri(path), headers: _headers);
+    final res =
+        await _http.delete(AppConfig.uri(path), headers: _headers).timeout(_timeout);
     return _decode(res);
   }
 
@@ -276,11 +278,9 @@ class ApiClient {
       });
 
   Future<void> deleteAccount() async {
-    final res = await _http.delete(
-      AppConfig.uri('/me'),
-      headers: _headers,
-      body: jsonEncode({'confirm': true}),
-    );
+    final res = await _http
+        .delete(AppConfig.uri('/me'), headers: _headers, body: jsonEncode({'confirm': true}))
+        .timeout(_timeout);
     _decode(res);
   }
 

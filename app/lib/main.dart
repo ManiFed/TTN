@@ -13,11 +13,14 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final appState = AppState(AuthStore());
-  await appState.bootstrap();
 
   runApp(
     ChangeNotifierProvider.value(value: appState, child: const TelescopeNetApp()),
   );
+
+  // Renders the spinner (AuthStatus.unknown) immediately instead of blocking
+  // the first frame on the network round-trips inside bootstrap().
+  unawaited(appState.bootstrap());
 }
 
 class TelescopeNetApp extends StatefulWidget {
