@@ -2069,6 +2069,12 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   String? _resolvedLocation;
   List<Map<String, dynamic>> _locationResults = [];
   bool _linked = false;
+  // Whether the ALPACA connect actually succeeded, as opposed to just the
+  // cloud account link -- these used to be conflated, so "Connected!" showed
+  // even when the telescope itself was never reached (see _link()).
+  bool _telescopeConnected = false;
+  String? _nodeId;
+  String? _apiKey;
   _LocStep _step = _LocStep.idle;
 
   // Telescope
@@ -2289,11 +2295,24 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         throw Exception('Cloud did not return node credentials.');
       }
       // Install credentials on the local node agent when it's running.
+      bool telescopeConnected = false;
       try {
         final agent = NodeAgentClient();
         final status = await agent.status();
         await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
-        final chosen = _selectedAlpacaServer;
+        var chosen = _selectedAlpacaServer;
+        // Discovery ran once when this sheet opened -- if the Seestar wasn't
+        // reachable yet at that instant (still booting, just powered on),
+        // nothing was ever selected and the telescope would silently never
+        // get connected even though the cloud link succeeds. Re-scan now,
+        // right before finishing, since the user has typically spent at
+        // least a few seconds on the form by this point.
+        if (chosen == null) {
+          try {
+            final rediscovered = await agent.discoverAlpacaServers();
+            if (rediscovered.length == 1) chosen = rediscovered.first;
+          } catch (_) {}
+        }
         if (chosen != null) {
           final host = chosen['address'] as String? ?? '';
           final port = (chosen['port'] as num?)?.toInt() ?? 11111;
@@ -2301,8 +2320,9 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             try {
               await agent.connectAlpaca(
                   host: host, port: port, setAsDefault: true);
+              telescopeConnected = true;
             } catch (_) {
-              // Non-fatal — the account is still linked; the user can pick
+              // Non-fatal -- the account is still linked; the user can pick
               // the ALPACA server again from the dashboard later.
             }
           }
@@ -2324,9 +2344,45 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       }
       if (!mounted) return;
       await context.read<AppState>().refreshNodes();
-      if (mounted) setState(() { _busy = false; _linked = true; });
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _linked = true;
+          _telescopeConnected = telescopeConnected;
+          _nodeId = nodeId;
+          _apiKey = apiKey;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() { _busy = false; _error = '$e'; });
+    }
+  }
+
+  /// Re-scans for the telescope and connects it, without re-running the
+  /// cloud attach step (the node is already linked at this point).
+  Future<void> _retryTelescopeConnect() async {
+    final nodeId = _nodeId;
+    final apiKey = _apiKey;
+    if (nodeId == null || apiKey == null) return;
+    setState(() { _busy = true; _error = null; });
+    var connected = false;
+    try {
+      final agent = NodeAgentClient();
+      final servers = await agent.discoverAlpacaServers();
+      if (servers.isNotEmpty) {
+        final chosen = servers.first;
+        final host = chosen['address'] as String? ?? '';
+        final port = (chosen['port'] as num?)?.toInt() ?? 11111;
+        if (host.isNotEmpty) {
+          await agent.connectAlpaca(host: host, port: port, setAsDefault: true);
+          connected = true;
+        }
+      }
+    } catch (_) {
+      // Still not found -- leave the "not connected" state showing.
+    }
+    if (mounted) {
+      setState(() { _busy = false; _telescopeConnected = connected; });
     }
   }
 
@@ -2355,18 +2411,40 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           Text('Connect a telescope', style: tt.headlineSmall),
           const SizedBox(height: 10),
           if (_linked) ...[
-            const Icon(Icons.check_circle_outline,
-                color: BSTheme.success, size: 48),
+            Icon(
+              _telescopeConnected
+                  ? Icons.check_circle_outline
+                  : Icons.warning_amber_rounded,
+              color: _telescopeConnected ? BSTheme.success : BSTheme.warning,
+              size: 48,
+            ),
             const SizedBox(height: 16),
-            Text('Telescope connected!', style: tt.titleLarge),
+            Text(
+              _telescopeConnected
+                  ? 'Telescope connected!'
+                  : 'Account linked — telescope not found yet',
+              style: tt.titleLarge,
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 8),
             Text(
-              'This telescope is linked to your account. '
-              'Credentials were installed on the local node service when available.',
+              _telescopeConnected
+                  ? 'This telescope is linked to your account and the local '
+                      'node service is talking to it.'
+                  : 'Your account is linked, but this computer could not find '
+                      'the telescope on the network. Make sure it\'s powered '
+                      'on and connected to the same WiFi, then try again.',
               style: tt.bodyMedium,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
+            if (!_telescopeConnected) ...[
+              OutlinedButton(
+                onPressed: _busy ? null : _retryTelescopeConnect,
+                child: Text(_busy ? 'Searching…' : 'Try again'),
+              ),
+              const SizedBox(height: 10),
+            ],
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
               child: const Text('Done'),
