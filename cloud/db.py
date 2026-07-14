@@ -191,6 +191,20 @@ _SCHEMA: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
     "CREATE INDEX IF NOT EXISTS idx_users_token ON users(auth_token_hash)",
+    # Multiple concurrent sessions per user (desktop + mobile signed in at
+    # once, etc). Previously login overwrote users.auth_token_hash, silently
+    # killing every other device's session the moment one signed back in --
+    # that column is unused now but kept for backward compat with old rows.
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+        token_hash   TEXT PRIMARY KEY,
+        user_id      TEXT NOT NULL REFERENCES users(user_id),
+        created_at   TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        expires_at   TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
     """
     CREATE TABLE IF NOT EXISTS members (
         user_id             TEXT PRIMARY KEY REFERENCES users(user_id),

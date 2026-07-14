@@ -1402,6 +1402,16 @@ def api_auth_login():
     return jsonify(result)
 
 
+@app.route("/api/v1/auth/logout", methods=["POST"])
+def api_auth_logout():
+    """Revoke only the calling device's session -- other signed-in devices
+    (e.g. desktop app while phone is also signed in) are unaffected."""
+    token = auth._extract_token()
+    if token:
+        auth.logout(token)
+    return jsonify({"ok": True})
+
+
 # ── Member profile ─────────────────────────────────────────────────────────────
 
 @app.route("/api/v1/me", methods=["GET"])

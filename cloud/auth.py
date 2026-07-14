@@ -2,9 +2,11 @@
 """
 Member authentication for the The Telescope Net cloud.
 
-Token-based: each user gets a bearer token (secrets.token_urlsafe(32)) stored
-as a SHA-256 hash in the users table.  Token is returned on register/login and
-passed as "Authorization: Bearer <token>" or the "X-Auth-Token" header.
+Token-based, multi-session: each login/register issues a bearer token stored
+as a SHA-256 hash in the sessions table (one row per signed-in device), so
+signing in on the phone doesn't kick the desktop app back to the login
+screen and vice versa. Token is returned on register/login and passed as
+"Authorization: Bearer <token>" or the "X-Auth-Token" header.
 
 Passwords are stored as PBKDF2-HMAC-SHA256 with a per-user salt (260 000 rounds).
 
@@ -20,12 +22,13 @@ Public API
     auth.register(email, password, display_name)  → {"user_id", "token"}
     auth.login(email, password)                   → {"user_id", "token"}
     auth.verify_token(token)                      → user row dict | None
+    auth.logout(token)                             → revokes just this session
 """
 
 import hashlib
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional
 
@@ -36,6 +39,7 @@ from cloud import db
 logger = logging.getLogger("cloud.auth")
 
 _PBKDF2_ITERATIONS = 260_000
+_SESSION_TTL_DAYS = 90
 
 
 def _now() -> str:
@@ -44,6 +48,25 @@ def _now() -> str:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _expiry_from(now: datetime) -> str:
+    return (now + timedelta(days=_SESSION_TTL_DAYS)).isoformat()
+
+
+def _issue_session(user_id: str) -> str:
+    """Create a new session row (does not touch any other device's session)."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    db.execute(
+        """INSERT INTO sessions (token_hash, user_id, created_at, last_used_at, expires_at)
+           VALUES (%s,%s,%s,%s,%s)""",
+        (_hash_token(token), user_id, now.isoformat(), now.isoformat(), _expiry_from(now)),
+    )
+    # Opportunistic cleanup — no cron needed, this runs on every sign-in.
+    db.execute("DELETE FROM sessions WHERE user_id = %s AND expires_at < %s",
+               (user_id, now.isoformat()))
+    return token
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -71,15 +94,14 @@ def register(email: str, password: str, display_name: str = "") -> dict:
     user_id = f"u_{secrets.token_hex(8)}"
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(password, salt)
-    token = secrets.token_urlsafe(32)
-    token_hash = _hash_token(token)
 
     db.execute(
         """INSERT INTO users
-               (user_id, email, password_hash, salt, auth_token_hash, created_at, last_login)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-        (user_id, email, pw_hash, salt, token_hash, _now(), _now()),
+               (user_id, email, password_hash, salt, created_at, last_login)
+           VALUES (%s,%s,%s,%s,%s,%s)""",
+        (user_id, email, pw_hash, salt, _now(), _now()),
     )
+    token = _issue_session(user_id)
     db.execute(
         "INSERT INTO members (user_id, display_name, created_at) VALUES (%s,%s,%s)",
         (user_id, display_name.strip() or email.split("@")[0], _now()),
@@ -104,22 +126,44 @@ def login(email: str, password: str) -> dict:
     if not secrets.compare_digest(pw_hash, row["password_hash"]):
         raise ValueError("invalid email or password")
 
-    token = secrets.token_urlsafe(32)
     db.execute(
-        "UPDATE users SET auth_token_hash = %s, last_login = %s WHERE user_id = %s",
-        (_hash_token(token), _now(), row["user_id"]),
+        "UPDATE users SET last_login = %s WHERE user_id = %s",
+        (_now(), row["user_id"]),
     )
+    token = _issue_session(row["user_id"])
     logger.info("Member login: %s", row["user_id"])
     return {"user_id": row["user_id"], "token": token}
 
 
 def verify_token(token: str) -> Optional[dict]:
-    """Return the user row if the bearer token is valid, else None."""
+    """Return the user row if the bearer token is valid, else None.
+
+    Sliding expiry: every verified request pushes this session's expiry
+    another _SESSION_TTL_DAYS out, so an actively-used app is never
+    signed out; only one left untouched that long is.
+    """
     if not token:
         return None
-    return db.query_one(
-        "SELECT * FROM users WHERE auth_token_hash = %s", (_hash_token(token),)
+    token_hash = _hash_token(token)
+    row = db.query_one(
+        """SELECT u.* FROM sessions s JOIN users u ON u.user_id = s.user_id
+           WHERE s.token_hash = %s AND s.expires_at > %s""",
+        (token_hash, _now()),
     )
+    if row is None:
+        return None
+    now = datetime.now(timezone.utc)
+    db.execute(
+        "UPDATE sessions SET last_used_at = %s, expires_at = %s WHERE token_hash = %s",
+        (now.isoformat(), _expiry_from(now), token_hash),
+    )
+    return row
+
+
+def logout(token: str) -> None:
+    """Revoke just this device's session -- other signed-in devices are unaffected."""
+    if token:
+        db.execute("DELETE FROM sessions WHERE token_hash = %s", (_hash_token(token),))
 
 
 # ── Flask decorator ────────────────────────────────────────────────────────────

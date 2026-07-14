@@ -190,6 +190,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    await _api.logout();
     await _auth.clear();
     member = null;
     _hasNode = null;

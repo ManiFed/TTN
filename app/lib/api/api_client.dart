@@ -93,6 +93,15 @@ class ApiClient {
     await _auth.save(json['token'] as String, json['user_id'] as String);
   }
 
+  /// Revokes this device's session only -- other signed-in devices are
+  /// unaffected. Best-effort: local sign-out proceeds even if this fails
+  /// (e.g. already offline).
+  Future<void> logout() async {
+    try {
+      await _post('/auth/logout', {});
+    } catch (_) {}
+  }
+
   // ── Member data ──────────────────────────────────────────────────────────
 
   Future<Member> me() async => Member.fromJson(await _get('/me'));
