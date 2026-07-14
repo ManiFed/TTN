@@ -103,11 +103,15 @@ def serve_website(filename):
 # GitHub Releases are the canonical source. The endpoint redirects so the URL
 # on the website stays stable even as release tags change.
 
-_GITHUB_RELEASE_BASE = "https://github.com/ManiFed/TTN/releases/download"
-_GITHUB_RELEASE_PAGE = "https://github.com/ManiFed/TTN/releases/tag/v1.0.4"
+_GITHUB_LATEST_RELEASE = "https://github.com/ManiFed/TTN/releases/latest/download"
+_GITHUB_RELEASE_PAGE = "https://github.com/ManiFed/TTN/releases/latest"
 
+# Stable, version-agnostic asset names: the release workflow uploads assets
+# under these exact names on every tag, so this link never goes stale again
+# (previously hardcoded a version tag + filename that rotted the moment a new
+# release shipped without this file being updated to match).
 _DOWNLOAD_URLS = {
-    "macos":   f"{_GITHUB_RELEASE_BASE}/v1.0.4/TelescopeNetNode-1.0.4-macOS.pkg",
+    "macos":   f"{_GITHUB_LATEST_RELEASE}/TelescopeNetNode-macOS.pkg",
     "windows": os.environ.get("TTN_WINDOWS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
     "linux":   os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
     "raspberry-pi-os": os.environ.get("TTN_RASPIOS_DOWNLOAD_URL", _GITHUB_RELEASE_PAGE),
