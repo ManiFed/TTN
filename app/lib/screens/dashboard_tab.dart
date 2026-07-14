@@ -51,6 +51,12 @@ class _DashboardTabState extends State<DashboardTab> {
   Object? _error;
   bool _loading = true;
   Timer? _pollTimer;
+  // Which node's telescope status this tab is showing. History/Me/etc. stay
+  // aggregated across every node the member owns; only the live telescope
+  // status here is inherently single-node (a status banner can't show two
+  // telescopes' state at once), so it gets an explicit picker instead of
+  // silently defaulting to whichever node the API happened to list first.
+  String? _selectedNodeId;
 
   @override
   void initState() {
@@ -154,8 +160,16 @@ class _DashboardTabState extends State<DashboardTab> {
         ),
       );
     }
+    final nodes = _data!.nodes;
+    final selected = nodes.isEmpty
+        ? null
+        : (nodes.where((n) => n.nodeId == _selectedNodeId).isNotEmpty
+            ? nodes.firstWhere((n) => n.nodeId == _selectedNodeId)
+            : nodes.first);
     return _DashboardView(
       data: _data!,
+      selectedNode: selected,
+      onSelectNode: (id) => setState(() => _selectedNodeId = id),
       onRefresh: () => _refresh(),
       onNavigateToTab: widget.onNavigateToTab,
     );
@@ -167,10 +181,14 @@ class _DashboardTabState extends State<DashboardTab> {
 class _DashboardView extends StatefulWidget {
   const _DashboardView({
     required this.data,
+    required this.selectedNode,
+    required this.onSelectNode,
     required this.onRefresh,
     this.onNavigateToTab,
   });
   final _DashboardData data;
+  final Node? selectedNode;
+  final void Function(String) onSelectNode;
   final Future<void> Function() onRefresh;
   final void Function(int)? onNavigateToTab;
 
@@ -251,10 +269,20 @@ class _DashboardViewState extends State<_DashboardView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 1040;
+        final nodePicker = widget.data.nodes.length > 1
+            ? _fadeUp(
+                0,
+                _NodePicker(
+                  nodes: widget.data.nodes,
+                  selectedNodeId: widget.selectedNode?.nodeId,
+                  onSelect: widget.onSelectNode,
+                ),
+              )
+            : null;
         final statusBanner = _fadeUp(
           0,
           _LiveStatusBanner(
-            nodes: widget.data.nodes,
+            node: widget.selectedNode,
             planCount: widget.data.timeline.length,
             activePlanTarget: selectedPlan?.target,
           ),
@@ -262,7 +290,9 @@ class _DashboardViewState extends State<_DashboardView> {
         final telescopePanel = _fadeUp(
           0,
           _TelescopeOpsPanel(
-            nodes: widget.data.nodes,
+            node: widget.selectedNode,
+            onlineCount: widget.data.nodes.where((n) => n.online).length,
+            totalCount: widget.data.nodes.length,
             unread: unread,
             onOpenAlerts: () => widget.onNavigateToTab?.call(99),
           ),
@@ -320,6 +350,10 @@ class _DashboardViewState extends State<_DashboardView> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          if (nodePicker != null) ...[
+                            nodePicker,
+                            const SizedBox(height: 10),
+                          ],
                           statusBanner,
                           const SizedBox(height: 10),
                           telescopePanel,
@@ -347,6 +381,10 @@ class _DashboardViewState extends State<_DashboardView> {
           padding: const EdgeInsets.fromLTRB(12, desktopTopPad, 12, 12),
           child: Column(
             children: [
+              if (nodePicker != null) ...[
+                nodePicker,
+                const SizedBox(height: 10),
+              ],
               statusBanner,
               const SizedBox(height: 10),
               Expanded(
@@ -418,20 +456,81 @@ Target? _selectedTargetForPlan(
   return null;
 }
 
+/// Node selector shown above the status banner when a member has more than
+/// one telescope -- Tonight's live status/ops panels can only show one
+/// telescope at a time, so this makes the choice explicit instead of
+/// silently always showing whichever node the API happened to list first.
+class _NodePicker extends StatelessWidget {
+  const _NodePicker({
+    required this.nodes,
+    required this.selectedNodeId,
+    required this.onSelect,
+  });
+
+  final List<Node> nodes;
+  final String? selectedNodeId;
+  final void Function(String) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: BSTheme.surface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: BSTheme.glassBorder),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: nodes.any((n) => n.nodeId == selectedNodeId)
+              ? selectedNodeId
+              : nodes.first.nodeId,
+          icon: const Icon(Icons.expand_more, color: BSTheme.ink2, size: 18),
+          dropdownColor: BSTheme.surface,
+          style: const TextStyle(
+            fontFamily: 'Geist',
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+            color: BSTheme.ink,
+          ),
+          items: [
+            for (final n in nodes)
+              DropdownMenuItem(
+                value: n.nodeId,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LiveDot(color: n.online ? BSTheme.accent : BSTheme.ink3),
+                    const SizedBox(width: 8),
+                    Text(n.label),
+                  ],
+                ),
+              ),
+          ],
+          onChanged: (id) {
+            if (id != null) onSelect(id);
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class _LiveStatusBanner extends StatelessWidget {
   const _LiveStatusBanner({
-    required this.nodes,
+    required this.node,
     required this.planCount,
     this.activePlanTarget,
   });
 
-  final List<Node> nodes;
+  final Node? node;
   final int planCount;
   final String? activePlanTarget;
 
   @override
   Widget build(BuildContext context) {
-    final node = nodes.isEmpty ? null : nodes.first;
+    final node = this.node;
     final status = primaryNodeStatus(
       node: node,
       planCount: planCount,
@@ -511,12 +610,16 @@ class _LiveStatusBanner extends StatelessWidget {
 
 class _TelescopeOpsPanel extends StatefulWidget {
   const _TelescopeOpsPanel({
-    required this.nodes,
+    required this.node,
+    required this.onlineCount,
+    required this.totalCount,
     required this.unread,
     required this.onOpenAlerts,
   });
 
-  final List<Node> nodes;
+  final Node? node;
+  final int onlineCount;
+  final int totalCount;
   final int unread;
   final VoidCallback onOpenAlerts;
 
@@ -562,23 +665,17 @@ class _TelescopeOpsPanelState extends State<_TelescopeOpsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final nodes = widget.nodes;
     final unread = widget.unread;
     final onOpenAlerts = widget.onOpenAlerts;
-    final node = nodes.isEmpty ? null : nodes.first;
-    final online = nodes.where((n) => n.online).length;
-    final selectedLabel = node != null
-        ? node.label
-        : nodes.length > 1
-            ? 'All telescopes'
-            : 'No telescope';
+    final node = widget.node;
+    final selectedLabel = node?.label ?? 'No telescope';
 
     return _OpsPanel(
       padding: EdgeInsets.zero,
       child: _PanelScrollBody(
         header: _WorkbenchHeader(
           title: 'Telescope',
-          trailing: '$online/${nodes.length} online',
+          trailing: '${widget.onlineCount}/${widget.totalCount} online',
           color: BSTheme.ink3,
         ),
         bodyPadding: const EdgeInsets.all(12),
