@@ -86,7 +86,6 @@ cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 # The node agent HTML (dashboard.py) is a background service only.
 # Users must open TelescopeNet.app — the Flutter member control surface.
 HAS_DESKTOP_APP=0
-rm -rf "${DESKTOP_BUNDLE_DIR}"
 # Accept either product name from Flutter builds
 if [ ! -d "${FLUTTER_APP_SOURCE}" ]; then
     for candidate in \
@@ -102,6 +101,7 @@ if [ ! -d "${FLUTTER_APP_SOURCE}" ]; then
 fi
 if [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" != "${DESKTOP_BUNDLE_DIR}" ]; then
     echo "Using Flutter member app: ${FLUTTER_APP_SOURCE}"
+    rm -rf "${DESKTOP_BUNDLE_DIR}"
     cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
     # Normalize executable/display name expectations for open -a
     HAS_DESKTOP_APP=1
