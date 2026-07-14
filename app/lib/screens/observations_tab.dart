@@ -47,7 +47,7 @@ class _ObservationsTabState extends State<ObservationsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final top = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom + 64;
 
     return AsyncView<_Data>(

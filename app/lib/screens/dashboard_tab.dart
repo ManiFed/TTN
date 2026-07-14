@@ -228,7 +228,7 @@ class _DashboardViewState extends State<_DashboardView> {
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final topPad = MediaQuery.of(context).padding.top;
     final unread = widget.data.alerts.where((a) => !a.read).length;
     final priorityTargets = [...widget.data.targets]
       ..sort((a, b) => b.priority.compareTo(a.priority));
@@ -341,7 +341,7 @@ class _DashboardViewState extends State<_DashboardView> {
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(
                     14,
-                    topPad,
+                    topPad + 10,
                     14,
                     bottomPad + 14,
                   ),
@@ -373,7 +373,7 @@ class _DashboardViewState extends State<_DashboardView> {
           );
         }
 
-        const desktopTopPad = kToolbarHeight;
+        const desktopTopPad = 10.0;
         final availableHeight = constraints.maxHeight - desktopTopPad - 18;
         final observationHeight = (availableHeight * 0.22).clamp(142.0, 190.0);
 

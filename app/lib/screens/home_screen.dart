@@ -116,7 +116,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         Scaffold(
           backgroundColor: Colors.transparent,
-          extendBodyBehindAppBar: true,
           extendBody: true,
           appBar: AppBar(
             backgroundColor: Colors.transparent,
@@ -318,9 +317,6 @@ class _ReadinessRail extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 104,
-      margin: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + kToolbarHeight,
-      ),
       decoration: const BoxDecoration(
         color: Color(0xF0030404),
         border: Border(
