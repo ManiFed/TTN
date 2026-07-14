@@ -2314,6 +2314,7 @@ def api_me_delete(user):
 
     uid = user["user_id"]
     # Remove all member-owned data in dependency order.
+    db.execute("DELETE FROM sessions WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM notifications WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM help_chat_messages WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM science_program_suggestions WHERE user_id = %s", (uid,))
