@@ -41,6 +41,15 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve app version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.32.4'
@@ -75,7 +84,10 @@ jobs:
       - working-directory: app
         run: flutter pub get
       - working-directory: app
-        run: flutter build macos --release --dart-define=API_BASE=https://api.thetelescope.net
+        run: |
+          flutter build macos --release \
+            --dart-define=API_BASE=https://api.thetelescope.net \
+            --dart-define=APP_VERSION=${{ steps.ver.outputs.version }}
       - name: Stage macOS .app
         run: |
           SRC=""

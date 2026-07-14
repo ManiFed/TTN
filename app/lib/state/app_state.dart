@@ -1,8 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
 import '../api/auth_store.dart';
+import '../config.dart';
 import '../models/models.dart';
+
+/// True if [latest] is a newer X.Y.Z version than [current]. Non-numeric or
+/// malformed strings compare as not-newer rather than throwing, since this
+/// only ever gates a dismissible banner.
+bool _isNewerVersion(String current, String latest) {
+  List<int> parts(String v) => v
+      .split('.')
+      .map((p) => int.tryParse(p.trim()) ?? 0)
+      .toList();
+  final a = parts(current);
+  final b = parts(latest);
+  for (var i = 0; i < (a.length > b.length ? a.length : b.length); i++) {
+    final ai = i < a.length ? a[i] : 0;
+    final bi = i < b.length ? b[i] : 0;
+    if (bi != ai) return bi > ai;
+  }
+  return false;
+}
 
 enum AuthStatus { unknown, signedOut, signedIn }
 
@@ -31,8 +52,37 @@ class AppState extends ChangeNotifier {
   /// Unread notification count — shown as a badge on the Alerts tab.
   int unreadNotifications = 0;
 
+  /// Set when the cloud reports a newer published version than this build.
+  /// Null = up to date (or not yet checked / check failed).
+  String? updateAvailableVersion;
+  String updateDownloadPage = '';
+  bool _updateBannerDismissed = false;
+  bool get showUpdateBanner =>
+      updateAvailableVersion != null && !_updateBannerDismissed;
+
+  void dismissUpdateBanner() {
+    _updateBannerDismissed = true;
+    notifyListeners();
+  }
+
+  Future<void> checkForUpdate() async {
+    try {
+      final result = await _api.latestVersion();
+      if (result == null) return;
+      final (latest, downloadPage) = result;
+      if (_isNewerVersion(AppConfig.appVersion, latest)) {
+        updateAvailableVersion = latest;
+        updateDownloadPage = downloadPage;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Never let an update check disrupt the app.
+    }
+  }
+
   /// Loads any persisted token and probes whether it is still valid.
   Future<void> bootstrap() async {
+    unawaited(checkForUpdate());
     await _auth.load();
     if (!_auth.isLoggedIn) {
       status = AuthStatus.signedOut;

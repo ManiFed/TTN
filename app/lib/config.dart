@@ -3,6 +3,12 @@ library;
 class AppConfig {
   /// All cloud routes are versioned under /api/v1.
   static const String apiPrefix = '/api/v1';
+
+  /// Set by the release workflow via --dart-define=APP_VERSION=<tag, no 'v'>.
+  /// Local/dev builds default to '0.0.0' so the update-nag banner never fires
+  /// against an un-tagged build.
+  static const String appVersion =
+      String.fromEnvironment('APP_VERSION', defaultValue: '0.0.0');
   static const String _legacyDefinedApiBase =
       String.fromEnvironment('BS_API_BASE', defaultValue: '');
   static const String _definedApiBase =

@@ -142,6 +142,20 @@ class ApiClient {
         .toList();
   }
 
+  /// Newest published node/app version + where to get it, for the
+  /// update-available banner. Public endpoint — no auth required, and
+  /// failures should never surface (returns null instead of throwing).
+  Future<(String, String)?> latestVersion() async {
+    try {
+      final json = await _get('/versions');
+      final version = json['latest'] as String?;
+      if (version == null) return null;
+      return (version, json['download_page'] as String? ?? '');
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Register/link a telescope to this member account (no activation codes).
   /// Returns {node_id, api_key, linked}.
   Future<Map<String, dynamic>> attachNode({

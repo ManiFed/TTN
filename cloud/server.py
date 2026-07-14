@@ -127,6 +127,46 @@ def download_node_agent(platform: str = "macos"):
     return _redirect(url, code=302)
 
 
+# Cached lookup of the newest published release tag, so the app/node agent can
+# nag members to update instead of silently drifting out of sync the way
+# v1.0.4 did. Cached for a few minutes — GitHub's API is rate-limited and this
+# value changes at most a few times a month.
+_latest_version_cache: dict = {"version": None, "checked_at": 0.0}
+_LATEST_VERSION_TTL = 300.0
+
+def _fetch_latest_version() -> str | None:
+    now = _time.time()
+    if _latest_version_cache["version"] and now - _latest_version_cache["checked_at"] < _LATEST_VERSION_TTL:
+        return _latest_version_cache["version"]
+    try:
+        import requests
+        resp = requests.get(
+            "https://api.github.com/repos/ManiFed/TTN/releases/latest", timeout=5)
+        resp.raise_for_status()
+        tag = resp.json().get("tag_name", "")
+        version = tag[1:] if tag.startswith("v") else tag
+    except Exception as exc:
+        logger.warning("Could not fetch latest release version: %s", exc)
+        return _latest_version_cache["version"]
+    _latest_version_cache["version"] = version or None
+    _latest_version_cache["checked_at"] = now
+    return _latest_version_cache["version"]
+
+
+@app.route("/api/v1/versions", methods=["GET"])
+def api_versions():
+    """Newest published node/app version, for update-nag banners.
+
+    Node agent + Flutter app are built and released together from one tag, so
+    a single version string covers every platform.
+    """
+    version = _fetch_latest_version()
+    return jsonify({
+        "latest": version,
+        "download_page": _GITHUB_RELEASE_PAGE,
+    })
+
+
 @app.after_request
 def _cors(resp):
     """Allow the marketing site / dashboard (served from another origin in dev)

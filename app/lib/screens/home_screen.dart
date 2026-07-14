@@ -285,6 +285,17 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
         ),
+        if (state.showUpdateBanner)
+          Align(
+            alignment: Alignment.topCenter,
+            child: SafeArea(
+              child: _UpdateBanner(
+                version: state.updateAvailableVersion!,
+                downloadPage: state.updateDownloadPage,
+                onDismiss: state.dismissUpdateBanner,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -541,6 +552,72 @@ class _BottomNavItem extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({
+    required this.version,
+    required this.downloadPage,
+    required this.onDismiss,
+  });
+
+  final String version;
+  final String downloadPage;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: BSTheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BSTheme.accent.withValues(alpha: 0.4)),
+        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 12)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.system_update_alt, color: BSTheme.accent, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            'Update available: v$version',
+            style: const TextStyle(
+              fontFamily: 'Geist',
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: BSTheme.ink,
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: downloadPage.isEmpty
+                ? null
+                : () => launchUrl(
+                      Uri.parse(downloadPage),
+                      mode: LaunchMode.externalApplication,
+                    ),
+            child: const Text(
+              'Download',
+              style: TextStyle(
+                fontFamily: 'Geist',
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: BSTheme.accent,
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: onDismiss,
+            child: const Icon(Icons.close, color: BSTheme.ink2, size: 16),
+          ),
+        ],
       ),
     );
   }
