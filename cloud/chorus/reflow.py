@@ -77,6 +77,39 @@ def detect_dropouts(config: dict) -> list[dict]:
     return out
 
 
+def detect_starved(config: dict) -> list[dict]:
+    """Nodes sitting idle in the dark with nothing left to run.
+
+    Unlike detect_dropouts (a node going dark-but-dead mid-plan), this is a
+    node whose plan simply ran out — CHORUS under-filled its night. It only
+    fires on the node's own explicit `work_starved` flag (see
+    src.dashboard._mark_work_starved): idle+dark alone is not enough, since a
+    node is briefly idle between every plan item as a matter of course.
+    Skips any node already carrying a live 'topup' interrupt so a slow
+    dispatch cycle can't pile a second one on top of the first.
+    """
+    fleet = live.fleet_state()
+    now = _now()
+    pending: set[str] = set()
+    for r in db.query(
+            "SELECT node_ids FROM interrupts WHERE reason = 'topup' "
+            "AND expires_at > %s", (now,)):
+        pending.update(db.loads(r.get("node_ids"), []))
+
+    out: list[dict] = []
+    for row in fleet:
+        node_id = row["node_id"]
+        if row["phase"] != "idle" or not row.get("is_dark") or not row.get("online"):
+            continue
+        if node_id in pending:
+            continue
+        detail = (live.node_live(node_id) or {}).get("detail") or {}
+        if not detail.get("work_starved"):
+            continue
+        out.append({"node_id": node_id, "phase": "idle"})
+    return out
+
+
 def detect_urgent_alerts(config: dict) -> Optional[dict]:
     """New time-critical alert targets that arrived after tonight's plan was
     generated and haven't already been reflowed in.
@@ -154,6 +187,28 @@ def _remaining_items(node_id: str, current_idx) -> list[dict]:
     return remaining
 
 
+def _topup_candidates(node_id: str) -> list[dict]:
+    """Active targets a work-starved node hasn't already run or been offered
+    tonight — the catalog scan _candidate_placements re-values for it.
+    """
+    night = _tonight()
+    already = {r["target_id"] for r in db.query(
+        "SELECT target_id FROM reflow_log WHERE night = %s", (night,))}
+    plan = db.query_one(
+        "SELECT plan_json FROM plans WHERE node_id = %s AND status = 'current' "
+        "ORDER BY generated_at DESC LIMIT 1", (node_id,))
+    used = set()
+    if plan is not None:
+        items = db.loads(plan.get("plan_json"), {}).get("items", []) or []
+        used = {it.get("target_id") for it in items if it.get("target_id")}
+    rows = db.query("SELECT target_id, name FROM targets WHERE active = 1")
+    return [
+        {"target_id": r["target_id"], "target": r["name"], "score": 0.0}
+        for r in rows
+        if r["target_id"] not in already and r["target_id"] not in used
+    ]
+
+
 # ── Multi-night escalation ──────────────────────────────────────────────────────
 
 def _consecutive_dark_nights(node_id: str, max_lookback: int = 14) -> int:
@@ -187,7 +242,8 @@ def _consecutive_dark_nights(node_id: str, max_lookback: int = 14) -> int:
 # ── Faithful CHORUS re-valuation (the greedy step, reused) ───────────────────────
 
 def _candidate_placements(dropped: dict, config: dict,
-                          eps_scale: float = 1.0) -> list[dict]:
+                          eps_scale: float = 1.0,
+                          candidate_nodes: Optional[set] = None) -> list[dict]:
     """Re-value the dropped node's remaining targets on currently-dark nodes.
 
     Returns [{to_node, target_id, target_name, expected_info}] — one entry per
@@ -198,6 +254,10 @@ def _candidate_placements(dropped: dict, config: dict,
     greedy_place) — used by tick() to widen acceptance for a node with a long
     dark_streak, since a marginal placement not quite worth dispatching for a
     one-off cloud-out is worth it for a target that's gone unserved for days.
+
+    `candidate_nodes` overrides the default "every other dark node" set. Used
+    by the work-starved top-up path, where the node needing the placement
+    *is* the candidate — it has spare dark time, not a dead plan to evacuate.
     """
     from cloud.chorus import assign as assign_mod
     from cloud.chorus import cells as cellmod
@@ -210,7 +270,10 @@ def _candidate_placements(dropped: dict, config: dict,
     if not remaining_ids:
         return []
 
-    dark = live.dark_online_nodes() - {dropped["node_id"]}
+    if candidate_nodes is not None:
+        dark = set(candidate_nodes)
+    else:
+        dark = live.dark_online_nodes() - {dropped["node_id"]}
     if not dark:
         return []
 
@@ -340,10 +403,19 @@ def greedy_place(contexts: dict, opps_by_node: dict, cells_by_target: dict,
 # ── Dispatch ────────────────────────────────────────────────────────────────────
 
 def dispatch_reflow(dropped_node: str, placements: list[dict],
-                    config: dict, dark_streak: int = 0) -> int:
-    """Turn reflow placements into targeted interrupts + audit rows + pushes."""
+                    config: dict, dark_streak: int = 0,
+                    reason: Optional[str] = None) -> int:
+    """Turn reflow placements into targeted interrupts + audit rows + pushes.
+
+    `reason` distinguishes a work-starved top-up ('topup') from the default
+    dropout evacuation. Left as None, the interrupt reads 'reflow' (the
+    node-facing wording, unchanged) and the audit row reads 'dropout' (the
+    reflow_log default) — both exactly as before this parameter existed.
+    """
     night = _tonight()
     expires = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+    interrupt_reason = reason or "reflow"
+    log_reason = reason or "dropout"
     n = 0
     for pl in placements:
         try:
@@ -352,20 +424,22 @@ def dispatch_reflow(dropped_node: str, placements: list[dict],
                 """INSERT INTO interrupts
                        (target_id, name, ra_deg, dec_deg, mag, reason, node_ids,
                         created_at, expires_at)
-                   VALUES (%s,%s,%s,%s,%s,'reflow',%s,%s,%s)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (pl["target_id"], pl["target_name"], float(pl["ra_deg"]),
-                 float(pl["dec_deg"]), pl.get("mag"),
+                 float(pl["dec_deg"]), pl.get("mag"), interrupt_reason,
                  json.dumps([pl["to_node"]]), _now(), expires),
                 returning_id=True)
             db.execute(
                 """INSERT INTO reflow_log
                        (night, from_node, to_node, target_id, target_name,
-                        expected_info, interrupt_id, dark_streak, created_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        expected_info, interrupt_id, dark_streak, reason,
+                        created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (night, dropped_node, pl["to_node"], pl["target_id"],
-                 pl["target_name"], pl["expected_info"], iid, dark_streak, _now()))
+                 pl["target_name"], pl["expected_info"], iid, dark_streak,
+                 log_reason, _now()))
             live.publish(pl["to_node"], "interrupt",
-                         {"reason": "reflow", "target_id": pl["target_id"]})
+                         {"reason": interrupt_reason, "target_id": pl["target_id"]})
             n += 1
         except Exception as exc:
             logger.warning("reflow dispatch failed for %s→%s: %s",
@@ -496,4 +570,24 @@ def tick(config: dict) -> int:
                 placements = []
             if placements:
                 total += dispatch_reflow("urgent_alert", placements, config)
+
+    for starved in detect_starved(config):
+        if _reflows_tonight() >= cap:
+            break
+        node_id = starved["node_id"]
+        remaining = _topup_candidates(node_id)
+        if not remaining:
+            continue
+        try:
+            placements = _candidate_placements(
+                {"node_id": node_id, "remaining": remaining}, config,
+                candidate_nodes={node_id})
+        except Exception as exc:
+            logger.warning("reflow valuation failed for starved %s: %s",
+                           node_id, exc)
+            incidents.log(node_id, "reflow_topup_failed", severity="warning",
+                          detail={"error": str(exc)[:200]})
+            continue
+        if placements:
+            total += dispatch_reflow(node_id, placements, config, reason="topup")
     return total

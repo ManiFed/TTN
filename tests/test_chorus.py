@@ -540,6 +540,104 @@ class EmergentCoordinationTest(unittest.TestCase):
         self.assertEqual(stats["n_filler"], 0)
 
 
+# ── Night filler: dark time is never left unassigned ──────────────────────────
+
+class NightFillerTest(unittest.TestCase):
+    def test_filler_packs_otherwise_free_slots(self):
+        # One node capped at a single core target but with four free windows:
+        # the fill pass must occupy them with the remaining targets.
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(4)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(4)]}
+        placements, _, stats = _run(contexts, opps, cell_map)
+        self.assertEqual(len(placements), 4)
+        self.assertEqual(stats["n_filler"], 3)
+        slots = sorted(p.slot for p in placements)
+        self.assertEqual(len(set(slots)), 4)   # distinct occupancy, no overlap
+
+    def test_sub_min_marginal_places_only_as_filler(self):
+        # Value below the core greedy's floor but above the filler floor:
+        # nothing lands as core, everything that fits lands as filler.
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {"t0": [_cell("t0", nu=0.01)]}
+        opps = {"A": [_opp("A", "t0")]}
+        placements, _, stats = _run(contexts, opps, cell_map)
+        self.assertTrue(placements)
+        self.assertTrue(all(p.tier == "filler" for p in placements))
+        self.assertEqual(stats["n_filler"], len(placements))
+
+    def test_filler_bounded_by_safety_valve(self):
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        placements, _, stats = _run(
+            contexts, opps, cell_map,
+            params=_params(filler_max_targets_per_night=2.0))
+        self.assertEqual(stats["n_filler"], 2)
+        self.assertLessEqual(len(placements), 3)   # 1 core + 2 filler
+
+    def test_filler_respects_max_obs_per_target(self):
+        # Two variants of the same low-value target: the filler must not stack
+        # epochs past the per-target portfolio cap.
+        contexts = {"A": _ctx("A", max_targets=2)}
+        cell_map = {"t0": [_cell("t0", nu=0.01)]}
+        opps = {"A": [_opp("A", "t0", slots=(0, 2)),
+                      _opp("A", "t0", slots=(8, 10), variant="epoch_b")]}
+        placements, _, _ = _run(contexts, opps, cell_map,
+                                params=_params(max_obs_per_target=1.0))
+        self.assertLessEqual(len(placements), 1)
+
+    def test_filler_is_deterministic(self):
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(4)}
+        runs = []
+        for _ in range(2):
+            opps = {"A": [_opp("A", f"t{i}") for i in range(4)]}
+            placements, _, _ = _run(contexts, opps, cell_map)
+            runs.append(sorted((p.opp.target_id, p.slot, p.tier)
+                               for p in placements))
+        self.assertEqual(runs[0], runs[1])
+
+
+class ContingencyLadderTest(unittest.TestCase):
+    def test_ladder_size_and_runnable_fields(self):
+        from cloud.chorus import assign as assign_mod
+        from cloud.chorus import perform
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {f"t{i}": [_cell(f"t{i}", nu=1.0)] for i in range(5)}
+        opps = {"A": [_opp("A", f"t{i}") for i in range(5)]}
+        params = _params(filler_min_marginal=0.0)   # leave opps uncommitted
+        placements, _, _ = _run(contexts, opps, cell_map, params=params)
+        final_state = assign_mod.replay(contexts, cell_map, placements, params)
+
+        ladder = perform.contingency_ladder(
+            contexts["A"], opps["A"], final_state, cell_map, params, top_k=3)
+        alts = ladder.get("alternates", [])
+        self.assertEqual(len(alts), 3)
+        for alt in alts:
+            # Every alternate is directly runnable as a node schedule item.
+            for key in ("target", "ra", "dec", "expDur", "expCount", "filter",
+                        "startTime", "score", "observation_mode",
+                        "duration_minutes", "expected_info"):
+                self.assertIn(key, alt)
+            self.assertGreater(alt["expected_info"], 0.0)
+
+    def test_ladder_ranked_by_value(self):
+        from cloud.chorus import assign as assign_mod
+        from cloud.chorus import perform
+        contexts = {"A": _ctx("A", max_targets=1)}
+        cell_map = {"big": [_cell("big", nu=1.0)],
+                    "small": [_cell("small", nu=0.3)]}
+        opps = {"A": [_opp("A", "big"), _opp("A", "small")]}
+        # Nothing committed at all: an empty replay leaves both as alternates.
+        final_state = assign_mod.replay(contexts, cell_map, [], _params())
+        ladder = perform.contingency_ladder(
+            contexts["A"], opps["A"], final_state, cell_map, _params(),
+            top_k=2)
+        names = [a["target"] for a in ladder["alternates"]]
+        self.assertEqual(names, ["big", "small"])
+
+
 # ── Tuning integration: the chorus group ──────────────────────────────────────
 
 class ChorusTuningTest(unittest.TestCase):

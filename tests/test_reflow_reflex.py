@@ -425,6 +425,92 @@ class ReflowReflexCloudTest(unittest.TestCase):
         self.assertEqual(hit["outcome"], "delivered")
         self.assertEqual(miss["outcome"], "missed")
 
+    # ── Work-starved detection + top-up dispatch ────────────────────────────────
+
+    def _starved_node(self, node_id):
+        from cloud import live
+        self.db.execute(
+            """INSERT INTO nodes (node_id, api_key, latitude, longitude,
+                   registered_at, last_heartbeat, status)
+               VALUES (%s,'k',40,0,%s,%s,'active')""",
+            (node_id, self._now(), self._now()))
+        live.record_state(node_id,
+                          {"phase": "idle", "is_dark": True,
+                           "detail": {"work_starved": True}},
+                          heartbeat_s=5)
+
+    def test_detect_starved_requires_explicit_flag(self):
+        from cloud import live
+        self._starved_node("nd_starved")
+        # Idle + dark but no flag: NOT starved (idle races between plan items).
+        self.db.execute(
+            """INSERT INTO nodes (node_id, api_key, latitude, longitude,
+                   registered_at, last_heartbeat, status)
+               VALUES ('nd_idle','k',40,0,%s,%s,'active')""",
+            (self._now(), self._now()))
+        live.record_state("nd_idle", {"phase": "idle", "is_dark": True},
+                          heartbeat_s=5)
+        # Clouded node with the flag set: not a candidate either.
+        self.db.execute(
+            """INSERT INTO nodes (node_id, api_key, latitude, longitude,
+                   registered_at, last_heartbeat, status)
+               VALUES ('nd_cloud','k',40,0,%s,%s,'active')""",
+            (self._now(), self._now()))
+        live.record_state("nd_cloud",
+                          {"phase": "clouded", "is_dark": True,
+                           "detail": {"work_starved": True}}, heartbeat_s=5)
+        starved = reflow.detect_starved({})
+        self.assertEqual([s["node_id"] for s in starved], ["nd_starved"])
+
+    def test_detect_starved_skips_node_with_pending_topup(self):
+        self._starved_node("nd_pending")
+        expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        self.db.execute(
+            """INSERT INTO interrupts (target_id, name, ra_deg, dec_deg,
+                   reason, node_ids, created_at, expires_at)
+               VALUES ('T1','V1',10,20,'topup',%s,%s,%s)""",
+            (json.dumps(["nd_pending"]), self._now(), expires))
+        self.assertEqual(reflow.detect_starved({}), [])
+
+    def test_topup_dispatch_writes_reason_and_counts_against_cap(self):
+        before = reflow._reflows_tonight()
+        placements = [{"to_node": "nd_starved", "target_id": "T9",
+                       "target_name": "V9", "ra_deg": 10.0, "dec_deg": 20.0,
+                       "mag": 12.0, "expected_info": 0.2}]
+        n = reflow.dispatch_reflow("nd_starved", placements, {},
+                                   reason="topup")
+        self.assertEqual(n, 1)
+        row = self.db.query_one(
+            "SELECT reason, node_ids FROM interrupts WHERE target_id='T9'")
+        self.assertEqual(row["reason"], "topup")
+        self.assertIn("nd_starved", self.db.loads(row["node_ids"], []))
+        log = self.db.query_one(
+            "SELECT reason, from_node, to_node FROM reflow_log "
+            "WHERE target_id='T9'")
+        self.assertEqual(log["reason"], "topup")
+        self.assertEqual(log["from_node"], "nd_starved")
+        self.assertEqual(log["to_node"], "nd_starved")
+        # Top-ups share the graduated nightly cap with dropout reflows.
+        self.assertEqual(reflow._reflows_tonight(), before + 1)
+        # And the dispatch published a push signal to the right node.
+        ev = self.db.query_one(
+            "SELECT node_id, kind FROM dispatch_events "
+            "ORDER BY id DESC LIMIT 1")
+        self.assertEqual(ev["node_id"], "nd_starved")
+        self.assertEqual(ev["kind"], "interrupt")
+
+    def test_dropout_dispatch_keeps_legacy_reason(self):
+        placements = [{"to_node": "nd_b", "target_id": "T8",
+                       "target_name": "V8", "ra_deg": 10.0, "dec_deg": 20.0,
+                       "mag": None, "expected_info": 0.3}]
+        reflow.dispatch_reflow("nd_a", placements, {})
+        row = self.db.query_one(
+            "SELECT reason FROM interrupts WHERE target_id='T8'")
+        self.assertEqual(row["reason"], "reflow")
+        log = self.db.query_one(
+            "SELECT reason FROM reflow_log WHERE target_id='T8'")
+        self.assertEqual(log["reason"], "dropout")
+
 
 if __name__ == "__main__":
     unittest.main()
