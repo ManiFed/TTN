@@ -120,10 +120,21 @@ class CommissioningManager:
         cfg = self._load_config() or {}
         runtime = self._runtime_status() or {}
         observer = cfg.get("safety", {}).get("observer", {}) or {}
+        # Prefer the live, auto-mounted watch path the image watcher actually
+        # resolved at runtime over the static config value, which is often a
+        # placeholder (e.g. /mnt/seestar) left unset after macOS auto-mounts
+        # the Seestar's SMB share under /Volumes/... instead.
         watch_path = Path(str(
-            cfg.get("image_watcher", {}).get("watch_path", "")
+            runtime.get("image_watcher", {}).get("watch_path")
+            or cfg.get("image_watcher", {}).get("watch_path", "")
         )).expanduser()
-        solver = str(cfg.get("photometry", {}).get("astap_path", "astap"))
+        phot_cfg = cfg.get("photometry", {})
+        solver_type = str(phot_cfg.get("solver", "astap")).strip().lower()
+        solver = str(
+            phot_cfg.get("solve_field_path", "solve-field")
+            if solver_type == "astrometry"
+            else phot_cfg.get("astap_path", "astap")
+        )
         solver_ok = Path(solver).expanduser().is_file() or shutil.which(solver) is not None
         free_gb = shutil.disk_usage(Path.cwd()).free / (1024 ** 3)
         specs = self._telescope_specs() or {}

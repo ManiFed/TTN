@@ -311,7 +311,7 @@ class _DashboardViewState extends State<_DashboardView> {
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(
                     14,
-                    topPad + 10,
+                    topPad,
                     14,
                     bottomPad + 14,
                   ),
@@ -339,7 +339,7 @@ class _DashboardViewState extends State<_DashboardView> {
           );
         }
 
-        const desktopTopPad = kToolbarHeight + 6;
+        const desktopTopPad = kToolbarHeight;
         final availableHeight = constraints.maxHeight - desktopTopPad - 18;
         final observationHeight = (availableHeight * 0.22).clamp(142.0, 190.0);
 

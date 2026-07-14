@@ -4203,6 +4203,7 @@ def launch(port: int = 5173) -> None:
             return {
                 "telescope_connected": _state["telescope"].get("connected", False),
                 "camera_connected": _state["camera"].get("connected", False),
+                "image_watcher": dict(_state["image_watcher"]),
             }
 
     _commissioning = CommissioningManager(
