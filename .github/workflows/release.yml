@@ -79,7 +79,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pyinstaller
       - name: Build PyInstaller bundle
-        run: python build/build.py --bundle-only --skip-astap --clean
+        run: python build/build.py --bundle-only --clean
       - uses: actions/upload-artifact@v4
         with:
           name: node-agent-macos
