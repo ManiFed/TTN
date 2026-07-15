@@ -363,7 +363,16 @@ def api_heartbeat(node):
                 heartbeat_s=float(body.get("heartbeat_s") or 60.0))
         except Exception as exc:
             logger.debug("live.record_state failed for %s: %s", node["node_id"], exc)
-    return jsonify({"ok": True, "server_time": _now()})
+    # Current effective observer location (session location for a portable
+    # node with an active session, else the node's fixed coordinates). The
+    # node agent only knows its own config-file location otherwise, so a
+    # portable node moved to a new site never told its own safety/horizon
+    # logic -- this lets it notice the change and re-run a horizon scan.
+    if bool(node.get("portable")) and node.get("session_lat") not in (None, 0, 0.0):
+        observer = {"latitude": node["session_lat"], "longitude": node["session_lon"]}
+    else:
+        observer = {"latitude": node["latitude"], "longitude": node["longitude"]}
+    return jsonify({"ok": True, "server_time": _now(), "observer": observer})
 
 
 @app.route("/api/v1/incidents", methods=["POST"])
