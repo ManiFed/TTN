@@ -2,16 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    The Telescope Net Node Agent — macOS LaunchDaemon
+    The Telescope Net Node Agent — macOS LaunchAgent
 
-    Installed to /Library/LaunchDaemons/ by the postinstall script.
-    Runs as root, starts at boot, restarts automatically on exit.
+    Installed to ~/Library/LaunchAgents/ by the postinstall script, for the
+    console user only, NOT a system LaunchDaemon. A root LaunchDaemon has
+    no GUI session, so it can never reach the login keychain: every restart
+    silently failed to read back the stored API key and the agent
+    re-registered as a brand-new node, orphaning it from the member's
+    account. A per-user LaunchAgent runs in that session and has normal
+    keychain access, so credentials actually survive a restart.
 
-    To control manually:
-        sudo launchctl load   /Library/LaunchDaemons/com.telescopenet.nodeagent.plist
-        sudo launchctl unload /Library/LaunchDaemons/com.telescopenet.nodeagent.plist
-        sudo launchctl start  com.telescopenet.nodeagent
-        sudo launchctl stop   com.telescopenet.nodeagent
+    __HOME__ and __USER__ are substituted by postinstall.sh with the real
+    console user's home directory and username at install time (a static
+    plist can't reference $HOME).
+
+    To control manually (as the signed-in user, no sudo):
+        launchctl bootout  gui/$(id -u) ~/Library/LaunchAgents/com.telescopenet.nodeagent.plist
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.telescopenet.nodeagent.plist
 -->
 <plist version="1.0">
 <dict>
@@ -23,7 +30,7 @@
         <string>/Applications/TelescopeNetNode.app/Contents/MacOS/TelescopeNetNode</string>
         <string>--no-browser</string>
         <string>--data-dir</string>
-        <string>/Library/Application Support/TelescopeNet/NodeAgent</string>
+        <string>__HOME__/Library/Application Support/TelescopeNet/NodeAgent</string>
     </array>
 
     <!-- Start immediately at load and restart on exit -->
@@ -38,13 +45,13 @@
 
     <!-- Working directory -->
     <key>WorkingDirectory</key>
-    <string>/Library/Application Support/TelescopeNet/NodeAgent</string>
+    <string>__HOME__/Library/Application Support/TelescopeNet/NodeAgent</string>
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Library/Logs/TelescopeNet/node_agent.log</string>
+    <string>__HOME__/Library/Logs/TelescopeNet/node_agent.log</string>
     <key>StandardErrorPath</key>
-    <string>/Library/Logs/TelescopeNet/node_agent_error.log</string>
+    <string>__HOME__/Library/Logs/TelescopeNet/node_agent_error.log</string>
 
     <!-- Environment -->
     <key>EnvironmentVariables</key>
