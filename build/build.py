@@ -51,16 +51,21 @@ DIST = ROOT / "dist"
 BUILD_CACHE = ROOT / "build" / "__pycache__"
 BINARIES_DIR = ROOT / "build" / "binaries"
 
-# ASTAP release URLs — update version tag when a new release ships.
-# macOS DMGs contain ASTAP.app; we extract just the CLI binary.
-# Linux tar.gz contains the astap binary directly.
-# Windows zip contains astap.exe.
+# ASTAP release URLs — update when hnsky.org reshuffles filenames again (it has
+# before: these used to be under /astap/ as .dmg files; the site now serves
+# flat .zip/.tar.gz archives with a bare `astap` binary at the root instead of
+# an ASTAP.app bundle). Check https://www.hnsky.org/astap.htm if these start
+# 404ing -- that's exactly what silently broke plate-solving in every shipped
+# installer until this was caught.
+# macOS/Linux archives contain the astap binary directly; Windows zip
+# contains astap.exe. No aarch64 Linux build is published directly on
+# hnsky.org anymore (only via a SourceForge redirect) -- omitted for now,
+# falls back to pointing-WCS like any other unlisted platform.
 _ASTAP_RELEASES = {
-    "darwin_arm64":  "https://www.hnsky.org/astap/astap_arm.dmg",
-    "darwin_x86_64": "https://www.hnsky.org/astap/astap_mac.dmg",
-    "linux_x86_64":  "https://www.hnsky.org/astap/astap_linux_x86_64.tar.gz",
-    "linux_aarch64": "https://www.hnsky.org/astap/astap_linux_arm64.tar.gz",
-    "windows_amd64": "https://www.hnsky.org/astap/astap_win64.zip",
+    "darwin_arm64":  "https://www.hnsky.org/astap_mac_M1.zip",
+    "darwin_x86_64": "https://www.hnsky.org/astap_mac_X86_64.zip",
+    "linux_x86_64":  "https://www.hnsky.org/astap_amd64.tar.gz",
+    "windows_amd64": "https://www.hnsky.org/astapwin32.zip",
 }
 
 
@@ -168,10 +173,14 @@ def _extract_astap(archive: Path, workdir: Path):
 
     if name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
-            for name in zf.namelist():
-                if name.endswith("astap.exe") or name == "astap.exe":
-                    zf.extract(name, workdir)
-                    return (workdir / name).resolve()
+            for entry in zf.namelist():
+                base = entry.rsplit("/", 1)[-1]
+                if base in ("astap.exe", "astap"):
+                    zf.extract(entry, workdir)
+                    extracted = (workdir / entry).resolve()
+                    if base == "astap":
+                        extracted.chmod(0o755)
+                    return extracted
         return None
 
     return None
