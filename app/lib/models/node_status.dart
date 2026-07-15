@@ -158,6 +158,28 @@ NodeLiveStatus primaryNodeStatus({
         severity: NodeStatusSeverity.ok,
       );
     }
+    // A plan can be "running" (queued and being managed) for a while before
+    // the telescope actually moves -- it stays parked until the sky is dark
+    // enough. Saying "executing the cloud schedule" here read as a fault
+    // ("it says running but the scope isn't moving") when it's just waiting
+    // for the sun to drop further, so call that out explicitly instead of
+    // falling through to the generic message.
+    if (phase == 'waiting_for_dark' || phase == 'waiting') {
+      final sun = c.sunElevation;
+      final threshold = c.dawnThreshold;
+      final sunText = sun != null ? '${sun.toStringAsFixed(1)}°' : null;
+      return NodeLiveStatus(
+        headline: 'Queued — waiting for dark',
+        detail: sunText != null && threshold != null
+            ? '${node.label} will slew to $target once the sun drops below '
+                '${threshold.toStringAsFixed(0)}° (currently $sunText).'
+            : '${node.label} has a target queued and will slew once the sky '
+                'is dark enough.',
+        color: BSTheme.warm,
+        icon: Icons.wb_twilight,
+        severity: NodeStatusSeverity.info,
+      );
+    }
     return NodeLiveStatus(
       headline: 'Running tonight\'s plan',
       detail: c.scheduleTotal > 0
