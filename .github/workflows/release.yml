@@ -133,6 +133,7 @@ jobs:
         run: |
           SRC=""
           for candidate in \
+            "app/build/macos/Build/Products/Release/The Telescope Net.app" \
             app/build/macos/Build/Products/Release/TelescopeNet.app \
             app/build/macos/Build/Products/Release/boundless_skies.app
           do
