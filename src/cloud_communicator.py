@@ -85,6 +85,7 @@ class CloudCommunicator:
         on_interrupt: Optional[Callable[[dict], None]] = None,
         get_telescope_specs: Optional[Callable[[], dict]] = None,
         get_state: Optional[Callable[[], dict]] = None,
+        on_location: Optional[Callable[[float, float], None]] = None,
     ) -> None:
         cloud_cfg = config.get("cloud", {})
         self._url = str(cloud_cfg.get("url", "")).rstrip("/")
@@ -106,6 +107,8 @@ class CloudCommunicator:
         self._get_state = get_state
         self._on_plan = on_plan
         self._on_interrupt = on_interrupt
+        self._on_location = on_location
+        self._last_observer: Optional[tuple] = None
 
         self._node_id = str(cloud_cfg.get("node_id", "") or "")
         # api_key is a secret: config carries a ${CLOUD_NODE_API_KEY} placeholder
@@ -335,6 +338,28 @@ class CloudCommunicator:
     def _headers(self) -> dict:
         return {"X-Node-Id": self._node_id, "X-Api-Key": self._api_key}
 
+    def _maybe_report_location(self, observer: Optional[dict]) -> None:
+        """Invoke on_location the first time we hear the effective observer
+        location, and again whenever it changes -- e.g. a portable node
+        moved to a new site and started a session there. The node agent has
+        no other way to learn this; it only knows its own config-file
+        coordinates otherwise."""
+        if not observer or not self._on_location:
+            return
+        try:
+            lat = float(observer["latitude"])
+            lon = float(observer["longitude"])
+        except (TypeError, ValueError, KeyError):
+            return
+        current = (round(lat, 4), round(lon, 4))
+        if current == self._last_observer:
+            return
+        self._last_observer = current
+        try:
+            self._on_location(lat, lon)
+        except Exception as exc:
+            logger.debug("on_location callback failed: %s", exc)
+
     def _post(self, path: str, payload: dict, auth: bool = True) -> dict:
         import requests
         resp = requests.post(self._url + path, json=payload,
@@ -386,11 +411,12 @@ class CloudCommunicator:
                 state = self._current_state()
                 interval = self._heartbeat_interval(state)
                 try:
-                    self._post("/api/v1/nodes/heartbeat",
+                    resp = self._post("/api/v1/nodes/heartbeat",
                                {"conditions": conditions, "state": state,
                                 "heartbeat_s": interval})
                     self.status["last_heartbeat_ok"] = True
                     self.status["error"] = None
+                    self._maybe_report_location(resp.get("observer"))
                 except Exception as exc:
                     self.status["last_heartbeat_ok"] = False
                     self.status["error"] = str(exc)

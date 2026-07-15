@@ -901,6 +901,17 @@ def _cloud_conditions() -> dict:
             out["commissioning"] = _commissioning.status()
     except Exception:
         pass
+    try:
+        # Read-only status for the app -- there's deliberately no member
+        # control over this (see _on_cloud_location): it's automatic.
+        with _scan_lock:
+            out["horizon_scan"] = {
+                "running": _scan_state["running"],
+                "have_result": _scan_state["result"] is not None,
+                "error": _scan_state["error"],
+            }
+    except Exception:
+        pass
     return out
 
 
@@ -1794,6 +1805,87 @@ def _run_horizon_scan(
         with _scan_lock:
             _scan_state["error"]   = str(exc)
             _scan_state["running"] = False
+
+
+def _on_cloud_location(lat: float, lon: float) -> None:
+    """Cloud told us the node's current effective observer location (a
+    portable node's active session site, or its fixed coordinates). The
+    node agent has no other way to learn this -- it only knows whatever
+    static lat/lon is in its own config.yaml otherwise, which is exactly
+    what left a just-moved portable node's own safety/dawn calculations
+    silently wrong until a manual fix.
+
+    If the location actually changed: update local config + the live
+    safety manager to match, and kick off a horizon re-scan in the
+    background. Deliberately no manual control here -- a portable node's
+    obstructions are different at every site, so this should just happen
+    rather than requiring the member to notice and trigger it themselves.
+    """
+    try:
+        cfg = _load_config()
+        if "safety" not in cfg or cfg["safety"] is None:
+            cfg["safety"] = {}
+        observer = cfg["safety"].get("observer") or {}
+        old_lat, old_lon = observer.get("latitude"), observer.get("longitude")
+        moved = (
+            old_lat is None or old_lon is None
+            or abs(float(old_lat) - lat) > 0.01
+            or abs(float(old_lon) - lon) > 0.01
+        )
+        cfg["safety"]["observer"] = {**observer, "latitude": lat, "longitude": lon}
+        with open("config.yaml", "w") as fh:
+            yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        if _safety_mgr is not None:
+            _safety_mgr.set_observer(lat, lon)
+    except Exception as exc:
+        logger.warning("Could not update local observer location: %s", exc)
+        return
+
+    if not moved:
+        return
+    logger.info(
+        "Observer location changed to (%.4f, %.4f) — starting horizon scan", lat, lon)
+    with _scan_lock:
+        if _scan_state["running"]:
+            logger.info("Horizon scan already running — skipping")
+            return
+    threading.Thread(
+        target=_auto_horizon_scan, daemon=True, name="auto-horizon-scan"
+    ).start()
+
+
+def _auto_horizon_scan() -> None:
+    """Default-parameter horizon scan, applied automatically on completion.
+
+    Unlike the manual API (POST /api/safety/horizon-scan), this writes the
+    result straight into config.yaml's horizon_mask -- there's no UI for a
+    member to review/apply it, by design (see _on_cloud_location).
+    """
+    if _tel is None or _cam is None:
+        logger.info("Skipping auto horizon scan: telescope/camera not connected")
+        return
+    _run_horizon_scan(
+        floor_alt=25.0, start_alt=60.0, step_deg=5.0,
+        exposure_s=5.0, star_threshold=5, settle_s=2.0,
+    )
+    with _scan_lock:
+        result = _scan_state.get("result")
+        error = _scan_state.get("error")
+    if error or not result:
+        logger.warning("Auto horizon scan produced no usable mask: %s", error)
+        return
+    try:
+        cfg = _load_config()
+        if "safety" not in cfg or cfg["safety"] is None:
+            cfg["safety"] = {}
+        cfg["safety"]["horizon_mask"] = result
+        with open("config.yaml", "w") as fh:
+            yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        if _safety_mgr is not None:
+            _safety_mgr.set_horizon_mask(result)
+        logger.info("Auto horizon scan applied new mask: %s", result)
+    except Exception as exc:
+        logger.warning("Could not persist auto horizon scan result: %s", exc)
 
 
 # ── Background poller ──────────────────────────────────────────────────────────
@@ -4185,6 +4277,7 @@ def launch(port: int = 5173) -> None:
             on_interrupt=_on_cloud_interrupt,
             get_telescope_specs=_cloud_telescope_specs,
             get_state=_cloud_state,
+            on_location=_on_cloud_location,
         )
         _cloud.start()
         threading.Thread(

@@ -726,6 +726,12 @@ class _TelescopeOpsPanelState extends State<_TelescopeOpsPanel> {
               value: _nodeStatus(node),
               color: node?.online == true ? BSTheme.ink : BSTheme.ink3,
             ),
+            if (node?.conditions.horizonScanRunning == true)
+              const _KeyValueLine(
+                label: 'Site check',
+                value: 'Mapping horizon…',
+                color: BSTheme.warm,
+              ),
             if (node?.telescopeModel.isNotEmpty == true)
               _KeyValueLine(label: 'Model', value: node!.telescopeModel),
             if (_specFor(node) case final spec?) ...[

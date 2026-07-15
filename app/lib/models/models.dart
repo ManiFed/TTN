@@ -87,6 +87,10 @@ class NodeConditions {
   final String? lastPlanId;
   final int planItems;
   final bool? lastHeartbeatOk;
+  /// True while the node agent is running its automatic horizon scan (fires
+  /// on its own after a portable node moves to a new site) -- read-only,
+  /// there's no member control over this by design.
+  final bool horizonScanRunning;
 
   const NodeConditions({
     this.safe,
@@ -110,6 +114,7 @@ class NodeConditions {
     this.lastPlanId,
     this.planItems = 0,
     this.lastHeartbeatOk,
+    this.horizonScanRunning = false,
   });
 
   factory NodeConditions.fromJson(Map<String, dynamic>? j) {
@@ -151,6 +156,8 @@ class NodeConditions {
       lastHeartbeatOk: j['last_heartbeat_ok'] is bool
           ? j['last_heartbeat_ok'] as bool
           : null,
+      horizonScanRunning:
+          (j['horizon_scan'] as Map?)?['running'] == true,
     );
   }
 }

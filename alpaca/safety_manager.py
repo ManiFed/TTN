@@ -157,6 +157,22 @@ class SafetyManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def set_observer(self, lat: float, lon: float) -> None:
+        """Update the observer location the running manager uses for dawn/
+        twilight calculations, without a restart -- for a portable node that
+        just started a session at a new site. Config-file persistence is the
+        caller's responsibility; this only updates the live instance."""
+        with self._lock:
+            self._lat = float(lat)
+            self._lon = float(lon)
+
+    def set_horizon_mask(self, mask: list) -> None:
+        """Update the running manager's horizon mask -- e.g. after an
+        automatic re-scan at a new site. Config-file persistence is the
+        caller's responsibility; this only updates the live instance."""
+        with self._lock:
+            self._horizon_mask = [(float(p[0]), float(p[1])) for p in mask]
+
     def attach_telescope(self, telescope) -> None:
         """Swap in a (re)connected telescope object and reset the disconnect timer.
 
