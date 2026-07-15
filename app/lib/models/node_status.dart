@@ -85,6 +85,20 @@ NodeLiveStatus primaryNodeStatus({
 
   if (c.safe == false) {
     final reason = c.reason.toLowerCase();
+    // The node agent parks the telescope and tags the reason with the raw
+    // Unix signal name whenever its process is restarted (a reinstall, an
+    // update, the computer sleeping) -- that's routine, not a fault, and a
+    // signal name should never reach a member as-is.
+    if (reason.contains('sigterm') || reason.contains('sigint')) {
+      return const NodeLiveStatus(
+        headline: 'Restarting',
+        detail: 'The node software just restarted and parked the telescope '
+            'as a precaution. It will resume automatically within a minute.',
+        color: BSTheme.warm,
+        icon: Icons.refresh,
+        severity: NodeStatusSeverity.info,
+      );
+    }
     if (reason.contains('dawn')) {
       final sun = c.sunElevation;
       final threshold = c.dawnThreshold;
