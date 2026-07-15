@@ -24,6 +24,8 @@ Flask app or real hardware (see tests/gauntlet/test_supervisor.py).
 from __future__ import annotations
 
 import logging
+import json
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -221,6 +223,7 @@ def prune_old_files(retention_days: float, dirs=_PRUNE_DIRS,
                     now: Optional[float] = None) -> int:
     """Delete regular files older than the retention window. Returns count."""
     cutoff = (now or time.time()) - retention_days * 86400.0
+    protected = _pending_science_files()
     removed = 0
     for d in dirs:
         try:
@@ -228,7 +231,8 @@ def prune_old_files(retention_days: float, dirs=_PRUNE_DIRS,
                 continue
             for f in d.iterdir():
                 try:
-                    if f.is_file() and f.stat().st_mtime < cutoff:
+                    if (f.is_file() and f.resolve() not in protected
+                            and f.stat().st_mtime < cutoff):
                         f.unlink()
                         removed += 1
                 except OSError:
@@ -239,3 +243,26 @@ def prune_old_files(retention_days: float, dirs=_PRUNE_DIRS,
         logger.info("Retention sweep removed %d file(s) older than %.0f days",
                     removed, retention_days)
     return removed
+
+
+def _pending_science_files(path: Path = Path("data") / "node_outbox.db") -> set[Path]:
+    """Raw FITS referenced by unacknowledged SQLite payloads are never pruned."""
+    if not path.exists():
+        return set()
+    out: set[Path] = set()
+    try:
+        conn = sqlite3.connect(str(path), timeout=2)
+        try:
+            rows = conn.execute("SELECT payload FROM outbox WHERE priority>=90").fetchall()
+        finally:
+            conn.close()
+        for (raw,) in rows:
+            payload = json.loads(raw)
+            candidate = payload.get("_raw_fits_path")
+            if not candidate and isinstance(payload.get("frame"), dict):
+                candidate = payload["frame"].get("_raw_fits_path")
+            if candidate:
+                out.add(Path(candidate).resolve())
+    except Exception:
+        return set()
+    return out

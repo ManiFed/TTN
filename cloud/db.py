@@ -275,6 +275,9 @@ _SCHEMA: list[str] = [
         resolved_at    TEXT
     )
     """,
+    "ALTER TABLE reliability_incidents ADD COLUMN IF NOT EXISTS idempotency_key TEXT DEFAULT ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_reliability_incident_idempotency "
+    "ON reliability_incidents(node_id,idempotency_key) WHERE idempotency_key<>''",
     "CREATE INDEX IF NOT EXISTS idx_incidents_node_time ON reliability_incidents(node_id, occurred_at)",
     "CREATE INDEX IF NOT EXISTS idx_incidents_open ON reliability_incidents(node_id, resolved_at)",
     """
@@ -412,6 +415,21 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("activation_codes", "telescope_display_name", "TEXT DEFAULT ''"),
     ("node_members", "display_name", "TEXT DEFAULT ''"),
     ("measurements",     "sky_mag",   "DOUBLE PRECISION"),
+    ("measurements", "item_id", "TEXT DEFAULT ''"),
+    ("measurements", "bundle_id", "TEXT DEFAULT ''"),
+    ("measurements", "response_fingerprint", "TEXT DEFAULT ''"),
+    ("measurements", "instrumental_magnitude", "DOUBLE PRECISION"),
+    ("measurements", "network_magnitude", "DOUBLE PRECISION"),
+    ("measurements", "network_uncertainty", "DOUBLE PRECISION"),
+    ("measurements", "calibration_correction", "DOUBLE PRECISION"),
+    ("measurements", "calibration_model_version", "TEXT DEFAULT ''"),
+    ("measurements", "calibration_state", "TEXT DEFAULT ''"),
+    ("measurements", "magnitude_system", "TEXT DEFAULT ''"),
+    ("nodes", "clock_skew_s", "DOUBLE PRECISION"),
+    ("nodes", "clock_qualified_at", "TEXT DEFAULT ''"),
+    ("calibration_samples", "catalog_band", "TEXT DEFAULT ''"),
+    ("execution_outcomes", "last_checkpoint", "TEXT DEFAULT ''"),
+    ("autonomy_bundles", "reconciliation", "TEXT DEFAULT '{}'"),
     # Network optimizer: all AI-tuned parameter groups live in one JSON blob,
     # superseding the observability-only tuning_state.obs_weights column.
     ("tuning_state",     "params",    "TEXT NOT NULL DEFAULT '{}'"),
@@ -436,6 +454,13 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # confirmed discovery can credit the person who caught it.
     ("survey_measurements", "contribution_id", "INTEGER"),
     ("survey_measurements", "user_id",         "TEXT DEFAULT ''"),
+    ("survey_measurements", "task_id",         "TEXT DEFAULT ''"),
+    ("survey_measurements", "event_id",        "TEXT DEFAULT ''"),
+    ("survey_measurements", "event_revision",  "INTEGER DEFAULT 0"),
+    ("observation_tasks", "result",             "TEXT DEFAULT '{}'"),
+    ("calibration_samples", "response_family",  "TEXT DEFAULT ''"),
+    ("photometric_models", "response_family",   "TEXT DEFAULT ''"),
+    ("event_revisions", "notice_hash",           "TEXT DEFAULT ''"),
     # Moving-object linking: retire unlinked detections once their time window
     # has closed so the linker's scan set can't be starved by permanent noise.
     ("moving_object_detections", "link_done", "BOOLEAN DEFAULT FALSE"),
@@ -647,6 +672,9 @@ _LATE_TABLES: list[str] = [
         snr         DOUBLE PRECISION,
         filter      TEXT DEFAULT 'CV',
         frame_id    TEXT DEFAULT '',
+        task_id     TEXT DEFAULT '',
+        event_id    TEXT DEFAULT '',
+        event_revision INTEGER DEFAULT 0,
         received_at TEXT NOT NULL,
         UNIQUE (source_key, node_id, bjd)
     )
@@ -873,6 +901,201 @@ _LATE_TABLES: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_followups_due ON asteroid_followups(not_before) "
     "WHERE fired_at IS NULL",
+    # ── Network photometric calibration mesh ────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS response_fingerprints (
+        response_fingerprint  TEXT PRIMARY KEY,
+        response_family       TEXT DEFAULT '',
+        node_id               TEXT NOT NULL,
+        descriptor            TEXT DEFAULT '{}',
+        first_seen_at         TEXT NOT NULL,
+        last_seen_at          TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_response_family ON response_fingerprints(response_family, node_id)",
+    """
+    CREATE TABLE IF NOT EXISTS calibration_samples (
+        id                    BIGSERIAL PRIMARY KEY,
+        response_fingerprint  TEXT NOT NULL,
+        response_family       TEXT DEFAULT '',
+        node_id               TEXT NOT NULL,
+        frame_id              TEXT NOT NULL,
+        source_key            TEXT NOT NULL,
+        bjd                   DOUBLE PRECISION NOT NULL,
+        filter                TEXT NOT NULL DEFAULT 'CV',
+        instrumental_mag      DOUBLE PRECISION NOT NULL,
+        instrumental_err      DOUBLE PRECISION NOT NULL,
+        frame_zero_point      DOUBLE PRECISION NOT NULL DEFAULT 0,
+        catalog_mag           DOUBLE PRECISION NOT NULL,
+        catalog_err           DOUBLE PRECISION NOT NULL,
+        catalog_band          TEXT DEFAULT '',
+        catalog_color         DOUBLE PRECISION,
+        airmass               DOUBLE PRECISION,
+        flags                 TEXT DEFAULT '[]',
+        created_at            TEXT NOT NULL,
+        UNIQUE(response_fingerprint, frame_id, source_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cal_samples_model ON calibration_samples(response_fingerprint, filter, bjd)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_samples_source ON calibration_samples(source_key, filter)",
+    """
+    CREATE TABLE IF NOT EXISTS photometric_models (
+        model_version         TEXT PRIMARY KEY,
+        response_fingerprint  TEXT NOT NULL,
+        response_family       TEXT DEFAULT '',
+        node_id               TEXT NOT NULL,
+        filter                TEXT NOT NULL DEFAULT 'CV',
+        state                 TEXT NOT NULL DEFAULT 'collecting',
+        offset                DOUBLE PRECISION DEFAULT 0,
+        color_term            DOUBLE PRECISION DEFAULT 0,
+        extinction            DOUBLE PRECISION DEFAULT 0,
+        drift_per_day         DOUBLE PRECISION DEFAULT 0,
+        pivot_color           DOUBLE PRECISION DEFAULT 0,
+        model_uncertainty     DOUBLE PRECISION DEFAULT 0,
+        validation            TEXT DEFAULT '{}',
+        consecutive_passes    INTEGER DEFAULT 0,
+        created_at            TEXT NOT NULL,
+        retired_at            TEXT DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_photomodel_active ON photometric_models(response_fingerprint, filter, state, created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS calibration_opportunities (
+        id                    BIGSERIAL PRIMARY KEY,
+        node_id               TEXT NOT NULL,
+        response_fingerprint  TEXT DEFAULT '',
+        field_name            TEXT NOT NULL,
+        plan_id               TEXT DEFAULT '',
+        scheduled_at          TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cal_opportunity_node ON calibration_opportunities(node_id, scheduled_at)",
+    # ── GCN event normalization, tiling and centrally assigned tasks ────────
+    """
+    CREATE TABLE IF NOT EXISTS network_events (
+        event_id          TEXT PRIMARY KEY,
+        source_event_id   TEXT NOT NULL,
+        source            TEXT NOT NULL,
+        mission           TEXT DEFAULT '',
+        topic             TEXT DEFAULT '',
+        schema_version    TEXT DEFAULT '',
+        event_class       TEXT DEFAULT 'unknown',
+        role              TEXT DEFAULT 'observation',
+        active_revision   INTEGER DEFAULT 0,
+        status            TEXT DEFAULT 'received',
+        event_time        TEXT DEFAULT '',
+        received_time     TEXT NOT NULL,
+        policy            TEXT DEFAULT '{}',
+        cancellation_generation INTEGER DEFAULT 0,
+        UNIQUE(source, source_event_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS event_revisions (
+        id                BIGSERIAL PRIMARY KEY,
+        event_id          TEXT NOT NULL REFERENCES network_events(event_id),
+        revision          INTEGER NOT NULL,
+        notice_type       TEXT DEFAULT 'initial',
+        significance      TEXT DEFAULT '{}',
+        localization_type TEXT DEFAULT 'none',
+        localization      TEXT DEFAULT '{}',
+        area50_deg2       DOUBLE PRECISION,
+        area90_deg2       DOUBLE PRECISION,
+        distance          TEXT DEFAULT '{}',
+        raw_notice        TEXT DEFAULT '{}',
+        notice_hash       TEXT DEFAULT '',
+        received_at       TEXT NOT NULL,
+        UNIQUE(event_id, revision)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_event_revision_hash ON event_revisions(event_id, notice_hash) WHERE notice_hash<>''",
+    """
+    CREATE TABLE IF NOT EXISTS event_tiles (
+        tile_id           TEXT PRIMARY KEY,
+        event_id          TEXT NOT NULL REFERENCES network_events(event_id),
+        event_revision    INTEGER NOT NULL,
+        ra_deg            DOUBLE PRECISION NOT NULL,
+        dec_deg           DOUBLE PRECISION NOT NULL,
+        radius_deg        DOUBLE PRECISION NOT NULL,
+        probability_mass  DOUBLE PRECISION DEFAULT 0,
+        pass_number       INTEGER DEFAULT 1,
+        status            TEXT DEFAULT 'candidate',
+        detail            TEXT DEFAULT '{}'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_event_tiles_event ON event_tiles(event_id, event_revision, status)",
+    """
+    CREATE TABLE IF NOT EXISTS observation_tasks (
+        task_id           TEXT PRIMARY KEY,
+        node_id           TEXT NOT NULL,
+        event_id          TEXT DEFAULT '',
+        event_revision    INTEGER DEFAULT 0,
+        tile_id           TEXT DEFAULT '',
+        ra_deg            DOUBLE PRECISION NOT NULL,
+        dec_deg           DOUBLE PRECISION NOT NULL,
+        earliest_utc      TEXT NOT NULL,
+        latest_utc        TEXT NOT NULL,
+        exposure          TEXT DEFAULT '{}',
+        priority          DOUBLE PRECISION DEFAULT 0,
+        state             TEXT DEFAULT 'pending',
+        cancellation_generation INTEGER DEFAULT 0,
+        result             TEXT DEFAULT '{}',
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_tasks_node ON observation_tasks(node_id, state, latest_utc)",
+    """
+    CREATE TABLE IF NOT EXISTS galaxy_catalog (
+        galaxy_id          TEXT PRIMARY KEY,
+        ra_deg             DOUBLE PRECISION NOT NULL,
+        dec_deg            DOUBLE PRECISION NOT NULL,
+        distance_mpc       DOUBLE PRECISION,
+        distance_err_mpc   DOUBLE PRECISION,
+        luminosity_weight  DOUBLE PRECISION DEFAULT 1,
+        catalog_name       TEXT DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_galaxy_radec ON galaxy_catalog(dec_deg, ra_deg)",
+    "CREATE INDEX IF NOT EXISTS idx_galaxy_distance ON galaxy_catalog(distance_mpc)",
+    # ── Signed autonomy bundles and idempotent execution reconciliation ─────
+    """
+    CREATE TABLE IF NOT EXISTS autonomy_bundles (
+        bundle_id         TEXT PRIMARY KEY,
+        node_id           TEXT NOT NULL,
+        plan_id           TEXT NOT NULL,
+        sequence          BIGINT NOT NULL,
+        issued_at         TEXT NOT NULL,
+        valid_from        TEXT NOT NULL,
+        expires_at        TEXT NOT NULL,
+        payload           TEXT NOT NULL,
+        signature         TEXT DEFAULT '',
+        signing_key_id    TEXT DEFAULT '',
+        status            TEXT DEFAULT 'current',
+        reconciliation    TEXT DEFAULT '{}',
+        UNIQUE(node_id, sequence)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bundle_node ON autonomy_bundles(node_id, status, sequence)",
+    """
+    CREATE TABLE IF NOT EXISTS execution_outcomes (
+        attempt_id        TEXT PRIMARY KEY,
+        node_id           TEXT NOT NULL,
+        item_id           TEXT DEFAULT '',
+        bundle_id         TEXT DEFAULT '',
+        task_id           TEXT DEFAULT '',
+        state             TEXT NOT NULL,
+        started_at        TEXT DEFAULT '',
+        finished_at       TEXT DEFAULT '',
+        frames_attempted  INTEGER DEFAULT 0,
+        frames_completed  INTEGER DEFAULT 0,
+        last_checkpoint   TEXT DEFAULT '',
+        failure_reason    TEXT DEFAULT '',
+        detail            TEXT DEFAULT '{}',
+        received_at       TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_outcomes_bundle ON execution_outcomes(bundle_id, item_id)",
 ]
 
 

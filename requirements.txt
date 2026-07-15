@@ -29,3 +29,4 @@ defusedxml>=0.7.1      # safe XML parsing for public resolver responses
 keyrings.alt>=5.0      # headless fallback backend for CI and Linux nodes
 keyring>=25.0
 keyrings.alt>=5.0
+cryptography>=42.0

@@ -637,6 +637,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "target_name":      target_name,
         "bjd":              round(bjd, 6),
         "magnitude":        round(target_mag, 4),
+        "instrumental_magnitude": round(target_instr, 5),
         "uncertainty":      round(uncertainty, 4),
         "filter":           filter_name,
         "airmass":          round(airmass, 3) if airmass is not None else None,
@@ -653,6 +654,8 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         "patrol_alerts":    patrol_alerts,
         "survey_sources":   survey_sources,
         "date_obs":         str(header.get("DATE-OBS", "") or ""),
+        "item_id":          str(header.get("BSITEM", "") or ""),
+        "bundle_id":        str(header.get("BSBUNDLE", "") or ""),
         "provenance":       provenance,
     }, None
 
@@ -1408,6 +1411,7 @@ def _get_comparison_stars_gaia(
     for row in results[:n_max]:
         try:
             g_mag = float(row["phot_g_mean_mag"])
+            bp_rp = None
 
             # Evans et al. 2018 (A&A 616, A4) G→V transformation using BP-RP color.
             # V = G - (c0 + c1*(BP-RP) + c2*(BP-RP)^2)
@@ -1432,6 +1436,8 @@ def _get_comparison_stars_gaia(
                 "mag_v":   v_mag,
                 "mag_err": mag_err,
                 "source":  "gaia_dr3",
+                "color":   bp_rp,
+                "color_band": "BP-RP",
             })
         except Exception:
             continue
@@ -1495,6 +1501,9 @@ def _get_comparison_stars_apass(
                 "mag_v":   v_mag,
                 "mag_err": max(mag_err, 0.01),
                 "source":  "apass_dr9",
+                "color":   (float(row["Bmag"]) - v_mag)
+                           if not _masked(row, "Bmag") else None,
+                "color_band": "B-V",
             })
         except (TypeError, ValueError, KeyError):
             continue
@@ -1560,6 +1569,8 @@ def _get_comparison_stars_atlas(
                 "mag_v":   v_mag,
                 "mag_err": 0.05,   # transformation residual + catalog photometry
                 "source":  "atlas_refcat2",
+                "color":   g - r,
+                "color_band": "g-r",
             })
         except (TypeError, ValueError, KeyError):
             continue
@@ -2238,7 +2249,15 @@ def _run_survey_extraction(
             "cat_mag": round(float(cs["mag_v"]), 3) if cs and cs.get("mag_v") is not None else None,
             "cat_err": round(float(cs.get("mag_err") or 0.05), 3) if cs else None,
             "cat_src": cs.get("source", "") if cs else "",
+            "catalog_band": (cs.get("mag_band") or cs.get("band") or "V") if cs else "",
             "matched": cs is not None,
+            "instrumental_mag": round(float(instr[i]), 5),
+            "instrumental_err": round(float(sigma_poisson), 5),
+            "catalog_color": (round(float(cs["color"]), 4)
+                              if cs and cs.get("color") is not None else None),
+            "catalog_color_band": cs.get("color_band", "") if cs else "",
+            "flags": (["extended"] if extended else [])
+                     + (["unmatched"] if cs is None else []),
             "sharpness": round(src_sharp, 3),
             "extended": extended,
         })
@@ -2375,7 +2394,7 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
                        zp_scatter, max_zp_scatter)
         return None
 
-    bjd = _compute_bjd(header, center_ra, center_dec, config)
+    bjd, time_provenance = _compute_bjd_ex(header, center_ra, center_dec, config)
     airmass = _compute_airmass(header, config)
 
     _record_characterization(wcs, w, h, fwhm_px, sources)
@@ -2400,4 +2419,8 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         "fits_file":       os.path.basename(fits_path),
         "survey_sources":  sources,
         "date_obs":        str(header.get("DATE-OBS", "") or ""),
+        "timestamp_trusted": time_provenance.get("time_ref") != "system_clock",
+        "time_provenance": time_provenance,
+        "item_id":         str(header.get("BSITEM", "") or ""),
+        "bundle_id":       str(header.get("BSBUNDLE", "") or ""),
     }

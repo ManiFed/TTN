@@ -150,6 +150,27 @@ node_v1-main/
 
 ## Recent Changes (June–July 2026)
 
+### Network Science Expansion
+
+The network now has a safe, staged path to three new operational capabilities:
+
+- a **self-calibrating photometric mesh** that learns response-specific
+  zero-point, color, extinction, and drift corrections from overlapping stable
+  stars, validates them in shadow, and preserves immutable raw magnitudes;
+- **global event tiling** for GCN transient notices, including event revisions,
+  retractions, probability-map tiling, depth-aware assignment, and event
+  coverage accounting; and
+- **bounded disconnected-night autonomy**, where a qualified node can execute
+  only a signed, expiring UTC plan with durable restart recovery and
+  idempotent reconciliation.
+
+All three ship behind conservative defaults: calibration application is off,
+autonomy is disabled pending signed-key canaries, and the dedicated GCN worker
+does not live-dispatch to telescopes. The occultation array is explicitly a
+documentation-only future program. See
+[docs/NETWORK_SCIENCE_EXPANSION.md](docs/NETWORK_SCIENCE_EXPANSION.md) for the
+architecture, safeguards, deployment sequence, and operational boundaries.
+
 ### Live Fleet State + Universal Frame Ingestion (New Programs)
 Two structural additions on top of CHORUS and Open Aperture — see
 [LIVE_FLEET.md](LIVE_FLEET.md) for full design and status.

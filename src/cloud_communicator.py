@@ -30,15 +30,20 @@ node behaves exactly as before.
 """
 
 import json
+import hashlib
 import keyring
 import logging
+import math
 import random
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
 from src.shared_models import expand_env
+from src.autonomy import AutonomyStore
+from src.durable_outbox import DurableOutbox
 
 _PAIR_WORDS = [
     "NOVA","STAR","MOON","LENS","DOME","VEGA","LYRA","ORYX","CRAB","HALO",
@@ -51,6 +56,7 @@ def _make_pair_token() -> str:
     return f"{word}-{digits}"
 
 logger = logging.getLogger("cloud_communicator")
+AGENT_VERSION = "1.0.0"
 
 def _utc_offset_hours() -> float:
     """Local UTC offset in hours, DST-aware.
@@ -74,6 +80,7 @@ _QUEUE_MAX = 500
 # risking the disk the way an uncapped FITS backlog would.
 _SURVEY_QUEUE_FILE = Path("data") / "survey_upload_queue.json"
 _SURVEY_QUEUE_MAX_BYTES = 20 * 1024 * 1024
+_OUTBOX_FILE = Path("data") / "node_outbox.db"
 
 
 class CloudCommunicator:
@@ -83,6 +90,7 @@ class CloudCommunicator:
         get_conditions: Optional[Callable[[], dict]] = None,
         on_plan: Optional[Callable[[list, dict], None]] = None,
         on_interrupt: Optional[Callable[[dict], None]] = None,
+        on_task_cancel: Optional[Callable[[str], None]] = None,
         get_telescope_specs: Optional[Callable[[], dict]] = None,
         get_state: Optional[Callable[[], dict]] = None,
         on_location: Optional[Callable[[float, float], None]] = None,
@@ -107,6 +115,7 @@ class CloudCommunicator:
         self._get_state = get_state
         self._on_plan = on_plan
         self._on_interrupt = on_interrupt
+        self._on_task_cancel = on_task_cancel
         self._on_location = on_location
         self._last_observer: Optional[tuple] = None
 
@@ -121,7 +130,24 @@ class CloudCommunicator:
         self._stop = threading.Event()
         self._kick = threading.Event()
         self._queue_lock = threading.Lock()
+        autonomy_cfg = config.get("autonomy") or {}
+        self._outbox = DurableOutbox(
+            _OUTBOX_FILE,
+            max_bytes=int(autonomy_cfg.get("outbox_max_bytes", 2 * 1024**3)))
+        # One-time upgrade only. The bounded JSON files below become diagnostic
+        # mirrors after SQLite exists and must never be re-imported on restart.
+        if self._outbox.count("measurement") == 0:
+            self._outbox.migrate_json(_QUEUE_FILE, "measurement", priority=100)
+        if self._outbox.count("survey") == 0:
+            self._outbox.migrate_json(_SURVEY_QUEUE_FILE, "survey", priority=95)
+        self._mirror_legacy_queues()
+        self._autonomy = AutonomyStore()
+        self._clock_samples: list[float] = []
+        self._clock_reference: tuple[float, float] | None = None
+        self._clock_qualified = self._autonomy.recent_clock_qualified()
         self._last_plan_id: Optional[str] = None
+        self._seen_task_ids: set[str] = set()
+        self._cancelled_task_ids: set[str] = set()
         self._threads: list[threading.Thread] = []
         self._register_failures = 0
         self._register_next_attempt = 0.0  # monotonic
@@ -135,8 +161,13 @@ class CloudCommunicator:
             "last_plan_id": None,
             "plan_items": 0,
             "plan_pending_review": False,
-            "queued_uploads": len(self._load_queue()),
-            "queued_survey_uploads": len(self._load_survey_queue()),
+            "queued_uploads": self._outbox.count("measurement"),
+            "queued_survey_uploads": self._outbox.count("survey"),
+            "outbox_bytes": self._outbox.usage_bytes(),
+            "outbox_capacity_bytes": self._outbox.max_bytes,
+            "clock_skew_s": None,
+            "clock_qualified": self._clock_qualified,
+            "autonomy_bundle_id": "",
             "error": None,
         }
 
@@ -411,9 +442,14 @@ class CloudCommunicator:
                 state = self._current_state()
                 interval = self._heartbeat_interval(state)
                 try:
+                    sent_at = time.time()
                     resp = self._post("/api/v1/nodes/heartbeat",
-                               {"conditions": conditions, "state": state,
-                                "heartbeat_s": interval})
+                                      {"conditions": conditions, "state": state,
+                                       "heartbeat_s": interval,
+                                       "clock_skew_s": self.status.get("clock_skew_s"),
+                                       "clock_qualified": self._clock_qualified})
+                    self._record_clock_sample(resp.get("server_time"), sent_at,
+                                              time.time())
                     self.status["last_heartbeat_ok"] = True
                     self.status["error"] = None
                     self._maybe_report_location(resp.get("observer"))
@@ -432,6 +468,8 @@ class CloudCommunicator:
                     was_ok = True
                     self._flush_queue()
                     self._flush_survey_queue()
+                    self._flush_telemetry_queue()
+                    self._flush_execution_outcomes()
             self._wait_or_kick(interval)
 
     def _wait_or_kick(self, interval: float) -> None:
@@ -499,6 +537,7 @@ class CloudCommunicator:
             if kind in ("plan", "retask"):
                 self._poll_plan()
                 self._poll_interrupts()
+                self._poll_tasks()
             elif kind == "interrupt":
                 self._poll_interrupts()
             elif kind == "config":
@@ -546,6 +585,10 @@ class CloudCommunicator:
         while not self._stop.is_set():
             if self._node_id and self._api_key:
                 try:
+                    self._poll_autonomy_bundle()
+                except Exception as exc:
+                    logger.debug("Autonomy bundle poll failed: %s", exc)
+                try:
                     self._poll_plan()
                 except Exception as exc:
                     logger.warning("Plan poll failed: %s", exc)
@@ -554,10 +597,117 @@ class CloudCommunicator:
                 except Exception as exc:
                     logger.debug("Interrupt poll failed: %s", exc)
                 try:
+                    self._poll_tasks()
+                except Exception as exc:
+                    logger.debug("Observation task poll failed: %s", exc)
+                try:
                     self._poll_config_patches()
                 except Exception as exc:
                     logger.debug("Config patch poll failed: %s", exc)
             self._stop.wait(self._plan_poll_s)
+
+    def _record_clock_sample(self, server_time: str, sent_at: float,
+                             received_at: float) -> None:
+        if not server_time:
+            return
+        try:
+            server = datetime.fromisoformat(str(server_time).replace("Z", "+00:00"))
+            if server.tzinfo is None:
+                server = server.replace(tzinfo=timezone.utc)
+            midpoint = (sent_at + received_at) / 2.0
+            skew = midpoint - server.timestamp()
+        except (TypeError, ValueError):
+            return
+        monotonic_now = time.monotonic()
+        if self._clock_reference is not None:
+            wall_delta = received_at - self._clock_reference[0]
+            mono_delta = monotonic_now - self._clock_reference[1]
+            if abs(wall_delta - mono_delta) > 5.0:
+                self._clock_samples.clear()
+                self._clock_qualified = False
+                self._telemetry_event("clock_jump", "error",
+                                      {"wall_delta_s": wall_delta, "monotonic_delta_s": mono_delta})
+        self._clock_reference = (received_at, monotonic_now)
+        self._clock_samples = (self._clock_samples + [skew])[-4:]
+        self._clock_qualified = (len(self._clock_samples) >= 2
+                                 and all(abs(v) <= 30.0 for v in self._clock_samples[-2:])
+                                 and abs(self._clock_samples[-1] - self._clock_samples[-2]) <= 30.0)
+        self.status["clock_skew_s"] = round(skew, 3)
+        self.status["clock_qualified"] = self._clock_qualified
+        self._autonomy.set_clock_qualified(self._clock_qualified, skew)
+        if abs(skew) > 60.0:
+            self._telemetry_event("clock_skew", "error", {"skew_s": round(skew, 3)})
+
+    def _poll_autonomy_bundle(self) -> None:
+        if not (self._config.get("autonomy") or {}).get("enabled", False):
+            return
+        data = self._get("/api/v1/autonomy/bundle")
+        bundle = data.get("bundle")
+        if not bundle:
+            return
+        keys = dict((self._config.get("autonomy") or {}).get("public_keys") or {})
+        commissioning_complete = False
+        try:
+            commissioning_complete = json.loads(
+                (Path("data") / "commissioning.json").read_text()).get("status") == "complete"
+        except Exception:
+            pass
+        acfg = self._config.get("autonomy") or {}
+        obs = self._config.get("observatory") or {}
+        try:
+            float(obs["latitude"]); float(obs["longitude"])
+            location_valid = math.isfinite(float(obs["latitude"])) and math.isfinite(float(obs["longitude"]))
+        except (KeyError, TypeError, ValueError):
+            location_valid = False
+        accepted = self._autonomy.verify_and_store(
+            bundle, self._node_id, keys, agent_version=AGENT_VERSION,
+            commissioning_complete=commissioning_complete,
+            location_valid=location_valid,
+            max_storage_bytes=int(acfg.get("max_bundle_storage_bytes", 20 * 1024**3)))
+        self.status["autonomy_bundle_id"] = accepted["bundle_id"]
+
+    def active_autonomy_bundle(self) -> Optional[dict]:
+        return self._autonomy.active(self._node_id,
+                                     clock_qualified=self._clock_qualified)
+
+    def outbox_at_capacity(self) -> bool:
+        """Backpressure gate used before starting another offline item."""
+        used = self._outbox.usage_bytes()
+        self.status["outbox_bytes"] = used
+        return used >= self._outbox.max_bytes
+
+    def invalidate_clock_trust(self, reason: str = "clock jump") -> None:
+        self._clock_qualified = False
+        self._clock_samples.clear()
+        self.status["clock_qualified"] = False
+        self._autonomy.set_clock_qualified(False, float(self.status.get("clock_skew_s") or 0))
+        self._telemetry_event("clock_jump", "error", {"reason": reason})
+
+    def autonomy_remaining_items(self) -> list:
+        bundle = self.active_autonomy_bundle()
+        return self._autonomy.remaining_items(bundle) if bundle else []
+
+    def autonomy_contingency_items(self) -> list:
+        bundle = self.active_autonomy_bundle()
+        if not bundle:
+            return []
+        items = self._autonomy.contingency_items(bundle)
+        for item in items:
+            item["bundle_id"] = bundle["bundle_id"]
+        return items
+
+    def _flush_execution_outcomes(self) -> None:
+        outcomes = self._autonomy.pending_outcomes()
+        if not outcomes:
+            return
+        response = self._post("/api/v1/nodes/execution-outcomes",
+                              {"outcomes": outcomes})
+        if response.get("ok"):
+            self._autonomy.mark_uploaded([o["attempt_id"] for o in outcomes])
+
+    def record_execution_outcome(self, bundle_id: str, item_id: str,
+                                 state: str, **kwargs) -> str:
+        return self._autonomy.record(bundle_id, item_id, state, **kwargs)
 
     def _poll_plan(self) -> None:
         data = self._get("/api/v1/plan")
@@ -572,9 +722,13 @@ class CloudCommunicator:
         self._last_plan_id = plan_id
         items = plan.get("items", [])
         contingencies = plan.get("contingencies") or {}
+        bundle = self.active_autonomy_bundle()
+        if bundle and bundle.get("plan_id") == plan_id:
+            items = self._autonomy.remaining_items(bundle)
+            for item in items:
+                item["bundle_id"] = bundle["bundle_id"]
         logger.info("New plan from cloud: %s (%d items, %d alternates, night %s)",
-                    plan_id, len(items),
-                    len(contingencies.get("alternates", [])),
+                    plan_id, len(items), len(contingencies.get("alternates", [])),
                     plan.get("night", "?"))
         if self._on_plan and items:
             try:
@@ -634,6 +788,24 @@ class CloudCommunicator:
             except Exception as exc:
                 logger.debug("Interrupt ack failed: %s", exc)
 
+    def _poll_tasks(self) -> None:
+        data = self._get("/api/v1/tasks")
+        for task_id in data.get("cancelled_task_ids", []):
+            task_id = str(task_id)
+            if task_id not in self._cancelled_task_ids and self._on_task_cancel:
+                self._on_task_cancel(task_id)
+            self._cancelled_task_ids.add(task_id)
+        for item in data.get("tasks", []):
+            task_id = str(item.get("task_id") or "")
+            if not task_id or task_id in self._seen_task_ids:
+                continue
+            if self._on_interrupt:
+                self._on_interrupt(item)
+            self._seen_task_ids.add(task_id)
+
+    def task_cancelled(self, task_id: str) -> bool:
+        return str(task_id) in self._cancelled_task_ids
+
     # ── Measurement upload ─────────────────────────────────────────────────────
 
     def submit_measurement(self, measurement: dict,
@@ -652,7 +824,10 @@ class CloudCommunicator:
                         measurement.get("magnitude", 0.0))
         except Exception as exc:
             logger.warning("Measurement upload failed — queued for retry: %s", exc)
-            self._enqueue(payload)
+            queued = dict(payload)
+            if fits_path:
+                queued["_raw_fits_path"] = str(fits_path)
+            self._enqueue(queued)
             return False
         if fits_path and self._upload_images:
             self._upload_fits(fits_path)
@@ -680,7 +855,12 @@ class CloudCommunicator:
     def _post_survey(self, payload: dict) -> None:
         import gzip
         import requests
-        body = gzip.compress(json.dumps(payload).encode("utf-8"))
+        public = dict(payload)
+        public.pop("_raw_fits_path", None)
+        if isinstance(public.get("frame"), dict):
+            public["frame"] = dict(public["frame"])
+            public["frame"].pop("_raw_fits_path", None)
+        body = gzip.compress(json.dumps(public).encode("utf-8"))
         headers = dict(self._headers())
         headers["Content-Type"] = "application/json"
         headers["Content-Encoding"] = "gzip"
@@ -708,17 +888,38 @@ class CloudCommunicator:
     def submit_incident(self, event: dict) -> None:
         """Forward one structured telemetry event to the cloud incident API.
 
-        Best-effort: called from the telemetry forwarder thread; failures are
-        swallowed (the event is still in the heartbeat summary and on disk).
+        Failures enter the low-priority SQLite outbox. Science records can
+        evict this telemetry if the configured byte budget becomes tight.
         """
-        if not (self._node_id and self._api_key):
-            return
-        self._post("/api/v1/incidents", {
+        payload = {
             "incident_type": event.get("event", "unknown"),
             "severity": event.get("severity", "info"),
             "target_name": event.get("target", ""),
             "detail": event.get("detail") or {},
-        })
+            "idempotency_key": hashlib.sha256(json.dumps(
+                event, sort_keys=True, separators=(",", ":"), default=str
+            ).encode()).hexdigest(),
+        }
+        if not (self._node_id and self._api_key):
+            self._outbox.enqueue("telemetry", payload, priority=20)
+            return
+        try:
+            self._post("/api/v1/incidents", payload)
+        except Exception:
+            self._outbox.enqueue("telemetry", payload, priority=20)
+
+    def _flush_telemetry_queue(self, max_items: int = 50,
+                               max_seconds: float = 10.0) -> None:
+        deadline = time.monotonic() + max_seconds
+        for row in self._outbox.peek("telemetry", max_items):
+            if time.monotonic() >= deadline:
+                break
+            try:
+                self._post("/api/v1/incidents", row["payload"])
+            except Exception:
+                self._outbox.failed(row["id"])
+                break
+            self._outbox.ack(row["id"])
 
     def upload_aavso_txt(self, txt_path: str) -> None:
         """Upload an AAVSO Extended File Format .txt to the cloud for later email submission."""
@@ -755,34 +956,30 @@ class CloudCommunicator:
     # ── Disk-backed retry queue ────────────────────────────────────────────────
 
     def _load_queue(self) -> list:
-        try:
-            return json.loads(_QUEUE_FILE.read_text())
-        except (OSError, ValueError):
-            return []
+        rows = [r["payload"] for r in self._outbox.peek("measurement", 100000)]
+        return rows[-_QUEUE_MAX:]  # compatibility view; SQLite retains the full backlog
 
     def _save_queue(self, queue: list) -> None:
-        try:
-            _QUEUE_FILE.parent.mkdir(exist_ok=True)
-            # Atomic replace: a crash mid-write must not corrupt the queue
-            # file (a corrupt file silently discards every queued measurement).
-            tmp = _QUEUE_FILE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(queue))
-            tmp.replace(_QUEUE_FILE)
-        except OSError as exc:
-            logger.warning("Could not persist upload queue: %s", exc)
+        self._outbox.clear("measurement")
+        for payload in queue:
+            self._outbox.enqueue("measurement", payload, priority=100)
+        self._mirror_legacy_queues()
 
     def _enqueue(self, payload: dict) -> None:
         with self._queue_lock:
-            queue = self._load_queue()
-            queue.append(payload)
-            dropped = len(queue) - _QUEUE_MAX
-            if dropped > 0:
-                queue = queue[-_QUEUE_MAX:]
-                self._telemetry_event(
-                    "upload_queue_overflow", "warning",
-                    {"dropped": dropped, "queue_max": _QUEUE_MAX})
-            self._save_queue(queue)
-            self.status["queued_uploads"] = len(queue)
+            measurement = payload.get("measurement") or {}
+            identity = (measurement.get("idempotency_key") or "measurement:" +
+                        hashlib.sha256(json.dumps(
+                            payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+            self._outbox.enqueue("measurement", payload, priority=100,
+                                 idempotency_key=str(identity))
+            self.status["queued_uploads"] = self._outbox.count("measurement")
+            self.status["outbox_bytes"] = self._outbox.usage_bytes()
+            if self.status["queued_uploads"] > _QUEUE_MAX:
+                self._telemetry_event("upload_queue_overflow", "warning",
+                                      {"sqlite_retained": self.status["queued_uploads"],
+                                       "legacy_view": _QUEUE_MAX})
+            self._mirror_legacy_queues()
 
     def _flush_queue(self, max_items: int = 25, max_seconds: float = 60.0) -> None:
         """Retry queued uploads, time-boxed.
@@ -793,82 +990,100 @@ class CloudCommunicator:
         failure — if one upload fails the rest will too.
         """
         with self._queue_lock:
-            queue = self._load_queue()
-            if not queue:
+            rows = self._outbox.peek("measurement", max_items)
+            if not rows:
                 return
             deadline = time.monotonic() + max_seconds
             sent = 0
-            failed = False
-            remaining = list(queue)
-            while remaining and sent < max_items and time.monotonic() < deadline:
-                try:
-                    self._post("/api/v1/measurements", remaining[0])
-                except Exception:
-                    failed = True
+            for row in rows:
+                if time.monotonic() >= deadline:
                     break
-                remaining.pop(0)
+                try:
+                    public = dict(row["payload"])
+                    public.pop("_raw_fits_path", None)
+                    self._post("/api/v1/measurements", public)
+                except Exception:
+                    self._outbox.failed(row["id"])
+                    break
+                self._outbox.ack(row["id"])
                 sent += 1
             if sent:
-                logger.info("Flushed %d queued measurement(s) to cloud (%d left%s)",
-                            sent, len(remaining),
-                            ", will continue next heartbeat" if remaining and not failed else "")
-            self._save_queue(remaining)
-            self.status["queued_uploads"] = len(remaining)
+                logger.info("Flushed %d queued measurement(s) to cloud", sent)
+            self.status["queued_uploads"] = self._outbox.count("measurement")
+            self._mirror_legacy_queues()
 
     # ── Survey upload queue (byte-capped) ─────────────────────────────────────
 
     def _load_survey_queue(self) -> list:
-        try:
-            return json.loads(_SURVEY_QUEUE_FILE.read_text())
-        except (OSError, ValueError):
-            return []
+        return [r["payload"] for r in self._outbox.peek("survey", 100000)]
 
     def _save_survey_queue(self, queue: list) -> None:
-        try:
-            _SURVEY_QUEUE_FILE.parent.mkdir(exist_ok=True)
-            tmp = _SURVEY_QUEUE_FILE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(queue))
-            tmp.replace(_SURVEY_QUEUE_FILE)
-        except OSError as exc:
-            logger.warning("Could not persist survey queue: %s", exc)
+        self._outbox.clear("survey")
+        for payload in queue:
+            self._outbox.enqueue("survey", payload, priority=95)
+        self._mirror_legacy_queues()
 
     def _enqueue_survey(self, payload: dict) -> None:
         with self._queue_lock:
-            queue = self._load_survey_queue()
-            queue.append(payload)
-            # Enforce the byte cap by dropping oldest frames first: recent
-            # frames are the ones deviation detection still cares about.
-            dropped = 0
-            while len(queue) > 1 and len(json.dumps(queue)) > _SURVEY_QUEUE_MAX_BYTES:
-                queue.pop(0)
-                dropped += 1
-            if dropped:
-                self._telemetry_event(
-                    "survey_queue_overflow", "warning",
-                    {"dropped_frames": dropped,
-                     "max_bytes": _SURVEY_QUEUE_MAX_BYTES})
-            self._save_survey_queue(queue)
-            self.status["queued_survey_uploads"] = len(queue)
+            frame = payload.get("frame") or {}
+            identity = f"{self._node_id}:{frame.get('fits_file','')}:{frame.get('bjd','')}"
+            self._outbox.enqueue("survey", payload, priority=95,
+                                 idempotency_key=identity)
+            self.status["queued_survey_uploads"] = self._outbox.count("survey")
+            self.status["outbox_bytes"] = self._outbox.usage_bytes()
+            self._mirror_legacy_queues()
 
     def _flush_survey_queue(self, max_items: int = 10,
                             max_seconds: float = 30.0) -> None:
         """Retry queued survey uploads, time-boxed like _flush_queue."""
         with self._queue_lock:
-            queue = self._load_survey_queue()
-            if not queue:
+            rows = self._outbox.peek("survey", max_items)
+            if not rows:
                 return
             deadline = time.monotonic() + max_seconds
             sent = 0
-            remaining = list(queue)
-            while remaining and sent < max_items and time.monotonic() < deadline:
-                try:
-                    self._post_survey(remaining[0])
-                except Exception:
+            for row in rows:
+                if time.monotonic() >= deadline:
                     break
-                remaining.pop(0)
+                try:
+                    self._post_survey(row["payload"])
+                except Exception:
+                    self._outbox.failed(row["id"])
+                    break
+                self._outbox.ack(row["id"])
                 sent += 1
             if sent:
-                logger.info("Flushed %d queued survey frame(s) to cloud (%d left)",
-                            sent, len(remaining))
-            self._save_survey_queue(remaining)
-            self.status["queued_survey_uploads"] = len(remaining)
+                logger.info("Flushed %d queued survey frame(s) to cloud", sent)
+            self.status["queued_survey_uploads"] = self._outbox.count("survey")
+            self._mirror_legacy_queues()
+
+    def _mirror_legacy_queues(self) -> None:
+        """Keep bounded JSON diagnostics while SQLite remains authoritative.
+
+        This also makes upgrades reversible: older agents can inspect the tail
+        without imposing their former record ceiling on retained science data.
+        """
+        try:
+            measurements = [r["payload"] for r in self._outbox.peek("measurement", 100000)]
+            if len(measurements) > _QUEUE_MAX:
+                measurements = measurements[-_QUEUE_MAX:]
+            surveys = [r["payload"] for r in self._outbox.peek("survey", 100000)]
+            kept, used = [], 2
+            for payload in reversed(surveys):
+                size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) + 1
+                if used + size > _SURVEY_QUEUE_MAX_BYTES:
+                    continue
+                kept.append(payload)
+                used += size
+            kept.reverse()
+            if len(kept) < len(surveys):
+                self._telemetry_event("survey_queue_overflow", "warning",
+                                      {"sqlite_retained": len(surveys),
+                                       "legacy_view": len(kept)})
+            for path, value in ((_QUEUE_FILE, measurements), (_SURVEY_QUEUE_FILE, kept)):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(json.dumps(value, separators=(",", ":")))
+                tmp.replace(path)
+        except Exception as exc:
+            logger.debug("Could not refresh legacy queue mirror: %s", exc)
