@@ -17,6 +17,8 @@ import sys
 import glob as _glob
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 ROOT = Path(SPECPATH).parent          # repo root (build/ is one level down)
 ENTRY = ROOT / "src" / "main_service.py"
 
@@ -227,12 +229,26 @@ try:
 except Exception:
     _certifi_datas = []
 
+# astroquery ships non-.py package data (CITATION files, per-service test/
+# config data) that PyInstaller's import-based analysis never sees, since
+# it's not reached via any `import`. Every comparison-star lookup through
+# astroquery (APASS, Gaia) crashed at runtime with a missing
+# ".../astroquery/CITATION" file until this was added -- silently turning
+# into "no comparison stars found" for every single frame in the bundled
+# app, though it worked fine when run from source (where the package data
+# just lives on disk next to the code).
+try:
+    _astroquery_datas = collect_data_files("astroquery")
+except Exception:
+    _astroquery_datas = []
+
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
     + _pyongc_datas
     + _iers_datas
     + _certifi_datas
+    + _astroquery_datas
 )
 
 # ── ASTAP binary ──────────────────────────────────────────────────────────────
