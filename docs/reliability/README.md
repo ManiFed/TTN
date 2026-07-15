@@ -30,6 +30,9 @@ Each event lands in three places:
   uptime, free disk) rides in every heartbeat under `conditions.events`, and
   `error`/`critical` events are also forwarded to `POST /api/v1/incidents`,
   feeding the existing `reliability_incidents` table and incident triage.
+  When the cloud is unavailable, forwarded incidents enter the node's durable
+  SQLite outbox with an idempotency key and flush after reconnection; telemetry
+  is lower priority than measurements, survey payloads, and execution outcomes.
 
 Event names in use: `node_started`, `emergency_park`, `cloud_disconnect_park`,
 `plan_received`, `plan_rejected`, `plan_deferred_auto_run_off`,
@@ -41,6 +44,8 @@ Event names in use: `node_started`, `emergency_park`, `cloud_disconnect_park`,
 `registration_failed`, `registered`, `cloud_heartbeat_lost`,
 `cloud_heartbeat_restored`, `config_parse_failed`, `config_parse_recovered`,
 `interrupt_rejected`, `host_slept`, `disk_low`, `retention_pruned`.
+Offline-autonomy additions include `clock_skew`, `clock_jump`, and
+`offline_storage_exhausted`.
 
 ### 2. The NodeSupervisor (`src/node_supervisor.py`)
 

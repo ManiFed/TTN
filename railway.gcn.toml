@@ -1,0 +1,15 @@
+# Dedicated NASA GCN Kafka consumer service.
+# In Railway: create a worker service and set Config file path to this file.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.cloud"
+watchPatterns = [
+  "cloud/**",
+  "src/**",
+  "Dockerfile.cloud",
+  "railway.gcn.toml",
+]
+
+[deploy]
+startCommand = "python -m cloud.gcn_worker"
+restartPolicyType = "always"

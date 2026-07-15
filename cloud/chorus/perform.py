@@ -13,7 +13,9 @@ plan that is still globally coherent — without a cloud round-trip.  Old node
 agents ignore the extra keys entirely.
 """
 
+import hashlib
 import logging
+from datetime import timedelta
 from typing import Optional
 
 from cloud import objective
@@ -92,6 +94,13 @@ def sequence_node(ctx, placements: list, coord: dict) -> list:
             observation_mode=opp.observation_mode,
             duration_minutes=(opp.duration_min
                               if opp.observation_mode == "time_series" else 0.0),
+            item_id="item_" + hashlib.sha256(
+                f"{ctx.node_id}:{opp.target_id}:{start_utc.isoformat()}".encode()
+            ).hexdigest()[:16],
+            starts_at_utc=start_utc.isoformat(),
+            latest_start_utc=(start_utc + timedelta(minutes=15)).isoformat(),
+            task_type="science",
+            priority=round(p.marginal, 4),
         ))
         prev, prev_slot = opp, p.slot
 
@@ -148,5 +157,4 @@ def contingency_ladder(ctx, node_opps: list, final_state,
             "trigger": "primary item failed, sky closed, or plan exhausted",
         })
     return {"alternates": alternates} if alternates else {}
-
 

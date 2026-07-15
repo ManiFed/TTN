@@ -153,6 +153,12 @@ def _plan(config: dict, nodes: list, save: bool = True,
     plans_by_node: dict = {}
     for nid, ctx in contexts.items():
         items = perform.sequence_node(ctx, by_node.get(nid, []), coord)
+        from cloud import calibration as photometric_calibration
+        debt_item = photometric_calibration.calibration_debt_item(
+            ctx, node_by_id[nid], items, config)
+        if debt_item is not None:
+            items.append(debt_item)
+            items.sort(key=lambda item: item.starts_at_utc or item.startTime)
         contingencies = perform.contingency_ladder(
             ctx, opps_by_node.get(nid, []), final_state, cells_by_target, ch,
             top_k=ladder_k)
@@ -167,6 +173,8 @@ def _plan(config: dict, nodes: list, save: bool = True,
         )
         if save:
             _save_plan(plan)
+            if debt_item is not None:
+                photometric_calibration.record_calibration_debt(nid, plan.plan_id, debt_item)
         plans_by_node[nid] = plan
         logger.info("CHORUS plan %s for %s: %d targets, %d alternates%s",
                     plan.plan_id, nid, len(items),

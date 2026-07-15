@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import yaml
@@ -436,6 +437,21 @@ def _capture_image(fits_path: Optional[str] = None,
                 if ra is not None:
                     hdr["RA"]  = round(float(ra) * 15.0, 6)   # hours→degrees
                     hdr["DEC"] = round(float(dec), 6)
+                # Durable execution provenance follows the frame into the
+                # photometry and cloud payloads without changing camera APIs.
+                with _sched_lock:
+                    item_id = str(_sched_state.get("current_item_id") or "")
+                    bundle_id = str(_sched_state.get("current_bundle_id") or "")
+                    target = str(_sched_state.get("current_target") or "")
+                    filt = str(_sched_state.get("current_filter") or "")
+                if target:
+                    hdr["OBJECT"] = target[:68]
+                if filt:
+                    hdr["FILTER"] = filt[:8]
+                if item_id:
+                    hdr["BSITEM"] = item_id[:68]
+                if bundle_id:
+                    hdr["BSBUNDLE"] = bundle_id[:68]
                 hdu = _fits.PrimaryHDU(data=sci.astype(np.float32), header=hdr)
                 pathlib.Path(fits_path).parent.mkdir(parents=True, exist_ok=True)
                 hdu.writeto(fits_path, overwrite=True)
@@ -749,6 +765,16 @@ def _run_survey_only(fits_path: str, cfg: dict) -> None:
     logger.info("Survey-only frame: %d sources from %s",
                 len(sources), result.get("fits_file"))
     if _cloud is not None and sources:
+        from src.calibration_identity import (response_descriptor, response_family,
+                                              response_fingerprint)
+        result["response_fingerprint"] = response_fingerprint(
+            cfg, str(getattr(_cloud, "_node_id", "") or ""))
+        result["response_family"] = response_family(cfg)
+        result["response_descriptor"] = response_descriptor(
+            cfg, str(getattr(_cloud, "_node_id", "") or ""))
+        result["gain"] = (cfg.get("photometry") or {}).get("gain")
+        result["binning"] = (cfg.get("camera") or {}).get("binning", 1)
+        result["_raw_fits_path"] = str(fits_path)
         _cloud.submit_survey(result, sources)
     _maybe_report_characterization()
 
@@ -806,9 +832,14 @@ def _run_photometry_bg(fits_path: str) -> None:
                 if _cloud is not None and sub.get("file_path"):
                     _cloud.upload_aavso_txt(sub["file_path"])
             if _cloud is not None:
+                from src.calibration_identity import response_fingerprint
+                result["response_fingerprint"] = response_fingerprint(
+                    cfg, str(getattr(_cloud, "_node_id", "") or ""))
                 _cloud.submit_measurement(
                     result, conditions=_cloud_conditions(), fits_path=fits_path)
                 if survey_sources:
+                    from src.calibration_identity import (response_descriptor, response_family,
+                                                          response_fingerprint)
                     _cloud.submit_survey(
                         {
                             "bjd":        result.get("bjd"),
@@ -819,6 +850,18 @@ def _run_photometry_bg(fits_path: str) -> None:
                             "airmass":    result.get("airmass"),
                             "fits_file":  result.get("fits_file"),
                             "date_obs":   result.get("date_obs"),
+                            "item_id":    result.get("item_id"),
+                            "bundle_id":  result.get("bundle_id"),
+                            "processing_mode": ("event_tile" if result.get("item_id", "").startswith("task_")
+                                                else "survey"),
+                            "_raw_fits_path": str(fits_path),
+                            "response_fingerprint": response_fingerprint(
+                                cfg, str(getattr(_cloud, "_node_id", "") or "")),
+                            "response_family": response_family(cfg),
+                            "response_descriptor": response_descriptor(
+                                cfg, str(getattr(_cloud, "_node_id", "") or "")),
+                            "gain": (cfg.get("photometry") or {}).get("gain"),
+                            "binning": (cfg.get("camera") or {}).get("binning", 1),
                         },
                         survey_sources,
                     )
@@ -980,6 +1023,8 @@ def _cloud_state() -> dict:
 
 _cloud_disconnect_since: Optional[float] = None
 _cloud_disconnect_parked: bool = False
+_offline_autonomy_was_active: bool = False
+_autonomy_clock_reference: Optional[tuple[float, float]] = None
 
 
 def _cloud_disconnect_monitor_loop() -> None:
@@ -995,9 +1040,33 @@ def _cloud_disconnect_monitor_loop() -> None:
             logger.error("Cloud disconnect monitor tick failed: %s", exc)
 
 
+def _offline_autonomy_resume_loop() -> None:
+    """Resume a durable signed plan after a process/host restart and outage."""
+    last_started = ""
+    while True:
+        time.sleep(15)
+        if _cloud is None or _cloud.status.get("last_heartbeat_ok") is not False:
+            continue
+        bundle = _cloud.active_autonomy_bundle()
+        if not bundle or bundle.get("bundle_id") == last_started:
+            continue
+        with _sched_lock:
+            if _sched_state.get("running"):
+                continue
+        items = _cloud.autonomy_remaining_items()
+        if not items:
+            continue
+        for item in items:
+            item["bundle_id"] = bundle["bundle_id"]
+        last_started = bundle["bundle_id"]
+        logger.warning("Resuming %d signed plan items while cloud is unavailable", len(items))
+        _on_cloud_plan(items)
+
+
 def _cloud_disconnect_tick() -> None:
     """One evaluation of the cloud-disconnect park policy (called every 30 s)."""
     global _cloud_disconnect_since, _cloud_disconnect_parked
+    global _offline_autonomy_was_active, _autonomy_clock_reference
     cfg = _load_config().get("cloud", {})
     timeout = float(cfg.get("disconnect_park_timeout", 1800))
     if timeout <= 0 or _cloud is None or not _cloud.status.get("registered"):
@@ -1011,10 +1080,38 @@ def _cloud_disconnect_tick() -> None:
             logger.info("Cloud heartbeat restored — disconnect timer cleared")
         _cloud_disconnect_since = None
         _cloud_disconnect_parked = False
+        _offline_autonomy_was_active = False
+        _autonomy_clock_reference = (time.time(), time.monotonic())
         return
 
     if ok is not False:
         return
+
+    # A verified, unexpired plan plus a recently qualified clock authorizes
+    # bounded continuation.  It never relaxes any local safety gate.
+    wall, mono = time.time(), time.monotonic()
+    if _autonomy_clock_reference is not None:
+        if abs((wall - _autonomy_clock_reference[0])
+               - (mono - _autonomy_clock_reference[1])) > 5.0:
+            _cloud.invalidate_clock_trust("wall/monotonic discontinuity while offline")
+    _autonomy_clock_reference = (wall, mono)
+    active_bundle = _cloud.active_autonomy_bundle()
+    disk_free = _telemetry.disk_free_gb(".")
+    outbox_full = bool(getattr(_cloud, "outbox_at_capacity", lambda: False)())
+    if (active_bundle is not None and not outbox_full
+            and (disk_free is None or disk_free >= 1.0)):
+        if _cloud_disconnect_since is not None:
+            logger.info("Cloud offline — continuing verified autonomy bundle")
+        _cloud_disconnect_since = None
+        _cloud_disconnect_parked = False
+        _offline_autonomy_was_active = True
+        return
+
+    if _offline_autonomy_was_active:
+        # Expiry, a clock-trust loss, or exhausted storage ends autonomy now;
+        # the ordinary 30-minute grace is only for nodes that never had a bundle.
+        _offline_autonomy_was_active = False
+        _cloud_disconnect_since = time.monotonic() - timeout
 
     now = time.monotonic()
     if _cloud_disconnect_since is None:
@@ -1129,7 +1226,8 @@ def _choose_interrupt_exposure(mag: Optional[float]) -> tuple:
 
 def _on_cloud_interrupt(item: dict) -> None:
     """Handle a cloud interrupt: build a schedule item and queue it."""
-    name = item.get("name", "Unknown")
+    is_event_task = item.get("task_type") == "event_tile"
+    name = item.get("target") if is_event_task else item.get("name", "Unknown")
     ra   = item.get("ra")   # decimal hours (cloud sends this alongside ra_deg)
     dec  = item.get("dec")  # degrees
     mag  = item.get("mag")
@@ -1139,7 +1237,11 @@ def _on_cloud_interrupt(item: dict) -> None:
         logger.warning("Interrupt %s missing ra/dec — skipping", name)
         return
 
-    exp_dur, exp_count = _choose_interrupt_exposure(mag)
+    if is_event_task:
+        exp_dur = float(item.get("expDur") or 30)
+        exp_count = int(item.get("expCount") or 10)
+    else:
+        exp_dur, exp_count = _choose_interrupt_exposure(mag)
     sched_item = {
         "target":   name,
         "ra":       float(ra),
@@ -1148,6 +1250,15 @@ def _on_cloud_interrupt(item: dict) -> None:
         "expCount": exp_count,
         "binning":  1,
         "notes":    f"interrupt: {item.get('reason', '')}",
+        "item_id": item.get("item_id", ""),
+        "task_id": item.get("task_id", ""),
+        "starts_at_utc": item.get("starts_at_utc", ""),
+        "latest_start_utc": item.get("latest_start_utc", ""),
+        "task_type": item.get("task_type", "science"),
+        "campaign_id": item.get("campaign_id", ""),
+        "priority": item.get("priority", 0),
+        "cancellation_generation": item.get("cancellation_generation", 0),
+        "filter": item.get("filter", ""),
     }
 
     # Interrupts drive the mount exactly like plan items — hold them to the
@@ -1168,8 +1279,23 @@ def _on_cloud_interrupt(item: dict) -> None:
     if time_critical:
         with _sched_lock:
             if _sched_state["running"]:
-                logger.warning("Pre-empting running schedule for %s", name)
-                _sched_state["cancelled"] = True
+                if is_event_task and _sched_state.get("current_phase") == "exposing":
+                    logger.info("Event tile queued until active exposure completes")
+                    _sched_state["cancel_after_frame"] = True
+                else:
+                    logger.warning("Pre-empting running schedule for %s", name)
+                    _sched_state["cancelled"] = True
+
+
+def _on_cloud_task_cancel(task_id: str) -> None:
+    """Stop a superseded event task between frames, never mid-exposure."""
+    with _sched_lock:
+        if str(_sched_state.get("current_task_id") or "") != str(task_id):
+            return
+        if _sched_state.get("current_phase") == "exposing":
+            _sched_state["cancel_after_frame"] = True
+        else:
+            _sched_state["cancelled"] = True
 
 
 def _interrupt_dispatcher_loop() -> None:
@@ -1182,6 +1308,12 @@ def _interrupt_dispatcher_loop() -> None:
                 items.append(_interrupt_queue.get_nowait())
             except queue.Empty:
                 break
+
+        if _cloud is not None:
+            items = [it for it in items
+                     if not (it.get("task_id") and _cloud.task_cancelled(it["task_id"]))]
+        if not items:
+            continue
 
         # Wait for any running schedule to finish before starting ours.
         while True:
@@ -3653,6 +3785,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
     exp_count = int(item.get("expCount", 1))
     binning   = max(1, int(item.get("binning", 1)))
     start_str = item.get("startTime", "")
+    starts_at_utc = str(item.get("starts_at_utc") or "")
+    latest_start_utc = str(item.get("latest_start_utc") or "")
     obs_mode  = item.get("observation_mode", "single_epoch")
     duration_minutes = float(item.get("duration_minutes", 0.0))
 
@@ -3663,19 +3797,38 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             "current_phase": "waiting",
             "current_frame": 0,
             "total_frames": exp_count,
+            "current_item_id": str(item.get("item_id") or ""),
+            "current_bundle_id": str(item.get("bundle_id") or ""),
+            "current_filter": str(item.get("filter") or ""),
+            "current_task_id": str(item.get("task_id") or ""),
+            "cancel_after_frame": False,
+            "current_item_outcome": "started",
+            "current_failure_reason": "",
         })
 
-    # Wait until the scheduled start time (see _start_wait_seconds).
-    if start_str:
+    # Upgraded agents use absolute UTC. Legacy HH:MM remains a fallback.
+    wait_s = 0.0
+    if starts_at_utc:
+        try:
+            start_dt = datetime.fromisoformat(starts_at_utc.replace("Z", "+00:00"))
+            wait_s = max(0.0, (start_dt - datetime.now(timezone.utc)).total_seconds())
+        except ValueError:
+            logger.warning("Schedule: invalid starts_at_utc for %s", target)
+    elif start_str:
         wait_s = _start_wait_seconds(start_str)
-        if wait_s > 0:
-            logger.info("Schedule: waiting %.0f s until %s for %s",
-                        wait_s, start_str, target)
-            with _sched_lock:
-                _sched_state["current_phase"] = "waiting"
-            deadline = time.monotonic() + wait_s
-            while time.monotonic() < deadline and not _sched_cancelled():
-                time.sleep(1)
+    if wait_s > 0:
+        logger.info("Schedule: waiting %.0f s for %s", wait_s, target)
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline and not _sched_cancelled():
+            time.sleep(1)
+
+    if latest_start_utc:
+        try:
+            latest = datetime.fromisoformat(latest_start_utc.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) > latest:
+                raise RuntimeError("latest start window elapsed")
+        except ValueError:
+            raise RuntimeError("invalid latest_start_utc")
 
     if _sched_cancelled():
         return
@@ -3691,6 +3844,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             logger.warning("Schedule: skipping %s — slew rejected: %s", target, rejection)
             with _sched_lock:
                 _sched_state["error"] = f"{target}: {rejection}"
+                _sched_state["current_item_outcome"] = "skipped"
+                _sched_state["current_failure_reason"] = rejection
             _telemetry.event("slew_rejected", severity="warning", target=target,
                              detail={"reason": rejection})
             return
@@ -3705,18 +3860,25 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 logger.error("Schedule: slew to %s timed out — skipping exposures", target)
                 with _sched_lock:
                     _sched_state["error"] = f"Slew to {target} timed out"
+                    _sched_state["current_item_outcome"] = "failed"
+                    _sched_state["current_failure_reason"] = "slew timeout"
                 _telemetry.event("slew_failed", severity="error", target=target,
                                  detail={"reason": "timeout", "timeout_s": 180})
         except Exception as exc:
             logger.error("Schedule: slew failed for %s: %s", target, exc)
             with _sched_lock:
                 _sched_state["error"] = f"Slew to {target} failed: {exc}"
+                _sched_state["current_item_outcome"] = "failed"
+                _sched_state["current_failure_reason"] = str(exc)[:500]
             _telemetry.event("slew_failed", severity="error", target=target,
                              detail={"reason": str(exc)[:300]})
     else:
         logger.warning("Schedule: telescope not connected — skipping slew for %s", target)
         _telemetry.event("device_disconnect", severity="error", target=target,
                          detail={"reason": "telescope not connected during schedule"})
+        with _sched_lock:
+            _sched_state["current_item_outcome"] = "failed"
+            _sched_state["current_failure_reason"] = "telescope disconnected"
 
     if _sched_cancelled():
         return
@@ -3740,6 +3902,9 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
 
         if _cam is None:
             logger.warning("Schedule: camera not connected — skipping exposure for %s", target)
+            with _sched_lock:
+                _sched_state["current_item_outcome"] = "failed"
+                _sched_state["current_failure_reason"] = "camera disconnected"
             return False
 
         fits_save_path: Optional[str] = None
@@ -3777,8 +3942,16 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             logger.error("Schedule: exposure failed %s frame %d: %s", target, frame, exc)
             _telemetry.event("exposure_failed", severity="error", target=target,
                              detail={"frame": frame, "reason": str(exc)[:300]})
+            with _sched_lock:
+                _sched_state["current_item_outcome"] = "failed"
+                _sched_state["current_failure_reason"] = str(exc)[:500]
         finally:
             _pier_cam_pause.clear()
+        with _sched_lock:
+            if _sched_state.get("cancel_after_frame"):
+                _sched_state["cancelled"] = True
+                _sched_state["current_item_outcome"] = "cancelled"
+                return False
         return True
 
     if obs_mode == "time_series" and duration_minutes > 0:
@@ -3870,6 +4043,8 @@ def _run_schedule_bg(items: list, source: str = "manual",
                     "expCount":  it.get("expCount"),
                     "startTime": it.get("startTime", ""),
                     "filter":    it.get("filter", ""),
+                    "item_id":   it.get("item_id", ""),
+                    "bundle_id": it.get("bundle_id", ""),
                 }
                 for it in items
             ],
@@ -3913,13 +4088,16 @@ def _run_schedule_bg(items: list, source: str = "manual",
         pass
 
     try:
+        queued_item_ids = {str(i.get("item_id") or "") for i in items}
         for idx, item in enumerate(items):
             if _sched_cancelled():
                 break
             # ── Gap fill: a dead wait before this item's start time is spent
             # on an alternate that fits, instead of sleeping (cloud plans only;
             # never shave the margin before a time-series window).
-            if source == "cloud":
+            # Offline work has a separate signed contingency list and may not
+            # select ordinary local alternates.
+            if source == "cloud" and not item.get("bundle_id"):
                 while not _sched_cancelled():
                     wait_s = _start_wait_seconds(item.get("startTime", ""))
                     if wait_s < gap_fill_min_s:
@@ -3939,14 +4117,71 @@ def _run_schedule_bg(items: list, source: str = "manual",
                                      filler.get("target", "?"), exc)
             if _sched_cancelled():
                 break
+            if (item.get("bundle_id") and _cloud is not None
+                    and getattr(_cloud, "outbox_at_capacity", lambda: False)()):
+                _cloud.record_execution_outcome(
+                    str(item.get("bundle_id")), str(item.get("item_id") or ""), "skipped",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    failure_reason="offline outbox storage budget exhausted",
+                    detail={"offline": True})
+                _telemetry.event("offline_storage_exhausted", severity="critical",
+                                 detail={"item_id": item.get("item_id", "")})
+                break
+            attempt_id = None
+            offline_execution = bool(_cloud is not None
+                                     and _cloud.status.get("last_heartbeat_ok") is False)
+            if _cloud is not None and item.get("item_id"):
+                attempt_id = _cloud.record_execution_outcome(
+                    str(item.get("bundle_id") or "connected-plan"),
+                    str(item.get("item_id")), "started",
+                    started_at=datetime.now(timezone.utc).isoformat(),
+                    last_checkpoint="item_started",
+                    task_id=str(item.get("task_id") or ""),
+                    frames_attempted=0, frames_completed=0,
+                    detail={"offline": offline_execution})
             try:
                 _run_schedule_observation(idx, item)
+                with _sched_lock:
+                    item_outcome = str(_sched_state.get("current_item_outcome") or "started")
+                    item_reason = str(_sched_state.get("current_failure_reason") or "")
+                state = ("cancelled" if _sched_cancelled()
+                         else "completed" if item_outcome == "started" else item_outcome)
+                if _cloud is not None and item.get("item_id"):
+                    _cloud.record_execution_outcome(
+                        str(item.get("bundle_id") or "connected-plan"),
+                        str(item.get("item_id")), state, attempt_id=attempt_id,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        task_id=str(item.get("task_id") or ""),
+                        frames_attempted=int(_sched_state.get("current_frame") or 0),
+                        frames_completed=int(_sched_state.get("current_frame") or 0),
+                        last_checkpoint="item_finished",
+                        failure_reason=item_reason,
+                        detail={"offline": offline_execution})
+                if (state in ("failed", "skipped") and _cloud is not None
+                        and item.get("bundle_id")):
+                    for alternate in _cloud.autonomy_contingency_items():
+                        alt_id = str(alternate.get("item_id") or "")
+                        if alt_id and alt_id not in queued_item_ids:
+                            valid_alt, alt_error = _validate_schedule_items([alternate])
+                            if alt_error is None:
+                                items.extend(valid_alt)
+                                queued_item_ids.add(alt_id)
+                                with _sched_lock:
+                                    _sched_state["total"] = len(items)
             except Exception as exc:
                 # A single bad observation must not abort the whole night.
                 logger.error("Schedule: observation %d (%s) failed: %s",
                              idx, item.get("target", "?"), exc)
                 with _sched_lock:
                     _sched_state["error"] = str(exc)
+                if _cloud is not None and item.get("item_id"):
+                    _cloud.record_execution_outcome(
+                        str(item.get("bundle_id") or "connected-plan"),
+                        str(item.get("item_id")), "failed", attempt_id=attempt_id,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        task_id=str(item.get("task_id") or ""),
+                        failure_reason=str(exc)[:500],
+                        detail={"offline": offline_execution})
             with _sched_lock:
                 _sched_state["completed"] = idx + 1
             logger.info("Schedule: ✓ %s (%d/%d)",
@@ -4069,6 +4304,16 @@ def _validate_schedule_items(items: list) -> tuple[list, Optional[str]]:
             "duration_minutes": duration_minutes,
             "filter": str(item.get("filter", "") or ""),
             "notes": str(item.get("notes", "") or ""),
+            "item_id": str(item.get("item_id", "") or ""),
+            "task_id": str(item.get("task_id", "") or ""),
+            "bundle_id": str(item.get("bundle_id", "") or ""),
+            "starts_at_utc": str(item.get("starts_at_utc", "") or ""),
+            "latest_start_utc": str(item.get("latest_start_utc", "") or ""),
+            "task_type": str(item.get("task_type", "science") or "science"),
+            "campaign_id": str(item.get("campaign_id", "") or ""),
+            "priority": float(item.get("priority", 0.0) or 0.0),
+            "cancellation_generation": int(
+                item.get("cancellation_generation", 0) or 0),
         })
     return out, None
 
@@ -4275,6 +4520,7 @@ def launch(port: int = 5173) -> None:
             get_conditions=_cloud_conditions,
             on_plan=_on_cloud_plan,
             on_interrupt=_on_cloud_interrupt,
+            on_task_cancel=_on_cloud_task_cancel,
             get_telescope_specs=_cloud_telescope_specs,
             get_state=_cloud_state,
             on_location=_on_cloud_location,
@@ -4289,6 +4535,11 @@ def launch(port: int = 5173) -> None:
             target=_cloud_disconnect_monitor_loop,
             daemon=True,
             name="cloud-disco-monitor",
+        ).start()
+        threading.Thread(
+            target=_offline_autonomy_resume_loop,
+            daemon=True,
+            name="offline-autonomy-resume",
         ).start()
 
     def _commission_runtime() -> dict:

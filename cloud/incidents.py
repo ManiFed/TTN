@@ -100,6 +100,7 @@ def log(
     target_name: str = "",
     measurement_id: int | None = None,
     detail: dict[str, Any] | None = None,
+    idempotency_key: str = "",
 ) -> None:
     """Record an operational incident without letting logging failure affect hot paths."""
     if not node_id:
@@ -110,8 +111,9 @@ def log(
         db.execute(
             """INSERT INTO reliability_incidents
                    (node_id, incident_type, severity, target_name, measurement_id,
-                    detail, occurred_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                    detail, occurred_at, idempotency_key)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (node_id,idempotency_key) WHERE idempotency_key<>'' DO NOTHING""",
             (
                 node_id,
                 incident_type[:80],
@@ -120,6 +122,7 @@ def log(
                 measurement_id,
                 json.dumps(detail),
                 _now(),
+                idempotency_key[:96],
             ),
         )
     except Exception as exc:

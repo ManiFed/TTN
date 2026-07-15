@@ -12,3 +12,7 @@ psycopg2-binary>=2.9.9
 # browser-uploaded frames (photutils) with catalog lookups (astroquery).
 photutils>=1.9
 astroquery>=0.4.6
+cryptography>=42.0
+gcn-kafka>=0.3.4
+fastavro>=1.9
+astropy-healpix>=1.0

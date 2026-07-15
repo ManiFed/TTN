@@ -42,6 +42,11 @@ cloud:
   realtime_url: https://realtime.thetelescope.net
   upload_images: false
   url: https://api.thetelescope.net
+autonomy:
+  enabled: false
+  public_keys: {}
+  outbox_max_bytes: 2147483648
+  max_bundle_storage_bytes: 21474836480
 commissioning:
   enabled: true
   interval_s: 10
@@ -102,6 +107,8 @@ photometry:
   force_plate_solve: true
   fwhm_fallback_px: 4.01
   gain: 1
+  # Increment after any response-changing hardware characterization update.
+  hardware_characterization_version: '1'
   mag_limit: 15
   mag_min: 10
   max_airmass: 3

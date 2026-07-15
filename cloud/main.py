@@ -22,7 +22,8 @@ from pathlib import Path
 
 import yaml
 
-from cloud import alerts, crossmatch, data_pipeline, db, ingest_worker, live, nights, registry, scheduler, scoring, survey, tuning
+from cloud import alerts, crossmatch, data_pipeline, db, gcn_events, ingest_worker, live, nights, registry, scheduler, scoring, survey, tuning
+from cloud.gcn_consumer import GCNConsumerService
 from cloud.server import create_app
 
 logger = logging.getLogger("cloud.main")
@@ -71,6 +72,11 @@ def start_background_loops(config: dict) -> None:
     sched_cfg = config.get("scheduler", {})
     aavso_cfg = config.get("aavso", {})
 
+    # GCN is intentionally a dedicated long-lived Kafka consumer, not part of
+    # the hourly feed poller. Kafka commits provide reconnect recovery.
+    if (config.get("gcn") or {}).get("run_embedded", False):
+        GCNConsumerService(config).start()
+
     def ingest_and_rescore():
         result = alerts.ingest_all(config)
         if result["new"] > 0:
@@ -110,6 +116,11 @@ def start_background_loops(config: dict) -> None:
                 chorus_ledger.run_nightly(config)
             except Exception as exc:
                 logger.error("CHORUS ledger maintenance failed: %s", exc)
+        try:
+            from cloud import calibration
+            calibration.run_nightly(config)
+        except Exception as exc:
+            logger.error("calibration mesh maintenance failed: %s", exc)
         tuning.run_nightly(config)
         if sched_cfg.get("chorus") or sched_cfg.get("chorus_shadow"):
             # Ring 2: backtest and apply/reject any pending structural class
@@ -132,6 +143,7 @@ def start_background_loops(config: dict) -> None:
         crossmatch.run_pending(config)
         crossmatch.run_pending_retro(config)
     _loop("crossmatch", 300, crossmatch_pass)
+    _loop("event-maintenance", 60, gcn_events.expire_events)
     def moving_objects_pass():
         from cloud import moving_objects
         moving_objects.link_tracklets(config)

@@ -70,12 +70,14 @@ def ingest_measurement(node_id: str, payload: dict,
             """INSERT INTO measurements
                    (node_id, target_name, bjd, magnitude, uncertainty, filter,
                     airmass, fwhm, snr, comparison_stars, quality_flag,
-                    zero_point, zp_scatter, fits_file, sky_mag, conditions, received_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    zero_point, zp_scatter, fits_file, sky_mag, conditions, received_at,
+                    item_id, bundle_id, response_fingerprint, instrumental_magnitude)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (m.node_id, m.target_name, m.bjd, m.magnitude, m.uncertainty,
              m.filter, m.airmass, m.fwhm, m.snr, m.comparison_stars,
              m.quality_flag, m.zero_point, m.zp_scatter, m.fits_file,
-             m.sky_mag, json.dumps(conditions or {}), _now()),
+             m.sky_mag, json.dumps(conditions or {}), _now(), m.item_id,
+             m.bundle_id, m.response_fingerprint, m.instrumental_magnitude),
             returning_id=True,
         )
     except Exception as exc:
@@ -115,9 +117,25 @@ def ingest_measurement(node_id: str, payload: dict,
             },
         )
     cross_validate(m.target_name, m.bjd)
+    if row_id and m.response_fingerprint:
+        try:
+            from cloud import calibration
+            calibration.apply_to_measurement(row_id, payload, _active_config())
+        except Exception as exc:
+            logger.warning("Network calibration skipped for measurement %s: %s",
+                           row_id, exc)
     if m.quality_flag in ("good", "acceptable") and row_id:
         _maybe_create_highlights(row_id, node_id, m)
     return {"ok": True, "id": row_id}
+
+
+def _active_config() -> dict:
+    """Read the Flask app config lazily without creating an import cycle."""
+    try:
+        from cloud import server
+        return getattr(server, "_config", {}) or {}
+    except Exception:
+        return {}
 
 
 _HIGHLIGHT_HEADLINES = {
@@ -220,7 +238,9 @@ def light_curve(target_name: str, days: float = 365.0) -> list:
     """All non-outlier measurements of a target, time-ordered, for the API."""
     rows = db.query(
         """SELECT node_id, bjd, magnitude, uncertainty, filter, airmass, snr,
-                  quality_flag, validation_status, aavso_submitted, received_at
+                  quality_flag, validation_status, aavso_submitted, received_at,
+                  network_magnitude, network_uncertainty, calibration_state,
+                  calibration_model_version, magnitude_system
            FROM measurements
            WHERE target_name = %s AND validation_status != 'outlier'
            ORDER BY bjd""",
@@ -229,6 +249,12 @@ def light_curve(target_name: str, days: float = 365.0) -> list:
     if days and rows:
         latest = max(r["bjd"] for r in rows)
         rows = [r for r in rows if latest - r["bjd"] <= days]
+    for row in rows:
+        applied = row.get("calibration_state") == "applied" and row.get("network_magnitude") is not None
+        row["effective_magnitude"] = (row["network_magnitude"] if applied else row["magnitude"])
+        row["effective_uncertainty"] = (row.get("network_uncertainty")
+                                        if applied and row.get("network_uncertainty") is not None
+                                        else row["uncertainty"])
     return rows
 
 
@@ -404,6 +430,12 @@ def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
     for r in rows:
         name = str(r["target_name"]).replace(",", " ")
         amass = f"{r['airmass']:.2f}" if r["airmass"] is not None else "na"
+        applied = (r.get("calibration_state") == "applied"
+                   and r.get("network_magnitude") is not None)
+        magnitude = r["network_magnitude"] if applied else r["magnitude"]
+        uncertainty = (r.get("network_uncertainty")
+                       if applied and r.get("network_uncertainty") is not None
+                       else r["uncertainty"])
         notes = "|".join([
             f"node={r['node_id']}",
             f"snr={r['snr'] if r['snr'] is not None else 'na'}",
@@ -411,10 +443,11 @@ def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
             f"zp_scatter={r['zp_scatter'] if r['zp_scatter'] is not None else 'na'}",
             f"xval={r['validation_status']}",
             f"quality={r['quality_flag']}",
+            f"cal={r.get('calibration_model_version') or 'raw'}",
         ])
         lines.append(",".join([
             name, f"{r['bjd']:.6f}",
-            f"{r['magnitude']:.3f}", f"{r['uncertainty']:.3f}",
+            f"{magnitude:.3f}", f"{uncertainty:.3f}",
             r["filter"] or "CV",
             "NO", "DIFF",
             "ENSEMBLE", "na", "na", "na",

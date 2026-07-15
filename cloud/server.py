@@ -47,7 +47,7 @@ from defusedxml import ElementTree as ET
 from flask import Flask, jsonify, redirect as _redirect, request, send_from_directory
 from werkzeug.utils import safe_join
 
-from cloud import alerts, auth, data_pipeline, db, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
+from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -353,6 +353,13 @@ def api_characterization(node):
 def api_heartbeat(node):
     body = request.get_json(force=True, silent=True) or {}
     registry.heartbeat(node["node_id"], body.get("conditions"))
+    if body.get("clock_skew_s") is not None:
+        try:
+            skew = float(body["clock_skew_s"])
+            db.execute("UPDATE nodes SET clock_skew_s=%s,clock_qualified_at=%s WHERE node_id=%s",
+                       (skew, _now() if body.get("clock_qualified") else "", node["node_id"]))
+        except (TypeError, ValueError):
+            pass
     # Live fleet state: fold the optional second-scale phase report into the
     # live fleet map. Old node agents omit "state" and simply don't appear live.
     state = body.get("state")
@@ -404,6 +411,7 @@ def api_node_incident(node):
         severity=severity,
         target_name=str(body.get("target_name") or ""),
         detail=detail,
+        idempotency_key=str(body.get("idempotency_key") or ""),
     )
     return jsonify({"ok": True})
 
@@ -427,6 +435,147 @@ def api_plan(node):
     if plan is None:
         return jsonify({"plan": None, "message": "no observable night window"}), 200
     return jsonify({"plan": plan})
+
+
+@app.route("/api/v1/autonomy/bundle", methods=["GET"])
+@require_node
+def api_autonomy_bundle(node):
+    try:
+        if scheduler.current_plan(node["node_id"]) is None:
+            scheduler.generate_plan(node, _config)
+        bundle = autonomy.build_for_node(node["node_id"], _config)
+    except (RuntimeError, ValueError) as exc:
+        return jsonify({"error": str(exc), "bundle": None}), 503
+    return jsonify({"bundle": bundle,
+                    "public_key": autonomy.public_key_b64(_config) if bundle else ""})
+
+
+@app.route("/api/v1/nodes/execution-outcomes", methods=["POST"])
+@require_node
+def api_execution_outcomes(node):
+    body = request.get_json(force=True, silent=True) or {}
+    outcomes = body.get("outcomes") or []
+    if not isinstance(outcomes, list):
+        return jsonify({"error": "outcomes must be a list"}), 400
+    return jsonify(autonomy.store_outcomes(node["node_id"], outcomes))
+
+
+@app.route("/api/v1/tasks", methods=["GET"])
+@require_node
+def api_observation_tasks(node):
+    """Live-connectivity-only event tasks; signed bundles never contain these."""
+    rows = db.query(
+        "SELECT * FROM observation_tasks WHERE node_id=%s AND state IN ('pending','received') "
+        "AND latest_utc>%s ORDER BY priority DESC,earliest_utc,task_id",
+        (node["node_id"], _now()))
+    out = []
+    for row in rows:
+        exposure = db.loads(row.get("exposure"), {})
+        out.append({
+            "task_id": row["task_id"], "item_id": row["task_id"],
+            "target": f"{row['event_id']} / {row['tile_id']}",
+            "ra": round(float(row["ra_deg"]) / 15.0, 7), "dec": row["dec_deg"],
+            "ra_deg": row["ra_deg"], "dec_deg": row["dec_deg"],
+            "starts_at_utc": row["earliest_utc"], "latest_start_utc": row["latest_utc"],
+            "task_type": "event_tile", "campaign_id": row["event_id"],
+            "priority": row["priority"],
+            "cancellation_generation": row["cancellation_generation"],
+            "observation_mode": "single_epoch", "processing_mode": "event_tile",
+            **exposure,
+        })
+        db.execute("UPDATE observation_tasks SET state='received',updated_at=%s "
+                   "WHERE task_id=%s AND state='pending'", (_now(), row["task_id"]))
+    cancelled = [r["task_id"] for r in db.query(
+        "SELECT task_id FROM observation_tasks WHERE node_id=%s AND state='cancelled'",
+        (node["node_id"],))]
+    return jsonify({"tasks": out, "cancelled_task_ids": cancelled})
+
+
+# ── Network events and coverage ──────────────────────────────────────────────
+
+@app.route("/api/v1/events/<event_id>", methods=["GET"])
+def api_network_event(event_id):
+    event = db.query_one("SELECT * FROM network_events WHERE event_id=%s", (event_id,))
+    if not event:
+        return jsonify({"error": "unknown event"}), 404
+    event = dict(event)
+    event["policy"] = db.loads(event.get("policy"), {})
+    revisions = db.query(
+        "SELECT * FROM event_revisions WHERE event_id=%s ORDER BY revision", (event_id,))
+    for rev in revisions:
+        for field in ("significance", "localization", "distance"):
+            rev[field] = db.loads(rev.get(field), {})
+        rev.pop("raw_notice", None)
+    return jsonify({"event": event, "revisions": revisions})
+
+
+@app.route("/api/v1/events/<event_id>/coverage", methods=["GET"])
+def api_network_event_coverage(event_id):
+    event = db.query_one("SELECT * FROM network_events WHERE event_id=%s", (event_id,))
+    if not event:
+        return jsonify({"error": "unknown event"}), 404
+    try:
+        revision = int(request.args.get("revision", event["active_revision"]))
+    except (TypeError, ValueError):
+        return jsonify({"error": "revision must be an integer"}), 400
+    if not db.query_one("SELECT 1 FROM event_revisions WHERE event_id=%s AND revision=%s",
+                        (event_id, revision)):
+        return jsonify({"error": "unknown event revision"}), 404
+    tiles = db.query("SELECT * FROM event_tiles WHERE event_id=%s AND event_revision=%s",
+                     (event_id, revision))
+    tasks = db.query("SELECT * FROM observation_tasks WHERE event_id=%s AND event_revision=%s",
+                     (event_id, revision))
+    for task in tasks:
+        task["result"] = db.loads(task.get("result"), {})
+    # Revisit tasks confirm candidates but do not cover new probability mass.
+    # Counting only first-pass tiles prevents second epochs from inflating
+    # scheduled/observed sky coverage above the localization's total mass.
+    by_tile = {r["tile_id"]: (float(r.get("probability_mass") or 0)
+                              if int(r.get("pass_number") or 1) == 1 else 0.0)
+               for r in tiles}
+    scheduled_ids = {r["tile_id"] for r in tasks if r["state"] != "shadow"}
+    observed_ids = {r["tile_id"] for r in tasks if r["state"] == "completed"}
+    footprints = {(round(float(r["ra_deg"]), 5), round(float(r["dec_deg"]), 5))
+                  for r in tasks}
+    duplicates = max(0, len(tasks) - len(footprints))
+    depth_weight = sum(by_tile.get(r["tile_id"], 0)
+                       * float((r.get("result") or {}).get("limiting_magnitude") or 0)
+                       for r in tasks if (r.get("result") or {}).get("limiting_magnitude"))
+    depth_mass = sum(by_tile.get(r["tile_id"], 0) for r in tasks
+                     if (r.get("result") or {}).get("limiting_magnitude"))
+    candidate_count = (db.query_one(
+        "SELECT COUNT(DISTINCT d.id) AS n FROM discovery_candidates d "
+        "JOIN survey_measurements s ON s.source_key=d.source_key WHERE s.event_id=%s",
+        (event_id,)) or {}).get("n", 0)
+    return jsonify({
+        "event_id": event_id, "revision": revision,
+        "status": event["status"],
+        "probability_scheduled": sum(by_tile.get(v, 0) for v in scheduled_ids),
+        "probability_observed": sum(by_tile.get(v, 0) for v in observed_ids),
+        "probability_weighted_limiting_magnitude": depth_weight / depth_mass if depth_mass else None,
+        "galaxy_weighted_coverage": sum(by_tile.get(v, 0) for v in observed_ids),
+        "tiles": len(tiles), "tasks": len(tasks),
+        "duplicate_coverage_fraction": duplicates / max(1, len(tasks)),
+        "node_failures": sum(1 for r in tasks if r["state"] == "failed"),
+        "candidate_count": int(candidate_count or 0),
+    })
+
+
+@app.route("/api/v1/admin/events", methods=["GET"])
+@require_admin
+def api_admin_events():
+    rows = db.query("SELECT * FROM network_events ORDER BY received_time DESC LIMIT 500")
+    for row in rows:
+        row["policy"] = db.loads(row.get("policy"), {})
+    return jsonify({"events": rows})
+
+
+@app.route("/api/v1/admin/events/<event_id>/cancel", methods=["POST"])
+@require_admin
+def api_admin_event_cancel(event_id):
+    if not gcn_events.cancel(event_id):
+        return jsonify({"error": "unknown event"}), 404
+    return jsonify({"ok": True, "event_id": event_id})
 
 
 # ── Measurements & images ──────────────────────────────────────────────────────
@@ -1399,6 +1548,24 @@ def api_auth_register():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(result)
+
+
+@app.route("/api/v1/admin/calibration/models", methods=["GET"])
+@require_admin
+def api_admin_calibration_models():
+    rows = db.query(
+        "SELECT * FROM photometric_models ORDER BY created_at DESC LIMIT 500")
+    for row in rows:
+        row["validation"] = db.loads(row.get("validation"), {})
+    return jsonify({"models": rows})
+
+
+@app.route("/api/v1/admin/calibration/models/<model_version>/rollback", methods=["POST"])
+@require_admin
+def api_admin_calibration_rollback(model_version):
+    if not calibration.rollback(model_version):
+        return jsonify({"error": "model not found"}), 404
+    return jsonify({"ok": True, "model_version": model_version})
 
 
 @app.route("/api/v1/auth/login", methods=["POST"])

@@ -100,6 +100,12 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
 
     filter_name = str(frame.get("filter") or "CV")[:8]
     frame_id = str(frame.get("fits_file") or "")[:120]
+    task_id = str(frame.get("item_id") or frame.get("task_id") or "")[:80]
+    task = (db.query_one("SELECT event_id,event_revision FROM observation_tasks "
+                         "WHERE task_id=%s AND node_id=%s", (task_id, node_id))
+            if task_id else None)
+    event_id = str((task or {}).get("event_id") or "")
+    event_revision = int((task or {}).get("event_revision") or 0)
     date_obs_utc = str(frame.get("date_obs") or "")[:32]
     try:
         zp_scatter = float(frame.get("zp_scatter") or 0.05)
@@ -148,12 +154,13 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
                 cur,
                 "INSERT INTO survey_measurements "
                 "(source_key, node_id, bjd, mag, mag_err, snr, filter, "
-                " frame_id, received_at, contribution_id, user_id) VALUES %s "
+                " frame_id, received_at, contribution_id, user_id,task_id,event_id,event_revision) VALUES %s "
                 "ON CONFLICT (source_key, node_id, bjd) DO NOTHING "
                 "RETURNING source_key",
                 [(s["key"], node_id, bjd, float(s["mag"]),
                   float(s.get("mag_err") or 0.05), float(s.get("snr") or 0.0),
-                  filter_name, frame_id, now, contribution_id, user_id)
+                  filter_name, frame_id, now, contribution_id, user_id,
+                  task_id, event_id, event_revision)
                  for s in batch],
                 fetch=True,
             )
@@ -265,6 +272,31 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
                 new_sources, config)
         except Exception as exc:
             logger.warning("Moving-object recording failed: %s", exc)
+
+        # The same compact full-frame payload feeds the calibration mesh. Add
+        # cloud-known variability flags before selection so known/suspected
+        # variables can never anchor an instrument response model.
+        try:
+            from cloud import calibration
+            for source in new_sources:
+                base = baselines.get(source["key"]) or {}
+                flags = list(source.get("flags") or [])
+                if base.get("vsx_name") or base.get("variability_flag") == "variable_suspect":
+                    flags.append("variable")
+                source["flags"] = flags
+            result["calibration_samples"] = calibration.ingest_frame(
+                node_id, frame, new_sources, config)
+        except Exception as exc:
+            logger.warning("Calibration sample recording failed: %s", exc)
+
+    if task_id:
+        limiting = max((float(s["mag"]) for s in batch
+                        if float(s.get("snr") or 0) >= 5.0), default=None)
+        task_result = {"frame_id": frame_id, "accepted_sources": len(new_sources),
+                       "limiting_magnitude": limiting, "deviants": result["deviants"],
+                       "received_at": _now()}
+        db.execute("UPDATE observation_tasks SET result=%s,updated_at=%s WHERE task_id=%s",
+                   (json.dumps(task_result), _now(), task_id))
 
     return result
 

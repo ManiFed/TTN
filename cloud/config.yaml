@@ -199,6 +199,79 @@ survey:
     n_nodes: 3                     # confirming nodes per candidate
     expires_hours: 2
 
+# Network-wide photometric response calibration. Candidate models are learned
+# by default but never alter exports until apply_qualified is explicitly set.
+calibration_mesh:
+  enabled: true
+  apply_qualified: false
+  max_frame_zp_scatter: 0.15
+  min_samples: 500
+  min_stars: 50
+  min_nights: 5
+  min_overlap_nodes: 3
+  min_color_span: 1.0
+  min_airmass_span: 0.8
+  standard_rms: 0.03
+  cv_rms: 0.05
+  min_improvement: 0.10
+  max_color_slope: 0.02
+  passes_to_qualify: 3
+  calibration_debt_enabled: false
+  debt_after_photometric_nights: 30
+  max_fields_per_week: 2
+  family_prior_samples: 100
+  # Operator-vetted standard fields: [{name,ra_deg,dec_deg,filter,color_span,
+  # leverage:[color,airmass],expDur,expCount}]. No field is invented by code.
+  standard_fields: []
+
+# Signed disconnected-night bundles. Disabled until a base64-encoded raw
+# Ed25519 private key is supplied through AUTONOMY_SIGNING_KEY.
+autonomy:
+  enabled: false
+  private_key: ${AUTONOMY_SIGNING_KEY}
+  signing_key_id: primary
+  max_items: 50
+  max_exposure_s: 43200
+  max_slews: 50
+  max_storage_bytes: 21474836480
+
+# Dedicated NASA GCN Kafka intake. Credentials are issued at gcn.nasa.gov.
+# Intake may be enabled independently of live dispatch for safe shadow replay.
+gcn:
+  enabled: false
+  run_embedded: false
+  client_id: ${GCN_CLIENT_ID}
+  client_secret: ${GCN_CLIENT_SECRET}
+  domain: gcn.nasa.gov
+  schema_registry: ""
+  heartbeat_stale_s: 120
+  live_dispatch: false
+  observe_unknown_sources: false
+  max_online_node_fraction: 0.20
+  max_node_hours_per_event: 50
+  galaxy_weight_fraction: 0.70
+  task_expiry_hours: 6
+  grb_max_age_hours: 6
+  lvk_min_has_ns: 0.10
+  lvk_max_area_deg2: 2000
+  icecube_min_p_astro: 0.50
+  grb_max_area_deg2: 500
+  frb_max_radius_deg: 0.50
+  default_filter: CV
+  topics:
+    - igwn.gwalert
+    - gcn.notices.icecube.lvk_nu_track_search
+    - gcn.notices.icecube.gold_bronze_track_alerts
+    - gcn.classic.text.FERMI_GBM_ALERT
+    - gcn.classic.text.FERMI_GBM_FLT_POS
+    - gcn.classic.text.FERMI_GBM_GND_POS
+    - gcn.classic.text.FERMI_GBM_FIN_POS
+    - gcn.notices.swift.bat.guano
+    - gcn.classic.text.SWIFT_BAT_GRB_POS_ACK
+    - gcn.notices.chime.frb
+    - gcn.notices.superk.sn_alert
+    - gcn.classic.text.SNEWS
+
 # Asteroid/minor-planet astrometry: link unmatched survey detections into
 # moving-object tracklets, crossmatch against known objects (SkyBoT), and
 # generate MPC-format reports for manual submission once an observatory code

@@ -230,6 +230,16 @@ class PlanItem:
     # Observation strategy
     observation_mode: str = "single_epoch"  # "single_epoch" | "time_series"
     duration_minutes: float = 0.0           # for time_series: how long to stay on target
+    # Versioned execution contract.  These fields are additive so older node
+    # agents can continue using startTime while upgraded agents use absolute
+    # UTC windows and durable item identities.
+    item_id: str = ""
+    starts_at_utc: str = ""
+    latest_start_utc: str = ""
+    task_type: str = "science"              # science | calibration | event_tile
+    campaign_id: str = ""
+    priority: float = 0.0
+    cancellation_generation: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -250,6 +260,13 @@ class PlanItem:
             "startTime":        self.startTime,
             "observation_mode": self.observation_mode,
             "duration_minutes": self.duration_minutes,
+            "item_id":          self.item_id,
+            "starts_at_utc":    self.starts_at_utc,
+            "latest_start_utc": self.latest_start_utc,
+            "task_type":        self.task_type,
+            "campaign_id":      self.campaign_id,
+            "priority":         self.priority,
+            "cancellation_generation": self.cancellation_generation,
         }
 
 
@@ -311,6 +328,16 @@ class Measurement:
     zp_scatter: Optional[float] = None
     fits_file: str = ""
     sky_mag: Optional[float] = None
+    item_id: str = ""
+    bundle_id: str = ""
+    response_fingerprint: str = ""
+    instrumental_magnitude: Optional[float] = None
+    network_magnitude: Optional[float] = None
+    network_uncertainty: Optional[float] = None
+    calibration_correction: Optional[float] = None
+    calibration_model_version: str = ""
+    calibration_state: str = ""
+    magnitude_system: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -328,3 +355,174 @@ class Measurement:
             and 0.0 <= self.uncertainty < 5.0
             and self.quality_flag in ("good", "acceptable", "poor")
         )
+
+
+# ── Network science expansion contracts ──────────────────────────────────────
+
+@dataclass
+class CalibrationSample:
+    response_fingerprint: str = ""
+    response_family: str = ""
+    frame_id: str = ""
+    source_key: str = ""
+    node_id: str = ""
+    bjd: float = 0.0
+    filter: str = "CV"
+    instrumental_mag: float = 0.0
+    instrumental_err: float = 0.05
+    frame_zero_point: float = 0.0
+    catalog_mag: float = 0.0
+    catalog_err: float = 0.05
+    catalog_color: Optional[float] = None
+    airmass: Optional[float] = None
+    flags: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CalibrationSample":
+        return _from_dict(cls, data)
+
+
+@dataclass
+class PhotometricModel:
+    model_version: str = ""
+    response_fingerprint: str = ""
+    response_family: str = ""
+    filter: str = "CV"
+    state: str = "collecting"
+    offset: float = 0.0
+    color_term: float = 0.0
+    extinction: float = 0.0
+    drift_per_day: float = 0.0
+    pivot_color: float = 0.0
+    model_uncertainty: float = 0.0
+    validation: dict = field(default_factory=dict)
+    created_at: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PhotometricModel":
+        return _from_dict(cls, data)
+
+
+@dataclass
+class NetworkEvent:
+    event_id: str = ""
+    source_event_id: str = ""
+    source: str = ""
+    mission: str = ""
+    topic: str = ""
+    schema_version: str = ""
+    event_class: str = "unknown"
+    role: str = "observation"
+    revision: int = 0
+    notice_type: str = "initial"
+    status: str = "received"
+    event_time: str = ""
+    received_time: str = ""
+    significance: dict = field(default_factory=dict)
+    localization_type: str = "none"
+    localization: dict = field(default_factory=dict)
+    area50_deg2: Optional[float] = None
+    area90_deg2: Optional[float] = None
+    distance: dict = field(default_factory=dict)
+    policy: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NetworkEvent":
+        return _from_dict(cls, data)
+
+
+@dataclass
+class EventTile:
+    tile_id: str = ""
+    event_id: str = ""
+    event_revision: int = 0
+    ra_deg: float = 0.0
+    dec_deg: float = 0.0
+    radius_deg: float = 0.0
+    probability_mass: float = 0.0
+    pass_number: int = 1
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ObservationTask:
+    task_id: str = ""
+    node_id: str = ""
+    event_id: str = ""
+    event_revision: int = 0
+    tile_id: str = ""
+    ra_deg: float = 0.0
+    dec_deg: float = 0.0
+    earliest_utc: str = ""
+    latest_utc: str = ""
+    exposure: dict = field(default_factory=dict)
+    priority: float = 0.0
+    state: str = "pending"
+    cancellation_generation: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExecutionOutcome:
+    attempt_id: str = ""
+    item_id: str = ""
+    bundle_id: str = ""
+    task_id: str = ""
+    node_id: str = ""
+    state: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    frames_attempted: int = 0
+    frames_completed: int = 0
+    last_checkpoint: str = ""
+    failure_reason: str = ""
+    detail: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExecutionOutcome":
+        return _from_dict(cls, data)
+
+
+@dataclass
+class AutonomyBundle:
+    schema_version: int = 1
+    bundle_id: str = ""
+    sequence: int = 0
+    node_id: str = ""
+    plan_id: str = ""
+    issued_at: str = ""
+    valid_from: str = ""
+    expires_at: str = ""
+    minimum_agent_version: str = "1"
+    items: list = field(default_factory=list)
+    contingencies: dict = field(default_factory=dict)
+    budgets: dict = field(default_factory=dict)
+    requirements: dict = field(default_factory=dict)
+    safety_policy_version: str = "1"
+    config_fingerprint: str = ""
+    signing_key_id: str = ""
+    next_public_key: dict = field(default_factory=dict)
+    signature: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AutonomyBundle":
+        return _from_dict(cls, data)
