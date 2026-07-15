@@ -97,35 +97,33 @@ jobs:
         with:
           flutter-version: '3.32.4'
           channel: stable
-      # Desktop runners may be generated in CI; keep any committed app/macos.
-      - working-directory: app
-        run: flutter create . --platforms=macos --project-name boundless_skies
-      - working-directory: app
-        run: |
-          cat > macos/Runner/Configs/AppInfo.xcconfig <<'EOF'
-          PRODUCT_NAME = TelescopeNet
-          PRODUCT_BUNDLE_IDENTIFIER = org.telescopenet.app
-          PRODUCT_COPYRIGHT = Copyright © 2026 The Telescope Net. All rights reserved.
-          EOF
-          cat > macos/Runner/Release.entitlements <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>com.apple.security.app-sandbox</key>
-            <true/>
-            <key>com.apple.security.network.client</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-          if [ -f macos/Podfile ]; then
-            sed -i.bak "s/platform :osx, '.*'/platform :osx, '10.15'/" macos/Podfile
-          fi
-          sed -i.bak -E 's/MACOSX_DEPLOYMENT_TARGET = [0-9.]+/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
-          sed -i.bak 's/com.example.boundlessSkies/org.telescopenet.app/g' macos/Runner.xcodeproj/project.pbxproj
+      # app/macos is a real, committed Xcode project (configured for App
+      # Store submission with Automatic signing + a real DEVELOPMENT_TEAM),
+      # not regenerated per-run -- so nothing here should touch its content.
       - working-directory: app
         run: flutter pub get
+      # CI has no Apple Developer signing certificate, so the Automatic/team
+      # signing that a real distribution build needs would fail here. This
+      # override only applies to this ephemeral checkout: it produces an
+      # unsigned, ad-hoc build for the public installer download, and never
+      # touches the committed project (App Store builds are made locally).
+      - name: Disable code signing for this CI-only build
+        working-directory: app
+        run: |
+          # DEVELOPMENT_TEAM/CODE_SIGN_STYLE are explicit per-target settings
+          # baked into project.pbxproj, which outrank an xcconfig override
+          # for the same keys -- patch those directly (in this checkout
+          # only), then also set the two signing-gate keys, which aren't
+          # set in the pbxproj, via xcconfig.
+          sed -i.bak 's/DEVELOPMENT_TEAM = QTAM997KMW;/DEVELOPMENT_TEAM = "";/g' \
+            macos/Runner.xcodeproj/project.pbxproj
+          sed -i.bak 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' \
+            macos/Runner.xcodeproj/project.pbxproj
+          cat >> macos/Runner/Configs/Release.xcconfig <<'EOF'
+          CODE_SIGN_IDENTITY = -
+          CODE_SIGNING_REQUIRED = NO
+          CODE_SIGNING_ALLOWED = NO
+          EOF
       - working-directory: app
         run: |
           flutter build macos --release \
