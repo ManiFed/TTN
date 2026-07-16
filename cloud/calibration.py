@@ -269,7 +269,7 @@ def run_nightly(config: dict) -> dict:
         if not stats:
             continue
         prior_models = db.query(
-            "SELECT offset,color_term FROM photometric_models WHERE response_family=%s "
+            "SELECT \"offset\",color_term FROM photometric_models WHERE response_family=%s "
             "AND filter=%s AND state='qualified' AND response_fingerprint<>%s",
             (group.get("response_family") or "", group["filter"],
              group["response_fingerprint"])) if group.get("response_family") else []
@@ -304,7 +304,7 @@ def run_nightly(config: dict) -> dict:
         validation = {**stats, "overlap_nodes": overlap_nodes, "gate_pass": gate}
         db.execute(
             "INSERT INTO photometric_models "
-            "(model_version,response_fingerprint,response_family,node_id,filter,state,offset,color_term,"
+            "(model_version,response_fingerprint,response_family,node_id,filter,state,\"offset\",color_term,"
             " extinction,drift_per_day,pivot_color,model_uncertainty,validation,"
             " consecutive_passes,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (version, group["response_fingerprint"], group.get("response_family") or "",

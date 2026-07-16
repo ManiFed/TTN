@@ -946,7 +946,7 @@ _LATE_TABLES: list[str] = [
         node_id               TEXT NOT NULL,
         filter                TEXT NOT NULL DEFAULT 'CV',
         state                 TEXT NOT NULL DEFAULT 'collecting',
-        offset                DOUBLE PRECISION DEFAULT 0,
+        "offset"              DOUBLE PRECISION DEFAULT 0,
         color_term            DOUBLE PRECISION DEFAULT 0,
         extinction            DOUBLE PRECISION DEFAULT 0,
         drift_per_day         DOUBLE PRECISION DEFAULT 0,
