@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
@@ -1887,31 +1886,13 @@ class _VacationSheet extends StatefulWidget {
 }
 
 class _VacationSheetState extends State<_VacationSheet> {
-  final _ctrl = TextEditingController();
+  DateTime? _selected;
   bool _busy = false;
   String? _error;
 
-  @override
-  void initState() {
-    super.initState();
-    _ctrl.addListener(() => setState(() {}));
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  int? get _nights {
-    final v = int.tryParse(_ctrl.text.trim());
-    return (v != null && v > 0) ? v : null;
-  }
-
   String? get _backLabel {
-    final n = _nights;
-    if (n == null) return null;
-    final d = DateTime.now().add(Duration(days: n));
+    final d = _selected;
+    if (d == null) return null;
     const m = [
       'Jan','Feb','Mar','Apr','May','Jun',
       'Jul','Aug','Sep','Oct','Nov','Dec'
@@ -1920,12 +1901,22 @@ class _VacationSheetState extends State<_VacationSheet> {
   }
 
   String? get _untilIso {
-    final n = _nights;
-    if (n == null) return null;
-    final d = DateTime.now().add(Duration(days: n));
+    final d = _selected;
+    if (d == null) return null;
     return '${d.year}-'
         '${d.month.toString().padLeft(2, '0')}-'
         '${d.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selected ?? now.add(const Duration(days: 1)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _selected = picked);
   }
 
   Future<void> _submit() async {
@@ -1947,7 +1938,7 @@ class _VacationSheetState extends State<_VacationSheet> {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
     final bd = _backLabel;
-    final canSubmit = _nights != null && !_busy;
+    final canSubmit = _selected != null && !_busy;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -1970,52 +1961,18 @@ class _VacationSheetState extends State<_VacationSheet> {
           ),
           Text('Set vacation', style: tt.headlineSmall),
           const SizedBox(height: 8),
-          Text('How many nights will your telescope be offline?',
+          Text('When will your telescope be back online?',
               style: tt.bodyMedium),
           const SizedBox(height: 24),
-          TextField(
-            controller: _ctrl,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            decoration: const InputDecoration(
-              labelText: 'Number of nights',
-              hintText: 'e.g. 3',
-              border: OutlineInputBorder(),
-              suffixText: 'nights',
+          OutlinedButton.icon(
+            onPressed: _pickDate,
+            icon: const Icon(Icons.calendar_month_outlined, size: 18),
+            label: Text(bd == null ? 'Choose return date' : 'Back $bd'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              side: const BorderSide(color: BSTheme.glassBorder),
             ),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) { if (canSubmit) _submit(); },
           ),
-          if (bd != null) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: BSTheme.warm.withValues(alpha: 0.08),
-                border: Border.all(
-                    color: BSTheme.warm.withValues(alpha: 0.25)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.event_outlined,
-                      size: 16, color: BSTheme.warm),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Back by $bd',
-                    style: const TextStyle(
-                      fontFamily: 'Geist',
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: BSTheme.warm,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
           const SizedBox(height: 14),
           Text(
             'Your reliability score is paused during vacation. '
