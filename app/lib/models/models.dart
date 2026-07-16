@@ -175,6 +175,7 @@ class Node {
   final bool online;
   final bool portable;
   final String vacationUntil;
+  final String vacationFrom;
   final String sessionCity;
   final String sessionSiteName;
   final List<PreviousLocation> previousLocations;
@@ -192,6 +193,7 @@ class Node {
     required this.online,
     required this.portable,
     required this.vacationUntil,
+    this.vacationFrom = '',
     required this.sessionCity,
     required this.sessionSiteName,
     required this.previousLocations,
@@ -214,6 +216,7 @@ class Node {
       online: j['online'] == true,
       portable: j['portable'] == true,
       vacationUntil: _asStr(j['vacation_until']),
+      vacationFrom: _asStr(j['vacation_from']),
       sessionCity: _asStr(j['session_city']),
       sessionSiteName: _asStr(j['session_site_name']),
       previousLocations: locList,
@@ -227,6 +230,8 @@ class Node {
 
   bool get isSleeping => status == 'sleeping';
   bool get isOnVacation => status == 'vacation';
+  /// A vacation is scheduled for a future start date but hasn't begun yet.
+  bool get isVacationScheduled => !isOnVacation && vacationUntil.isNotEmpty;
 
   String get location {
     final parts = [city, country].where((p) => p.isNotEmpty).toList();

@@ -117,12 +117,18 @@ class Opportunity:
 def build_node_context(node: dict, config: dict) -> Optional[NodeContext]:
     """Dark-window + capability context for one node, or None when the node is
     not observing tonight (vacation / no darkness within 24 h)."""
-    # Vacation: skip nodes explicitly parked.
-    vac = (node.get("vacation_until") or "").strip()
-    if vac:
+    # Vacation: skip nodes parked for a date window (from_date defaults to
+    # immediate for legacy rows that predate the start-date field).
+    vac_until = (node.get("vacation_until") or "").strip()
+    if vac_until:
         try:
-            if datetime.fromisoformat(vac).date() >= datetime.now(timezone.utc).date():
-                logger.info("Node %s on vacation until %s — skipping", node["node_id"], vac)
+            today = datetime.now(timezone.utc).date()
+            vac_from = (node.get("vacation_from") or "").strip()
+            from_d = datetime.fromisoformat(vac_from).date() if vac_from else today
+            until_d = datetime.fromisoformat(vac_until).date()
+            if from_d <= today <= until_d:
+                logger.info("Node %s on vacation %s → %s — skipping",
+                            node["node_id"], from_d, until_d)
                 return None
         except ValueError:
             pass

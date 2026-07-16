@@ -110,6 +110,7 @@ class NodeInfo:
     # ── Portability & session ─────────────────────────────────────────────────
     portable: bool = False           # moves between sites; sleeps between sessions
     vacation_until: str = ""         # ISO date "YYYY-MM-DD"; empty when not on vacation
+    vacation_from: str = ""          # ISO date "YYYY-MM-DD"; empty means immediate start
     session_lat: float = 0.0         # tonight's observing location (overrides home coords)
     session_lon: float = 0.0
     session_city: str = ""

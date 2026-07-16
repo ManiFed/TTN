@@ -785,14 +785,17 @@ class _NodeDetailScreenState extends State<_NodeDetailScreen> {
           const SizedBox(height: 8),
 
           // Vacation
-          if (node.isOnVacation) ...[
+          if (node.isOnVacation || node.isVacationScheduled) ...[
             _ManageTile(
               icon: Icons.event_busy_outlined,
               color: BSTheme.warm,
-              title: 'On vacation',
-              subtitle: node.vacationUntil.isNotEmpty
-                  ? 'Back ${_fmtDate(node.vacationUntil)}'
-                  : 'Vacation mode active',
+              title: node.isOnVacation ? 'On vacation' : 'Vacation scheduled',
+              subtitle: node.isOnVacation
+                  ? (node.vacationUntil.isNotEmpty
+                      ? 'Back ${_fmtDate(node.vacationUntil)}'
+                      : 'Vacation mode active')
+                  : '${_fmtDate(node.vacationFrom)} – '
+                      '${_fmtDate(node.vacationUntil)}',
               trailing: _busy
                   ? const SizedBox(
                       width: 18, height: 18,
@@ -1886,13 +1889,12 @@ class _VacationSheet extends StatefulWidget {
 }
 
 class _VacationSheetState extends State<_VacationSheet> {
-  DateTime? _selected;
+  DateTime? _from;
+  DateTime? _until;
   bool _busy = false;
   String? _error;
 
-  String? get _backLabel {
-    final d = _selected;
-    if (d == null) return null;
+  static String _fmt(DateTime d) {
     const m = [
       'Jan','Feb','Mar','Apr','May','Jun',
       'Jul','Aug','Sep','Oct','Nov','Dec'
@@ -1900,34 +1902,49 @@ class _VacationSheetState extends State<_VacationSheet> {
     return '${m[d.month - 1]} ${d.day}';
   }
 
-  String? get _untilIso {
-    final d = _selected;
-    if (d == null) return null;
-    return '${d.year}-'
-        '${d.month.toString().padLeft(2, '0')}-'
-        '${d.day.toString().padLeft(2, '0')}';
-  }
+  static String _iso(DateTime d) => '${d.year}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
 
-  Future<void> _pickDate() async {
+  Future<void> _pickFrom() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selected ?? now.add(const Duration(days: 1)),
+      initialDate: _from ?? now,
       firstDate: now,
       lastDate: now.add(const Duration(days: 365)),
     );
-    if (picked != null) setState(() => _selected = picked);
+    if (picked == null) return;
+    setState(() {
+      _from = picked;
+      if (_until != null && _until!.isBefore(_from!)) _until = null;
+    });
+  }
+
+  Future<void> _pickUntil() async {
+    final now = DateTime.now();
+    final earliest = _from ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _until != null && !_until!.isBefore(earliest)
+          ? _until!
+          : earliest,
+      firstDate: earliest,
+      lastDate: now.add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _until = picked);
   }
 
   Future<void> _submit() async {
-    final until = _untilIso;
+    final until = _until;
     if (until == null) return;
     setState(() { _busy = true; _error = null; });
     try {
       await context
           .read<AppState>()
           .api
-          .setNodeVacation(widget.node.nodeId, until);
+          .setNodeVacation(widget.node.nodeId, _iso(until),
+              fromDate: _from != null ? _iso(_from!) : null);
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) setState(() { _busy = false; _error = '$e'; });
@@ -1937,8 +1954,7 @@ class _VacationSheetState extends State<_VacationSheet> {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final bd = _backLabel;
-    final canSubmit = _selected != null && !_busy;
+    final canSubmit = _until != null && !_busy;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -1961,13 +1977,27 @@ class _VacationSheetState extends State<_VacationSheet> {
           ),
           Text('Set vacation', style: tt.headlineSmall),
           const SizedBox(height: 8),
-          Text('When will your telescope be back online?',
+          Text('Plan a trip in advance, or pause starting today.',
               style: tt.bodyMedium),
           const SizedBox(height: 24),
           OutlinedButton.icon(
-            onPressed: _pickDate,
+            onPressed: _pickFrom,
+            icon: const Icon(Icons.flight_takeoff_outlined, size: 18),
+            label: Text(_from == null
+                ? 'Starts today'
+                : 'Starts ${_fmt(_from!)}'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              side: const BorderSide(color: BSTheme.glassBorder),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _pickUntil,
             icon: const Icon(Icons.calendar_month_outlined, size: 18),
-            label: Text(bd == null ? 'Choose return date' : 'Back $bd'),
+            label: Text(_until == null
+                ? 'Choose return date'
+                : 'Back ${_fmt(_until!)}'),
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
               side: const BorderSide(color: BSTheme.glassBorder),

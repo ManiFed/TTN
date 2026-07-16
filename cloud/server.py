@@ -1614,7 +1614,7 @@ def api_me_nodes(user):
     """All nodes this member has claimed."""
     rows = db.query(
         """SELECT n.node_id, n.telescope_model, n.telescope_name, n.city, n.country, n.status,
-                  n.last_heartbeat, n.last_conditions, n.portable, n.vacation_until,
+                  n.last_heartbeat, n.last_conditions, n.portable, n.vacation_until, n.vacation_from,
                   n.session_city, n.session_site_name, n.previous_locations,
                   nm.claimed_at, nm.display_name
            FROM nodes n
@@ -1849,21 +1849,31 @@ def api_me_end_session(user, node_id):
 @app.route("/api/v1/me/nodes/<node_id>/vacation", methods=["PUT"])
 @auth.require_member
 def api_me_set_vacation(user, node_id):
-    """Put a node on vacation until *until_date* (ISO date 'YYYY-MM-DD').
+    """Schedule a node's vacation from *from_date* through *until_date* (ISO 'YYYY-MM-DD').
 
-    Body: {until_date: "YYYY-MM-DD"}
+    Body: {until_date: "YYYY-MM-DD", from_date: "YYYY-MM-DD"}
+    from_date is optional and defaults to today (immediate start), so a
+    member can plan a future trip in advance instead of only picking a
+    return date.
     """
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
     body = request.get_json(force=True, silent=True) or {}
     until_date = str(body.get("until_date") or "").strip()
+    from_date = str(body.get("from_date") or "").strip()
     if not until_date:
         return jsonify({"error": "until_date required (YYYY-MM-DD)"}), 400
     import re as _re
-    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", until_date):
+    date_re = r"\d{4}-\d{2}-\d{2}"
+    if not _re.fullmatch(date_re, until_date):
         return jsonify({"error": "until_date must be YYYY-MM-DD"}), 400
-    registry.set_vacation(node_id, until_date)
-    return jsonify({"ok": True, "vacation_until": until_date})
+    if from_date and not _re.fullmatch(date_re, from_date):
+        return jsonify({"error": "from_date must be YYYY-MM-DD"}), 400
+    if from_date and from_date > until_date:
+        return jsonify({"error": "from_date must be on or before until_date"}), 400
+    registry.set_vacation(node_id, until_date, from_date)
+    return jsonify({"ok": True, "vacation_until": until_date,
+                     "vacation_from": from_date or None})
 
 
 @app.route("/api/v1/me/nodes/<node_id>/vacation", methods=["DELETE"])

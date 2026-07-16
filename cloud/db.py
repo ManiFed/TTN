@@ -406,6 +406,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "perf_updated_at",      "TEXT DEFAULT ''"),
     ("nodes", "portable",             "INTEGER DEFAULT 0"),
     ("nodes", "vacation_until",       "TEXT DEFAULT ''"),
+    ("nodes", "vacation_from",        "TEXT DEFAULT ''"),
     ("nodes", "session_lat",          "DOUBLE PRECISION DEFAULT 0"),
     ("nodes", "session_lon",          "DOUBLE PRECISION DEFAULT 0"),
     ("nodes", "session_city",         "TEXT DEFAULT ''"),

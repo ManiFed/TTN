@@ -198,12 +198,24 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     """Record a heartbeat, optionally with current local conditions
     (sky temperature, detected cloud, safety state, utc_offset_hours, ...).
 
-    Does not override vacation or disabled status — those are app-managed states.
+    Does not override disabled/contributor status — those are app-managed states.
     Wakes a sleeping portable node to active when it starts heartbeating.
+    Auto-applies a scheduled vacation once vacation_from arrives, and clears
+    it once vacation_until has passed — both are plain ISO date strings, so
+    lexicographic comparison against today's date works directly.
     """
+    today = datetime.now(timezone.utc).date().isoformat()
     params: list = [_now()]
-    sql = ("UPDATE nodes SET last_heartbeat = %s, "
-           "status = CASE WHEN status IN ('vacation', 'disabled', 'contributor') THEN status ELSE 'active' END")
+    sql = (
+        "UPDATE nodes SET last_heartbeat = %s, "
+        "status = CASE "
+        "WHEN status IN ('disabled', 'contributor') THEN status "
+        "WHEN vacation_until <> '' AND vacation_until >= %s "
+        "     AND (vacation_from = '' OR vacation_from <= %s) THEN 'vacation' "
+        "ELSE 'active' END"
+    )
+    params.append(today)
+    params.append(today)
     if conditions:
         sql += ", last_conditions = %s"
         params.append(json.dumps(conditions))
@@ -525,27 +537,50 @@ def end_session(node_id: str) -> None:
 
 # ── Vacation management ────────────────────────────────────────────────────────
 
-def set_vacation(node_id: str, until_date: str) -> None:
-    """Pause a node until *until_date* (ISO date string 'YYYY-MM-DD').
+def set_vacation(node_id: str, until_date: str, from_date: str = "") -> None:
+    """Schedule a vacation from *from_date* through *until_date* (ISO 'YYYY-MM-DD').
+
+    *from_date* defaults to today (immediate start) when omitted. A future
+    from_date lets a member plan a trip in advance: the node keeps operating
+    normally and only flips to 'vacation' once that date arrives (applied on
+    the next heartbeat, and independently honored by the network planner's
+    date-window check regardless of the status column).
 
     Missed nights during vacation are excluded from the reliability score.
     """
+    today = datetime.now(timezone.utc).date().isoformat()
+    from_date = from_date or today
     db.execute(
-        "UPDATE nodes SET status = 'vacation', vacation_until = %s WHERE node_id = %s",
-        (until_date, node_id),
+        "UPDATE nodes SET vacation_from = %s, vacation_until = %s, "
+        "status = CASE WHEN %s <= %s THEN 'vacation' ELSE status END "
+        "WHERE node_id = %s",
+        (from_date, until_date, from_date, today, node_id),
     )
-    logger.info("Node %s on vacation until %s", node_id, until_date)
+    logger.info("Node %s on vacation %s → %s", node_id, from_date, until_date)
 
 
 def clear_vacation(node_id: str) -> None:
-    """Cancel an active vacation.  Portable nodes return to sleeping; fixed to offline."""
-    node = db.query_one("SELECT portable FROM nodes WHERE node_id = %s", (node_id,))
+    """Cancel an active or scheduled vacation.
+
+    If the vacation is already active, portable nodes return to sleeping and
+    fixed nodes to offline. If it hasn't started yet (a future from_date),
+    the node's current status is left untouched — it was never paused.
+    """
+    node = db.query_one("SELECT portable, status FROM nodes WHERE node_id = %s", (node_id,))
     if node is None:
         return
-    new_status = "sleeping" if node.get("portable") else "offline"
-    db.execute(
-        "UPDATE nodes SET status = %s, vacation_until = '' WHERE node_id = %s",
-        (new_status, node_id),
-    )
+    if node.get("status") == "vacation":
+        new_status = "sleeping" if node.get("portable") else "offline"
+        db.execute(
+            "UPDATE nodes SET status = %s, vacation_until = '', vacation_from = '' "
+            "WHERE node_id = %s",
+            (new_status, node_id),
+        )
+    else:
+        new_status = node.get("status")
+        db.execute(
+            "UPDATE nodes SET vacation_until = '', vacation_from = '' WHERE node_id = %s",
+            (node_id,),
+        )
     logger.info("Node %s vacation cleared → %s", node_id, new_status)
 
