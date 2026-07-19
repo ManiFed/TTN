@@ -82,13 +82,16 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
 
     portable = _bool(info.get("portable", False))
     contributor = _bool(info.get("contributor", False))
-    # Portable nodes start sleeping; fixed nodes start active. Contributor
-    # nodes are tier-0 virtual instruments: they upload survey frames from
-    # existing images but are never scheduled by CHORUS.
+    # Portable nodes start sleeping — the owner explicitly connects/turns them
+    # on (e.g. from the Tonight tab) once set up at a site; fixed nodes start
+    # active. Contributor nodes are tier-0 virtual instruments: they upload
+    # survey frames from existing images but are never scheduled by CHORUS.
     if contributor and not existing:
         initial_status = "contributor"
     else:
         initial_status = "sleeping" if (portable and not existing) else "active"
+    vacation_until = ""
+    vacation_from = ""
     if contributor:
         tier = 0
     else:
@@ -109,8 +112,8 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                filter_set, filters, mag_bright_limit, mag_faint_limit, min_altitude_deg,
                has_dew_heater, has_power_mgmt, has_enclosure, has_ups,
                horizon_mask, scheduling_notes, preferred_targets,
-               portable, status, registered_at, last_heartbeat)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               portable, status, vacation_until, vacation_from, registered_at, last_heartbeat)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id) DO UPDATE SET
                owner_name=excluded.owner_name, owner_email=excluded.owner_email,
                latitude=excluded.latitude, longitude=excluded.longitude,
@@ -168,7 +171,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
             str(info.get("horizon_mask", "[]") or "[]"),
             str(info.get("scheduling_notes", "") or ""),
             str(info.get("preferred_targets", "[]") or "[]"),
-            portable, initial_status, _now(), _now(),
+            portable, initial_status, vacation_until, vacation_from, _now(), _now(),
         ),
     )
     logger.info(
@@ -554,9 +557,9 @@ def set_vacation(node_id: str, until_date: str, from_date: str = "") -> None:
     from_date = from_date or today
     db.execute(
         "UPDATE nodes SET vacation_from = %s, vacation_until = %s, "
-        "status = CASE WHEN %s <= %s THEN 'vacation' ELSE status END "
+        "status = CASE WHEN %s <= %s AND %s >= %s THEN 'vacation' ELSE status END "
         "WHERE node_id = %s",
-        (from_date, until_date, from_date, today, node_id),
+        (from_date, until_date, from_date, today, until_date, today, node_id),
     )
     logger.info("Node %s on vacation %s → %s", node_id, from_date, until_date)
 
