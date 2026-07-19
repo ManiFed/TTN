@@ -1169,12 +1169,30 @@ def release(conn) -> None:
 
 # ── Convenience helpers ────────────────────────────────────────────────────────
 
+def _clean_params(params):
+    """Strip NUL bytes from string parameters.
+
+    PostgreSQL TEXT can never store 0x00 — psycopg2 raises mid-statement,
+    which turns any client-supplied string containing a NUL into a 500 (and
+    can crash *error-path* code like incident logging, hiding the original
+    failure). NUL carries no meaning in any field we store, so drop it.
+    """
+    if not params:
+        return params
+    if isinstance(params, (tuple, list)) and any(
+            isinstance(p, str) and "\x00" in p for p in params):
+        cleaned = [p.replace("\x00", "") if isinstance(p, str) else p
+                   for p in params]
+        return type(params)(cleaned) if isinstance(params, tuple) else cleaned
+    return params
+
+
 def query(sql: str, params: tuple = ()) -> list:
     """Run a SELECT and return a list of plain dicts."""
     conn = connect()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
+        cur.execute(sql, _clean_params(params))
         return [dict(r) for r in cur.fetchall()]
     except Exception:
         conn.rollback()
@@ -1201,7 +1219,7 @@ def execute(sql: str, params: tuple = (), returning_id: bool = False) -> int:
     try:
         with conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(run_sql, params)
+            cur.execute(run_sql, _clean_params(params))
             if returning_id:
                 row = cur.fetchone()
                 return row["id"] if row else 0
@@ -1215,7 +1233,7 @@ def executemany(sql: str, seq: list) -> None:
     try:
         with conn:
             cur = conn.cursor()
-            cur.executemany(sql, seq)
+            cur.executemany(sql, [_clean_params(p) for p in seq])
     finally:
         release(conn)
 

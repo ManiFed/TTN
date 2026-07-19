@@ -82,6 +82,9 @@ def register(email: str, password: str, display_name: str = "") -> dict:
     Create a new member account.
     Returns {"user_id", "token"} or raises ValueError.
     """
+    if not isinstance(email, str) or not isinstance(password, str) \
+            or not isinstance(display_name, str):
+        raise ValueError("email, password, and display_name must be strings")
     email = email.strip().lower()
     if not email or "@" not in email or "." not in email.split("@")[-1]:
         raise ValueError("invalid email address")
@@ -115,6 +118,8 @@ def login(email: str, password: str) -> dict:
     Verify credentials and issue a fresh bearer token.
     Raises ValueError on bad credentials (deliberately vague error to prevent enumeration).
     """
+    if not isinstance(email, str) or not isinstance(password, str):
+        raise ValueError("invalid email or password")
     email = email.strip().lower()
     row = db.query_one("SELECT * FROM users WHERE email = %s", (email,))
     if row is None:

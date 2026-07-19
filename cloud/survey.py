@@ -83,9 +83,13 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
     provenance {contribution_id, user_id} credits the human who caught it."""
     prov = provenance or {}
     frame = payload.get("frame") or {}
+    if not isinstance(frame, dict):
+        return {"ok": False, "error": "frame must be an object"}
     sources = payload.get("sources") or []
     if not isinstance(sources, list) or not sources:
         return {"ok": False, "error": "no sources"}
+    if not all(isinstance(s, dict) for s in sources):
+        return {"ok": False, "error": "sources must be objects"}
 
     max_batch = int(_cfg(config, "max_sources_per_batch", 800))
     if len(sources) > max_batch:

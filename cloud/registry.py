@@ -216,6 +216,8 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     )
     params.append(today)
     params.append(today)
+    if not isinstance(conditions, dict):
+        conditions = None
     if conditions:
         sql += ", last_conditions = %s"
         params.append(json.dumps(conditions))

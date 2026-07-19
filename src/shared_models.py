@@ -14,16 +14,59 @@ astropy, or anything heavy — both sides can import this for free.
     Measurement       — one photometry result (photometry.run_pipeline format)
 """
 
+import json
 import os
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
 
+def _coerce(value: Any, typ: Any) -> Any:
+    """Coerce an untrusted dict value to a dataclass field's declared type.
+
+    Payloads arrive over the network; without coercion a wrongly-typed field
+    (a dict where a string belongs, a string where a float belongs) flows all
+    the way into SQL parameters or arithmetic before blowing up far from the
+    input boundary. Raises ValueError when the value cannot represent the type.
+    """
+    if value is None:
+        return value
+    if typ is str:
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
+        return str(value)
+    if typ is bool:
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    try:
+        if typ is float:
+            return float(value)
+        if typ is int:
+            return int(float(value))
+    except (TypeError, ValueError):
+        raise ValueError(f"cannot convert {value!r} to {typ.__name__}")
+    return value
+
+
 def _from_dict(cls, data: dict):
-    """Build a dataclass from a dict, ignoring unknown keys."""
-    known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-    return cls(**{k: v for k, v in (data or {}).items() if k in known})
+    """Build a dataclass from a dict, ignoring unknown keys and coercing
+    values to the declared field types (ValueError on impossible values)."""
+    fields = cls.__dataclass_fields__  # type: ignore[attr-defined]
+    if not isinstance(data, dict):
+        data = {}
+    kwargs = {}
+    for k, v in data.items():
+        f = fields.get(k)
+        if f is None:
+            continue
+        try:
+            kwargs[k] = _coerce(v, f.type if not isinstance(f.type, str)
+                                else {"str": str, "float": float, "int": int,
+                                      "bool": bool}.get(f.type, object))
+        except ValueError as exc:
+            raise ValueError(f"{cls.__name__}.{k}: {exc}")
+    return cls(**kwargs)
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")

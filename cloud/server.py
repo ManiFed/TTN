@@ -51,6 +51,9 @@ from urllib.parse import quote
 
 from defusedxml import ElementTree as ET
 from flask import Flask, Response, jsonify, redirect as _redirect, request, send_from_directory
+from werkzeug.exceptions import HTTPException as _HTTPException
+from werkzeug.routing import IntegerConverter as _IntegerConverter
+from werkzeug.routing import ValidationError as _ValidationError
 from werkzeug.utils import safe_join
 
 from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
@@ -61,6 +64,21 @@ logger = logging.getLogger("cloud.server")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
+
+
+class _PgIntConverter(_IntegerConverter):
+    """<int:> URL ids land in PostgreSQL INTEGER columns; anything beyond
+    2^31-1 would raise NumericValueOutOfRange mid-query. No such row can
+    exist, so out-of-range ids simply fail to match the route (404)."""
+
+    def to_python(self, value):
+        v = super().to_python(value)
+        if v > 2**31 - 1:
+            raise _ValidationError()
+        return v
+
+
+app.url_map.converters["int"] = _PgIntConverter
 
 _config: dict = {}   # set by create_app()
 
@@ -187,6 +205,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _json_body() -> dict:
+    """The request's JSON body as a dict — {} for anything else.
+
+    A top-level JSON scalar or list is syntactically valid JSON, so
+    get_json() happily returns it, and every subsequent body.get() would
+    raise AttributeError. No endpoint here accepts a non-object body.
+    """
+    body = request.get_json(force=True, silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 # ── Auth decorators ────────────────────────────────────────────────────────────
 
 def require_node(fn):
@@ -280,7 +309,7 @@ def api_pair_submit(user):
     Body: {pairing_token, node_id, api_key}
     (Activation codes are retired — credentials come from /me/nodes/attach.)
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     token = str(body.get("pairing_token") or "").strip().upper()
     node_id = str(body.get("node_id") or "").strip()
     api_key = str(body.get("api_key") or "").strip()
@@ -357,7 +386,7 @@ def api_register():
     (signed-in app) or POST /me/nodes/<id> (claim with credentials).
     Activation codes are no longer accepted.
     """
-    info = request.get_json(force=True, silent=True) or {}
+    info = _json_body()
     if info.pop("activation_code", None):
         return jsonify({
             "error": "activation codes are retired — sign in to the app and "
@@ -367,7 +396,7 @@ def api_register():
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     return jsonify(creds)
@@ -379,7 +408,7 @@ def api_characterization(node):
     """Self-measured optics from the node's own plate solves. A dedicated
     endpoint: re-POSTing register would overwrite owner/location wholesale,
     and heartbeat conditions only land in a JSON blob nothing reads."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     result = registry.update_characterization(node["node_id"], body)
     return (jsonify(result), 200) if result.get("ok") else (jsonify(result), 400)
 
@@ -387,7 +416,7 @@ def api_characterization(node):
 @app.route("/api/v1/nodes/heartbeat", methods=["POST"])
 @require_node
 def api_heartbeat(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     registry.heartbeat(node["node_id"], body.get("conditions"))
     if body.get("clock_skew_s") is not None:
         try:
@@ -427,7 +456,7 @@ def api_node_incident(node):
     failures, emergency parks, disk exhaustion etc. are visible to a remote
     operator the moment they happen instead of the morning after.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     incident_type = str(body.get("incident_type") or "").strip()
     if not incident_type:
         return jsonify({"error": "incident_type required"}), 400
@@ -489,7 +518,7 @@ def api_autonomy_bundle(node):
 @app.route("/api/v1/nodes/execution-outcomes", methods=["POST"])
 @require_node
 def api_execution_outcomes(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     outcomes = body.get("outcomes") or []
     if not isinstance(outcomes, list):
         return jsonify({"error": "outcomes must be a list"}), 400
@@ -619,7 +648,7 @@ def api_admin_event_cancel(event_id):
 @app.route("/api/v1/measurements", methods=["POST"])
 @require_node
 def api_measurements(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     measurement = body.get("measurement") or body   # accept bare measurement dicts
     result = data_pipeline.ingest_measurement(
         node["node_id"], measurement, body.get("conditions"))
@@ -806,7 +835,7 @@ def api_interrupt_ack(node, interrupt_id: int):
 @app.route("/api/v1/interrupts", methods=["POST"])
 @require_admin
 def api_interrupts_post():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         name = str(body["name"])
         ra_deg = float(body["ra_deg"])
@@ -1179,7 +1208,7 @@ def api_site_config():
 @app.route("/api/v1/site/config", methods=["PATCH"])
 @require_admin
 def api_site_config_update():
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     if "member_count" in body:
         db.execute(
             "UPDATE site_config SET member_count = %s, updated_at = %s WHERE id = 1",
@@ -1192,7 +1221,7 @@ def api_site_config_update():
 
 @app.route("/api/v1/subscribe", methods=["POST"])
 def api_subscribe():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     email = str(body.get("email") or "").strip().lower()
     if not email or "@" not in email:
         return jsonify({"error": "valid email required"}), 400
@@ -1229,7 +1258,7 @@ def api_admin_subscribers():
 @app.route("/api/v1/admin/subscribers/<int:sub_id>/status", methods=["PATCH"])
 @require_admin
 def api_admin_subscriber_status(sub_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = str(body.get("status") or "").strip()
     if status not in ("pending", "sent", "onboarded"):
         return jsonify({"error": "status must be pending, sent, or onboarded"}), 400
@@ -1523,7 +1552,7 @@ def api_admin_candidate_update(cand_id: int):
     next replan cycle.
     """
     from cloud import crossmatch as _cm
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     action = str(body.get("action") or "").lower()
     if action == "confirm":
         result = _cm.confirm_candidate(
@@ -1567,7 +1596,7 @@ def api_admin_asteroid_candidate_update(cand_id: int):
     submission (see GET /api/v1/mpc-files).
     """
     from cloud import moving_objects
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     action = str(body.get("action") or "").lower()
     if action == "confirm":
         result = moving_objects.confirm_candidate(
@@ -1614,7 +1643,7 @@ def api_admin_incident_update(incident_id: int):
         resolution_note free text
         resolver        name/email of person resolving
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     allowed = {"status", "root_cause", "resolution_note", "resolver"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1725,6 +1754,10 @@ def api_telescopes():
 
 @app.errorhandler(Exception)
 def handle_unhandled_error(exc):
+    # A catch-all Exception handler also intercepts HTTPExceptions (404, 405,
+    # 413, ...) — those must pass through with their real status, not 500.
+    if isinstance(exc, _HTTPException):
+        return exc
     logger.error("Unhandled exception: %s", exc, exc_info=True)
     return jsonify({"error": "internal server error"}), 500
 
@@ -1733,7 +1766,7 @@ def handle_unhandled_error(exc):
 
 @app.route("/api/v1/auth/register", methods=["POST"])
 def api_auth_register():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = auth.register(
             body.get("email", ""),
@@ -1765,7 +1798,7 @@ def api_admin_calibration_rollback(model_version):
 
 @app.route("/api/v1/auth/login", methods=["POST"])
 def api_auth_login():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = auth.login(body.get("email", ""), body.get("password", ""))
     except ValueError as exc:
@@ -1878,7 +1911,7 @@ def api_me_claim_node(user, node_id):
     Claim a node by presenting its api_key.
     The member must know the node_id and api_key returned at registration.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     node = registry.authenticate(node_id, body.get("api_key", ""))
     if node is None:
         return jsonify({"error": "invalid node credentials"}), 401
@@ -1908,7 +1941,7 @@ def api_me_attach_node(user):
 
     Returns {node_id, api_key} for the desktop app to install on the local agent.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
 
     existing_id = str(body.get("node_id") or "").strip()
     existing_key = str(body.get("api_key") or "").strip()
@@ -1979,7 +2012,7 @@ def api_me_attach_node(user):
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     if not db.query_one(
@@ -2013,7 +2046,7 @@ def api_me_start_session(user, node_id):
     """
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         lat = float(body["lat"])
         lon = float(body["lon"])
@@ -2053,7 +2086,7 @@ def api_me_set_vacation(user, node_id):
     """
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     until_date = str(body.get("until_date") or "").strip()
     from_date = str(body.get("from_date") or "").strip()
     if not until_date:
@@ -2087,7 +2120,7 @@ def api_me_update_node(user, node_id):
     """Update member-specific settings for a claimed node (e.g. display name)."""
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     if "display_name" in body:
         display_name = str(body.get("display_name") or "").strip()[:80]
         db.execute(
@@ -2476,7 +2509,7 @@ def api_me_contribute_manifest(user):
     """Archive dedup: a bulk uploader sends the sha256 list of an image folder
     and learns which frames are new, so years of history upload without
     re-sending anything the network already has (contributions.sha256 UNIQUE)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     shas = body.get("sha256") or []
     if not isinstance(shas, list) or not shas:
         return jsonify({"error": "sha256 list required"}), 400
@@ -2571,7 +2604,7 @@ def api_admin_generate_code():
 @auth.require_member
 def api_me_science_program_suggestion(user):
     """Submit a science program idea from the member app."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     title = str(body.get("title") or "").strip()
     description = str(body.get("description") or "").strip()
     if not title or not description:
@@ -2606,7 +2639,7 @@ def api_admin_science_program_suggestions():
 @app.route("/api/v1/admin/science-program-suggestions/<int:suggestion_id>/status", methods=["PATCH"])
 @require_admin
 def api_admin_science_program_suggestion_status(suggestion_id: int):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = str(body.get("status") or "").strip()
     if status not in ("pending", "reviewed", "accepted", "declined"):
         return jsonify({"error": "status must be pending, reviewed, accepted, or declined"}), 400
@@ -2628,7 +2661,7 @@ def api_me_help_session(user):
 @auth.require_member
 def api_me_help_chat(user):
     """Send one help message to the OpenRouter assistant (5 user messages/week)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = help_chat.chat(
             user["user_id"],
@@ -2656,7 +2689,7 @@ def api_node_config_patches(node):
 @app.route("/api/v1/nodes/config-patches/<int:patch_id>/ack", methods=["POST"])
 @require_node
 def api_node_config_patch_ack(node, patch_id: int):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     ok = bool(body.get("ok", True))
     error = str(body.get("error") or "")[:500]
     help_chat.ack_patch(patch_id, node["node_id"], ok, error)
@@ -2666,7 +2699,7 @@ def api_node_config_patch_ack(node, patch_id: int):
 @app.route("/api/v1/me/notifications/prefs", methods=["PUT"])
 @auth.require_member
 def api_me_notification_prefs(user):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     fields, params = [], []
     for col in ("notification_email", "notification_push"):
         if col in body:
@@ -2689,7 +2722,7 @@ def api_me_delete(user):
     Permanently delete the member's account and all associated data.
     Requires the member to confirm by sending {"confirm": true} in the body.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     if not body.get("confirm"):
         return jsonify({"error": "send {\"confirm\": true} to confirm deletion"}), 400
 
