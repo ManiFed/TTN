@@ -90,12 +90,65 @@ def restrict_network_to_localhost():
     requests.sessions.Session.request = guarded
 
 
+class RealCloud:
+    """The production Flask cloud app on an ephemeral port + ephemeral PG.
+
+    API-compatible with the subset of gauntlet FakeCloud the harness uses.
+    """
+
+    def __init__(self):
+        from tests.fuzz.pgtmp import TempPostgres
+        self._pg = TempPostgres().__enter__()
+        import os
+        os.environ["DATABASE_URL"] = self._pg.dsn
+        from cloud import db, registry
+        db.init(self._pg.dsn)
+        import cloud.server as server
+        app = server.create_app({"server": {"admin_key": "fuzz-admin"}})
+        self.status_counts: dict = {}
+
+        counts = self.status_counts
+        wsgi = app.wsgi_app
+
+        def counting(environ, start_response):
+            def sr(status, headers, exc_info=None):
+                counts[status[:3]] = counts.get(status[:3], 0) + 1
+                return start_response(status, headers, exc_info)
+            return wsgi(environ, sr)
+        app.wsgi_app = counting
+
+        self.creds = registry.register_node(
+            {"latitude": 31.5, "longitude": -99.2, "owner_name": "Fuzz"})
+        from werkzeug.serving import make_server
+        self._server = make_server("127.0.0.1", 0, app, threaded=True)
+        self.url = f"http://127.0.0.1:{self._server.server_port}"
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="real-cloud")
+
+    def start(self) -> "RealCloud":
+        self._thread.start()
+        return self
+
+    def count_paths(self, needle: str) -> int:
+        return 0   # request log not tracked; outbox invariant unused here
+
+    def stop(self):
+        self._server.shutdown()
+        self._pg.__exit__(None, None, None)
+
+    def five_hundreds(self) -> int:
+        return sum(v for k, v in self.status_counts.items()
+                   if k.startswith("5"))
+
+
 class NodeHarness:
     def __init__(self, plan: FaultPlan, scenario_s: float = 25.0,
-                 workdir: str | None = None, disconnect_timeout: float = 6.0):
+                 workdir: str | None = None, disconnect_timeout: float = 6.0,
+                 cloud_mode: str = "fake"):
         self.plan = plan
         self.scenario_s = scenario_s
         self.disconnect_timeout = disconnect_timeout
+        self.cloud_mode = cloud_mode
         self.workdir = Path(workdir or tempfile.mkdtemp(prefix="nodefuzz_"))
         self.thread_exceptions: list[dict] = []
         self.result: dict = {}
@@ -116,13 +169,20 @@ class NodeHarness:
             })
         threading.excepthook = hook
 
-        from tests.gauntlet.fakecloud import FakeCloud
-        self.cloud = FakeCloud().start()
+        if self.cloud_mode == "real":
+            self.cloud = RealCloud().start()
+            node_id = self.cloud.creds["node_id"]
+            api_key = self.cloud.creds["api_key"]
+        else:
+            from tests.gauntlet.fakecloud import FakeCloud
+            self.cloud = FakeCloud().start()
+            node_id, api_key = "node_test01", "key_test01"
         self.obs = FakeObservatory(self.plan).start()
 
         (self.workdir / "config.yaml").write_text(_CONFIG_TEMPLATE.format(
             cloud_url=self.cloud.url,
-            disconnect_timeout=self.disconnect_timeout))
+            disconnect_timeout=self.disconnect_timeout)
+            .replace("node_test01", node_id).replace("key_test01", api_key))
 
         import src.dashboard as dashboard
         self.dashboard = dashboard
@@ -137,7 +197,19 @@ class NodeHarness:
             self._api("/api/schedule/run", {"items": self._schedule_items()})
             self._observe()
         finally:
-            self.result = self._collect()
+            try:
+                self.result = self._collect()
+            finally:
+                # Always release external resources — a RealCloud holds a
+                # separate postgres process that outlives this process.
+                try:
+                    self.cloud.stop()
+                except Exception:
+                    pass
+                try:
+                    self.obs.stop()
+                except Exception:
+                    pass
         return self.result
 
     def _wait_ready(self, timeout: float = 20.0):
@@ -226,6 +298,11 @@ class NodeHarness:
         violations += inv.check_safety_parked(safety, park_attempts)
         violations += inv.check_poller_singleton()
         violations += inv.check_log(self.workdir / "logs" / "node.log")
+        if self.cloud_mode == "real":
+            n500 = self.cloud.five_hundreds()
+            if n500:
+                violations.append(
+                    f"real cloud served {n500} 5xx responses to the node")
 
         return {
             "violations": violations,

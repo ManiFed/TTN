@@ -48,6 +48,12 @@ class TempPostgres:
         subprocess.run(argv, check=True, capture_output=True, timeout=60, env=env)
 
     def __enter__(self) -> "TempPostgres":
+        # The postmaster is a separate process: if this process dies without
+        # __exit__, it would outlive us and leak shared memory until the
+        # machine runs out (initdb then fails fleet-wide). atexit covers
+        # normal interpreter shutdown; harness teardown covers the rest.
+        import atexit
+        atexit.register(self.__exit__, None, None, None)
         self.sock.mkdir()
         self._run(os.path.join(self._bin, "initdb"), "-D", str(self.data),
                   "-U", "fuzz", "--auth=trust", "-E", "UTF8", "--no-sync")

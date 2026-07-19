@@ -25,12 +25,13 @@ REPO = Path(__file__).resolve().parents[2]
 CHILD_TIMEOUT_S = 180
 
 
-def _run_one_child(seed: int, profile: str, scenario_s: float) -> dict:
+def _run_one_child(seed: int, profile: str, scenario_s: float,
+                   cloud_mode: str = "fake") -> dict:
     """Executed inside the child process (--one)."""
     from tests.fuzz.faults import FaultPlan
     from tests.fuzz.harness import NodeHarness
     plan = FaultPlan.generate(seed, scenario_s=scenario_s, profile=profile)
-    harness = NodeHarness(plan, scenario_s=scenario_s)
+    harness = NodeHarness(plan, scenario_s=scenario_s, cloud_mode=cloud_mode)
     try:
         result = harness.run()
     except Exception as exc:
@@ -44,13 +45,14 @@ def _run_one_child(seed: int, profile: str, scenario_s: float) -> dict:
     return result
 
 
-def _spawn(seed: int, profile: str, scenario_s: float, out_dir: Path) -> dict:
+def _spawn(seed: int, profile: str, scenario_s: float, out_dir: Path,
+           cloud_mode: str = "fake") -> dict:
     """Parent side: run one seed in a subprocess with a hard timeout."""
     # Absolute: the child chdirs into its scratch workdir before writing.
     result_path = (out_dir / f"seed_{seed}.json").resolve()
     cmd = [sys.executable, "-m", "tests.fuzz.runner", "--one", str(seed),
            "--profile", profile, "--scenario-s", str(scenario_s),
-           "--result-file", str(result_path)]
+           "--cloud", cloud_mode, "--result-file", str(result_path)]
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=REPO, capture_output=True,
@@ -70,15 +72,15 @@ def _spawn(seed: int, profile: str, scenario_s: float, out_dir: Path) -> dict:
 
 
 def run_campaign(seeds: range, profile: str, scenario_s: float,
-                 parallel: int, out_dir: Path) -> int:
+                 parallel: int, out_dir: Path, cloud_mode: str = "fake") -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     results_file = out_dir / "results.jsonl"
     n_fail = 0
     t0 = time.time()
     with results_file.open("a") as fh, \
             ThreadPoolExecutor(max_workers=parallel) as pool:
-        futures = {pool.submit(_spawn, s, profile, scenario_s, out_dir): s
-                   for s in seeds}
+        futures = {pool.submit(_spawn, s, profile, scenario_s, out_dir,
+                               cloud_mode): s for s in seeds}
         done = 0
         for fut in as_completed(futures):
             result = fut.result()
@@ -115,6 +117,9 @@ def main() -> int:
     ap.add_argument("--parallel", type=int, default=8)
     ap.add_argument("--out", type=Path,
                     default=Path("sim_results/fuzz_node") / time.strftime("%Y%m%d_%H%M%S"))
+    ap.add_argument("--cloud", default="fake", choices=["fake", "real"],
+                    help="fake = gauntlet FakeCloud; real = production Flask "
+                         "cloud app on ephemeral PostgreSQL")
     ap.add_argument("--replay", type=int, help="re-run one seed verbosely")
     # internal: child mode
     ap.add_argument("--one", type=int, help=argparse.SUPPRESS)
@@ -122,20 +127,22 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.one is not None:
-        result = _run_one_child(args.one, args.profile, args.scenario_s)
+        result = _run_one_child(args.one, args.profile, args.scenario_s,
+                                args.cloud)
         args.result_file.parent.mkdir(parents=True, exist_ok=True)
         args.result_file.write_text(json.dumps(result, indent=2, default=str))
         return 0
 
     if args.replay is not None:
         out = Path(tempfile.mkdtemp(prefix="fuzzreplay_"))
-        result = _spawn(args.replay, args.profile, args.scenario_s, out)
+        result = _spawn(args.replay, args.profile, args.scenario_s, out,
+                        args.cloud)
         print(json.dumps(result, indent=2, default=str))
         return 1 if result.get("violations") else 0
 
     start, _, end = args.seeds.partition(":")
     return run_campaign(range(int(start), int(end)), args.profile,
-                        args.scenario_s, args.parallel, args.out)
+                        args.scenario_s, args.parallel, args.out, args.cloud)
 
 
 if __name__ == "__main__":
