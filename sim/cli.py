@@ -132,6 +132,43 @@ def cmd_sweep_nodes(args) -> int:
     return 0
 
 
+def _fuzz_worker(job):
+    from sim.fuzz import fuzz_one
+    seed, scheduler, check = job
+    return fuzz_one(seed, scheduler, check_determinism=check)
+
+
+def cmd_fuzz(args) -> int:
+    import multiprocessing as mp
+    import os
+    start, _, end = args.seeds.partition(":")
+    seeds = range(int(start), int(end))
+    every = max(1, args.determinism_every)
+    jobs = [(s, args.scheduler, s % every == 0) for s in seeds]
+    os.makedirs(args.out, exist_ok=True)
+    out_path = f"{args.out}/fuzz_{seeds.start}_{seeds.stop}.jsonl"
+    n_fail = total_nights = 0
+    t0 = time.time()
+    with mp.get_context("spawn").Pool(args.parallel) as pool, \
+            open(out_path, "a") as fh:
+        for i, res in enumerate(pool.imap_unordered(_fuzz_worker, jobs), 1):
+            total_nights += res.get("nights", 0)
+            if res["violations"]:
+                n_fail += 1
+                print(f"  SEED {res['seed']} FAILED: "
+                      f"{'; '.join(res['violations'])[:300]}", flush=True)
+                fh.write(json.dumps(res) + "\n")
+                fh.flush()
+            if i % 100 == 0 or i == len(jobs):
+                dt = time.time() - t0
+                print(f"  {i}/{len(jobs)} scenarios, {total_nights} nights "
+                      f"({total_nights / max(dt, 1e-9) * 3600:.0f} nights/h), "
+                      f"{n_fail} failing", flush=True)
+    print(f"[sim fuzz] {len(jobs)} scenarios, {total_nights} simulated nights, "
+          f"{n_fail} failing → {out_path}")
+    return 1 if n_fail else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m sim",
                                  description="Telescope Net fleet digital twin")
@@ -150,6 +187,14 @@ def main(argv=None) -> int:
                     help="enable the seeded local search (host-dependent!)")
     rp.add_argument("--out", default="sim_results")
 
+    fp = sub.add_parser("fuzz", help="randomized-scenario scheduler fuzzing")
+    fp.add_argument("--seeds", default="0:200", help="range START:END")
+    fp.add_argument("--scheduler", default="chorus")
+    fp.add_argument("--parallel", type=int, default=8)
+    fp.add_argument("--determinism-every", type=int, default=17,
+                    help="re-run every Nth seed twice to check determinism")
+    fp.add_argument("--out", default="sim_results/fuzz_sim")
+
     sp = sub.add_parser("sweep-nodes", help="fleet-size sweep")
     sp.add_argument("--scenario", default="launch_50_nodes")
     sp.add_argument("--sizes", default="5,20,50,100")
@@ -159,7 +204,7 @@ def main(argv=None) -> int:
     sp.add_argument("--out", default="sim_results")
 
     args = ap.parse_args(argv)
-    return {"list": cmd_list, "run": cmd_run,
+    return {"list": cmd_list, "run": cmd_run, "fuzz": cmd_fuzz,
             "sweep-nodes": cmd_sweep_nodes}[args.cmd](args)
 
 
