@@ -1,0 +1,68 @@
+{
+  "violations": [
+    "schedule still 'running' at teardown (phase='exposing') \u2014 wedged"
+  ],
+  "sched_state": {
+    "running": true,
+    "current_phase": "exposing",
+    "completed": 1,
+    "total": 2,
+    "error": null,
+    "current_target": "Fuzz Target B"
+  },
+  "safety": {
+    "safe": true,
+    "parked": false,
+    "reason": ""
+  },
+  "telescope": {
+    "park_calls": 0,
+    "slew_calls": 1
+  },
+  "camera": {
+    "exposures": 1
+  },
+  "requests_served": 116,
+  "thread_exceptions": [],
+  "plan": {
+    "seed": 167,
+    "p_transport": 0.1,
+    "p_protocol": 0.1,
+    "p_semantic": 0.2,
+    "episodes": [
+      {
+        "start_s": 11.38,
+        "duration_s": 6.71,
+        "device": "telescope",
+        "kind": "atpark_flapping"
+      },
+      {
+        "start_s": 11.29,
+        "duration_s": 3.7,
+        "device": "all",
+        "kind": "device_reboot"
+      },
+      {
+        "start_s": 2.08,
+        "duration_s": 11.12,
+        "device": "telescope",
+        "kind": "slewing_stuck"
+      },
+      {
+        "start_s": 13.31,
+        "duration_s": 8.51,
+        "device": "telescope",
+        "kind": "device_reboot"
+      },
+      {
+        "start_s": 11.89,
+        "duration_s": 1.78,
+        "device": "telescope",
+        "kind": "park_raises"
+      }
+    ]
+  },
+  "seed": 167,
+  "profile": "heavy",
+  "workdir": "/var/folders/58/myqnx1n97b9_jyby30dqwhnw0000gn/T/nodefuzz_g3rp4rze"
+}

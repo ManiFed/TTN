@@ -1697,15 +1697,22 @@ def _wait_slew_complete(timeout: float = 120.0) -> bool:
     # Brief window for the async command to be accepted and slewing to begin
     start = time.monotonic()
     while time.monotonic() - start < 6:
+        if _sched_cancelled():
+            return False
         try:
             if _tel and _tel.is_slewing():
                 break
         except Exception:
             pass
         time.sleep(0.25)
-    # Now wait for it to finish
+    # Now wait for it to finish. A mount stuck reporting Slewing=True must
+    # not make the schedule unabortable: without the cancel check, an abort
+    # request sat ignored for the full timeout while the thread spun here.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if _sched_cancelled():
+            logger.info("Slew wait abandoned: schedule cancelled")
+            return False
         try:
             if _tel and not _tel.is_slewing():
                 return True

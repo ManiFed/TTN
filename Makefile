@@ -21,6 +21,27 @@ test:
 gauntlet:
 	$(PYTHON) -m pytest tests/gauntlet -q
 
+# ── Fuzz / simulation hardening campaign (tests/fuzz/, sim/) ─────────────────
+# fuzz-smoke is deterministic and CI-safe; the others are long manual runs.
+.PHONY: fuzz-smoke fuzz-node fuzz-cloud fuzz-triage
+fuzz-smoke:
+	$(PYTHON) -m pytest tests/fuzz/test_smoke.py -q
+
+# Node agent vs. fake ALPACA hardware with fault injection (subprocess/seed).
+# SEEDS=0:5000 PROFILE=heavy make fuzz-node
+fuzz-node:
+	$(PYTHON) -m tests.fuzz.runner --seeds $(or $(SEEDS),0:500) \
+		--profile $(or $(PROFILE),mixed) --parallel $(or $(PARALLEL),8)
+
+# Cloud API vs. mutated payloads on an ephemeral local PostgreSQL.
+fuzz-cloud:
+	$(PYTHON) -m tests.fuzz.fuzz_cloud --requests $(or $(REQUESTS),50000) \
+		--seed $(or $(SEED),1)
+
+# Group a run's failures by signature: make fuzz-triage RUN=sim_results/fuzz_node/<id>
+fuzz-triage:
+	$(PYTHON) -m tests.fuzz.triage $(RUN)
+
 # One-command photometry validation: regression suite + synthetic corpus gates.
 # Exits non-zero if any accuracy/quality gate fails.
 .PHONY: validate

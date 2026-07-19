@@ -1,0 +1,62 @@
+{
+  "violations": [
+    "schedule still 'running' at teardown (phase='slewing') \u2014 wedged"
+  ],
+  "sched_state": {
+    "running": true,
+    "current_phase": "slewing",
+    "completed": 1,
+    "total": 2,
+    "error": null,
+    "current_target": "Fuzz Target B"
+  },
+  "safety": {
+    "safe": true,
+    "parked": false,
+    "reason": ""
+  },
+  "telescope": {
+    "park_calls": 0,
+    "slew_calls": 1
+  },
+  "camera": {
+    "exposures": 0
+  },
+  "requests_served": 78,
+  "thread_exceptions": [],
+  "plan": {
+    "seed": 172,
+    "p_transport": 0.2,
+    "p_protocol": 0.1,
+    "p_semantic": 0.1,
+    "episodes": [
+      {
+        "start_s": 12.96,
+        "duration_s": 6.07,
+        "device": "telescope",
+        "kind": "atpark_flapping"
+      },
+      {
+        "start_s": 8.02,
+        "duration_s": 8.69,
+        "device": "camera",
+        "kind": "commands_fail"
+      },
+      {
+        "start_s": 12.46,
+        "duration_s": 7.33,
+        "device": "all",
+        "kind": "device_down"
+      },
+      {
+        "start_s": 0.0,
+        "duration_s": 6.82,
+        "device": "telescope",
+        "kind": "slewing_stuck"
+      }
+    ]
+  },
+  "seed": 172,
+  "profile": "heavy",
+  "workdir": "/var/folders/58/myqnx1n97b9_jyby30dqwhnw0000gn/T/nodefuzz_3z4_5_ny"
+}

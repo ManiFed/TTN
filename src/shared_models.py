@@ -391,14 +391,21 @@ class Measurement:
         return _from_dict(cls, data)
 
     def is_valid(self) -> bool:
-        """Basic sanity bounds — rejects garbage before it reaches the database."""
-        return (
-            bool(self.target_name)
-            and 2400000.0 < self.bjd < 2500000.0
-            and -5.0 < self.magnitude < 30.0
-            and 0.0 <= self.uncertainty < 5.0
-            and self.quality_flag in ("good", "acceptable", "poor")
-        )
+        """Basic sanity bounds — rejects garbage before it reaches the database.
+
+        Any field may arrive as an explicit JSON null (None survives type
+        coercion), so a comparison failure means invalid, not a crash.
+        """
+        try:
+            return (
+                bool(self.target_name)
+                and 2400000.0 < self.bjd < 2500000.0
+                and -5.0 < self.magnitude < 30.0
+                and 0.0 <= self.uncertainty < 5.0
+                and self.quality_flag in ("good", "acceptable", "poor")
+            )
+        except TypeError:
+            return False
 
 
 # ── Network science expansion contracts ──────────────────────────────────────
