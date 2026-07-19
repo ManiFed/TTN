@@ -179,8 +179,17 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     tgt_cfg = phot_cfg.get("target", {})
     if tgt_cfg.get("name"):
         target_name = str(tgt_cfg["name"])
-    ra_deg  = float(tgt_cfg["ra_deg"])  if tgt_cfg.get("ra_deg")  is not None else (float(header_ra)  if header_ra  is not None else None)
-    dec_deg = float(tgt_cfg["dec_deg"]) if tgt_cfg.get("dec_deg") is not None else (float(header_dec) if header_dec is not None else None)
+    def _coord(value):
+        # Header RA/DEC may be non-numeric (e.g. sexagesimal strings from other
+        # capture software); treat unparseable values as missing so the frame
+        # gets a clean rejection record instead of crashing the pipeline.
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    ra_deg  = _coord(tgt_cfg["ra_deg"])  if tgt_cfg.get("ra_deg")  is not None else _coord(header_ra)
+    dec_deg = _coord(tgt_cfg["dec_deg"]) if tgt_cfg.get("dec_deg") is not None else _coord(header_dec)
 
     if not target_name:
         logger.warning("No target name in FITS header or config — skipping")
@@ -1693,17 +1702,26 @@ def _compute_bjd_ex(header: dict, ra_deg: float, dec_deg: float,
     date_obs = header.get("DATE-OBS", "")
     t = None
     if date_obs:
-        # Try multiple formats: "fits" handles timezone offsets, "isot" handles
-        # the common ISO-8601 without timezone, "iso" catches the rest.
-        for fmt in ("fits", "isot", "iso"):
+        s = str(date_obs).strip()
+        # A timestamp carrying an explicit UTC offset must be *converted* to
+        # UTC, never truncated — dropping a "+05:00" suffix silently shifted
+        # the epoch by whole hours.
+        if s.endswith("Z") or "+" in s[10:] or (len(s) > 19 and s[19:].lstrip("0123456789.").startswith("-")):
             try:
-                s = date_obs
-                if fmt in ("isot", "iso") and (s.endswith("Z") or "+" in s[10:] or s[19:].startswith("-")):
-                    s = s[:19]
-                t = Time(s, format=fmt, scale="utc")
-                break
+                from datetime import datetime as _dt, timezone as _tz
+                dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(_tz.utc).replace(tzinfo=None)
+                t = Time(dt, scale="utc")
             except Exception:
-                continue
+                t = None
+        if t is None:
+            for fmt in ("fits", "isot", "iso"):
+                try:
+                    t = Time(s, format=fmt, scale="utc")
+                    break
+                except Exception:
+                    continue
 
     prov = {
         "time_scale":  "BJD_TDB",
@@ -1835,11 +1853,18 @@ def _compute_airmass_ex(header: dict, config: dict) -> tuple:
         except (TypeError, ValueError):
             pass
 
-    ra_deg  = header.get("RA")  or header.get("CRVAL1")
-    dec_deg = header.get("DEC") or header.get("CRVAL2")
+    # Explicit None checks: RA=0.0 or Dec=0.0 are valid sky coordinates and
+    # must not fall through as "missing" (a plain truthiness test silently
+    # dropped airmass for equatorial / RA≈0h targets).
+    ra_deg = header.get("RA")
+    if ra_deg is None:
+        ra_deg = header.get("CRVAL1")
+    dec_deg = header.get("DEC")
+    if dec_deg is None:
+        dec_deg = header.get("CRVAL2")
     date_obs = header.get("DATE-OBS", "")
 
-    if not (ra_deg and dec_deg and date_obs):
+    if ra_deg is None or dec_deg is None or not date_obs:
         return None, {
             "source": "unknown",
             "known": False,
@@ -1863,10 +1888,14 @@ def _compute_airmass_ex(header: dict, config: dict) -> tuple:
         coord    = SkyCoord(ra=float(ra_deg) * u.deg, dec=float(dec_deg) * u.deg)
         altaz    = coord.transform_to(AltAz(obstime=t, location=location))
         alt_deg  = float(altaz.alt.deg)
-        if alt_deg <= 5.0:
-            value = 5.76   # sec(85°)
-        else:
-            value = float(1.0 / math.cos(math.radians(90.0 - alt_deg)))
+        # Kasten & Young (1989) relative air mass — smooth and accurate at
+        # low altitude, unlike plain sec(z) (which also had a discontinuous
+        # clamp here: alt=5.0° reported 5.76 while alt=5.1° reported ~11).
+        # Below 1° altitude the target is unobservable; clamp the formula's
+        # input so a below-horizon transform can't produce nonsense.
+        h = max(alt_deg, 1.0)
+        value = float(1.0 / (math.sin(math.radians(h))
+                             + 0.50572 * (h + 6.07995) ** -1.6364))
         return value, {
             "source": "computed_geometry",
             "known": True,
@@ -2414,7 +2443,7 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
         "zero_point":      round(zero_point, 3),
         "zp_scatter":      round(zp_scatter, 3) if zp_scatter is not None else None,
         "fwhm":            round(fwhm_px, 2),
-        "airmass":         round(airmass, 3),
+        "airmass":         round(airmass, 3) if airmass is not None else None,
         "n_sources":       len(sources),
         "fits_file":       os.path.basename(fits_path),
         "survey_sources":  sources,

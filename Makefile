@@ -28,10 +28,18 @@ validate:
 	$(PYTHON) -m pytest tests/validation tests/test_photometry_features.py -q
 	$(PYTHON) scripts/validate_photometry.py --synthetic --out cloud_data/validation
 
-# Read-only readiness audit for a beta node.
+# Read-only readiness audit for a beta node (config/dependency/disk presence only).
 .PHONY: preflight
 preflight:
 	$(PYTHON) scripts/node_preflight.py
+
+# Same, but actually exercises cloud auth, directory writes, and the solver
+# launch instead of just checking they look configured. Run this before each
+# observing session — it's slower and touches the network, but it's the
+# check that catches real nightly breakage before it happens live.
+.PHONY: preflight-active
+preflight-active:
+	$(PYTHON) scripts/node_preflight.py --active
 
 # Create/check the real-data corpus described in docs/validation/FIXTURE_MANIFEST.md.
 .PHONY: beta-init beta-audit

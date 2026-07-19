@@ -28,6 +28,12 @@ Admin endpoints (X-Admin-Key header):
     POST /api/v1/admin/replan            → rescore + regenerate all plans
     GET  /api/v1/admin/tuning            → active scoring weights + tuning history
     POST /api/v1/admin/tuning/rollback   → restore the previous scoring weights
+    GET  /api/v1/admin/aavso-batches                    → list recent AAVSO batches
+    GET  /api/v1/admin/aavso-batches/<id>/download       → download batch .txt
+    POST /api/v1/admin/aavso-batches/<id>/mark-submitted → mark as emailed to AAVSO
+
+Admin dashboard page (prompts for the admin key client-side):
+    GET  /admin/aavso                    → download today's AAVSO batch, mark it emailed
 """
 
 import json
@@ -44,7 +50,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from defusedxml import ElementTree as ET
-from flask import Flask, jsonify, redirect as _redirect, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect as _redirect, request, send_from_directory
 from werkzeug.utils import safe_join
 
 from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
@@ -300,14 +306,44 @@ def api_pair_submit(user):
                 token, user["user_id"], node_id)
     return jsonify({"ok": True})
 
+# Failed-claim rate limiting: the pairing token space is small (word + 4
+# digits), and a successful guess hands out live node credentials, so an
+# unauthenticated claimer must not be able to enumerate tokens.  Legitimate
+# node agents poll one fixed token every 30 s — far under this ceiling.
+_PAIR_CLAIM_WINDOW_S = 600.0
+_PAIR_CLAIM_MAX_MISSES = 30
+_pair_claim_misses: dict = {}   # ip → [monotonic timestamps of misses]
+
+
+def _pair_claim_limited(ip: str) -> bool:
+    now = _time.monotonic()
+    with _pair_lock:
+        stamps = [t for t in _pair_claim_misses.get(ip, [])
+                  if now - t < _PAIR_CLAIM_WINDOW_S]
+        _pair_claim_misses[ip] = stamps
+        if len(_pair_claim_misses) > 10000:   # bound memory under a spray
+            _pair_claim_misses.clear()
+            _pair_claim_misses[ip] = stamps
+        return len(stamps) >= _PAIR_CLAIM_MAX_MISSES
+
+
+def _pair_claim_record_miss(ip: str) -> None:
+    with _pair_lock:
+        _pair_claim_misses.setdefault(ip, []).append(_time.monotonic())
+
+
 @app.route("/api/v1/nodes/pair/<token>", methods=["GET"])
 def api_pair_claim(token):
     """Node polls this to receive credentials. Consumes the entry."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
+    if _pair_claim_limited(ip):
+        return jsonify({"error": "too many attempts — try again later"}), 429
     token = token.strip().upper()
     _pair_gc()
     with _pair_lock:
         entry = _pair_store.pop(token, None)
     if not entry:
+        _pair_claim_record_miss(ip)
         return jsonify({"node_id": None, "api_key": None})
     logger.info("Pairing claimed for token %s → %s", token, entry.get("node_id"))
     return jsonify({"node_id": entry["node_id"], "api_key": entry["api_key"]})
@@ -1249,6 +1285,165 @@ def api_admin_tuning_rollback():
     tuning.restore_weights(
         restored, f"manual rollback (was: {last.get('rationale','')})", _config)
     return jsonify({"restored_weights": tuning.active_obs_weights(_config)})
+
+
+_ADMIN_AAVSO_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>AAVSO batches</title>
+<style>
+  :root { color-scheme: light dark; --fg: #222; --bg: #fff; --border: #ddd; --muted: #666; --btn-bg: #eee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8e8e8; --bg: #1a1a1a; --border: #444; --muted: #aaa; --btn-bg: #333; }
+  }
+  body { font: 14px/1.4 -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
+  a { color: #6ab0f3; }
+  h1 { font-size: 1.3rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  th { color: var(--muted); font-weight: 600; }
+  tr.done { opacity: 0.5; }
+  button { cursor: pointer; padding: 0.25rem 0.6rem; margin-right: 0.3rem; color: var(--fg); background: var(--btn-bg); border: 1px solid var(--border); border-radius: 3px; }
+  #key-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  #key-bar input { flex: 1; padding: 0.4rem; color: #222; background: #fff; }
+  .status { font-size: 0.8rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: var(--btn-bg); color: #222; }
+  .status.dry_run, .status.accepted { background: #9fd89f; }
+  .status.error, .status.rejected { background: #e59a9a; }
+  #msg { color: #e57373; font-size: 0.85rem; }
+</style></head>
+<body>
+  <h1>AAVSO batches</h1>
+  <p>Every 6&nbsp;hours the cloud service formats pending observations into an
+  AAVSO Extended Format batch. Download the newest one below and email it to
+  <a href="mailto:observations@aavso.org">observations@aavso.org</a>, then mark it submitted.</p>
+  <div id="key-bar">
+    <input id="key" type="password" placeholder="admin key" autocomplete="off">
+    <button onclick="load()">Load</button>
+  </div>
+  <div id="msg"></div>
+  <table id="tbl" style="display:none">
+    <thead><tr><th>Submitted</th><th>#Obs</th><th>Status</th><th>Message</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+<script>
+function key() {
+  const k = document.getElementById('key').value;
+  if (k) sessionStorage.setItem('aavso_admin_key', k);
+  return k || sessionStorage.getItem('aavso_admin_key') || '';
+}
+async function load() {
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  try {
+    const resp = await fetch('/api/v1/admin/aavso-batches', { headers: { 'X-Admin-Key': key() } });
+    if (!resp.ok) { msg.textContent = 'Failed to load (' + resp.status + ') — check the admin key.'; return; }
+    const data = await resp.json();
+    render(data.batches);
+  } catch (e) { msg.textContent = 'Failed to load: ' + e; }
+}
+function render(batches) {
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '';
+  document.getElementById('tbl').style.display = batches.length ? '' : 'none';
+  for (const b of batches) {
+    const tr = document.createElement('tr');
+    if (b.manually_submitted) tr.className = 'done';
+    tr.innerHTML = `
+      <td>${b.submitted_at.replace('T', ' ').slice(0, 19)}</td>
+      <td>${b.n_obs}</td>
+      <td><span class="status ${b.status}">${b.status}</span></td>
+      <td>${b.message || ''}${b.manually_submitted ? ' · emailed ' + b.manually_submitted_at.slice(0, 19).replace('T', ' ') : ''}</td>
+      <td></td>`;
+    const actions = tr.lastElementChild;
+    if (b.has_text) {
+      const dl = document.createElement('button');
+      dl.textContent = 'Download';
+      dl.onclick = () => download(b.id);
+      actions.appendChild(dl);
+    }
+    if (!b.manually_submitted) {
+      const mk = document.createElement('button');
+      mk.textContent = 'Mark emailed';
+      mk.onclick = () => markSubmitted(b.id);
+      actions.appendChild(mk);
+    }
+    rows.appendChild(tr);
+  }
+}
+async function download(id) {
+  const resp = await fetch(`/api/v1/admin/aavso-batches/${id}/download`, { headers: { 'X-Admin-Key': key() } });
+  if (!resp.ok) { document.getElementById('msg').textContent = 'Download failed (' + resp.status + ')'; return; }
+  const blob = await resp.blob();
+  const disposition = resp.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = match ? match[1] : `aavso_batch_${id}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+async function markSubmitted(id) {
+  const resp = await fetch(`/api/v1/admin/aavso-batches/${id}/mark-submitted`, {
+    method: 'POST', headers: { 'X-Admin-Key': key() } });
+  if (!resp.ok) { document.getElementById('msg').textContent = 'Failed to mark submitted (' + resp.status + ')'; return; }
+  load();
+}
+if (sessionStorage.getItem('aavso_admin_key')) load();
+</script>
+</body></html>
+"""
+
+
+@app.route("/admin/aavso", methods=["GET"])
+def admin_aavso_page():
+    """Server-rendered admin page: today's AAVSO batch, ready to download and
+    email to observations@aavso.org by hand. Prompts for the admin key
+    client-side and passes it as X-Admin-Key on every fetch — the page
+    itself carries no data until an admin key is entered."""
+    return Response(_ADMIN_AAVSO_HTML, mimetype="text/html")
+
+
+@app.route("/api/v1/admin/aavso-batches", methods=["GET"])
+@require_admin
+def api_admin_aavso_batches():
+    """Recent AAVSO batches, newest first. ?limit=N (default 20)."""
+    limit = min(int(request.args.get("limit", 20)), 100)
+    rows = db.query(
+        """SELECT id, submitted_at, n_obs, status, accepted, rejected, message,
+                  manually_submitted, manually_submitted_at,
+                  (file_text <> '') AS has_text
+             FROM aavso_batches
+            ORDER BY submitted_at DESC LIMIT %s""",
+        (limit,),
+    )
+    return jsonify({"batches": rows})
+
+
+@app.route("/api/v1/admin/aavso-batches/<int:batch_id>/download", methods=["GET"])
+@require_admin
+def api_admin_aavso_batch_download(batch_id):
+    row = db.query_one(
+        "SELECT submitted_at, file_text FROM aavso_batches WHERE id = %s", (batch_id,))
+    if not row or not row.get("file_text"):
+        return jsonify({"error": "batch not found or has no stored text"}), 404
+    stamp = re.sub(r"[^0-9A-Za-z]", "", row["submitted_at"])[:14]
+    return Response(
+        row["file_text"],
+        mimetype="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="aavso_batch_{stamp}.txt"'},
+    )
+
+
+@app.route("/api/v1/admin/aavso-batches/<int:batch_id>/mark-submitted", methods=["POST"])
+@require_admin
+def api_admin_aavso_batch_mark_submitted(batch_id):
+    row = db.query_one("SELECT id FROM aavso_batches WHERE id = %s", (batch_id,))
+    if not row:
+        return jsonify({"error": "batch not found"}), 404
+    db.execute(
+        "UPDATE aavso_batches SET manually_submitted = 1, manually_submitted_at = %s WHERE id = %s",
+        (_now(), batch_id),
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/api/v1/admin/sky-quality", methods=["GET"])
@@ -2499,8 +2694,13 @@ def api_me_delete(user):
         return jsonify({"error": "send {\"confirm\": true} to confirm deletion"}), 400
 
     uid = user["user_id"]
-    # Remove all member-owned data in dependency order.
+    # Remove all member-owned data in dependency order.  member_highlights and
+    # contributions both carry FK references to users — leaving them in place
+    # made the final DELETE FROM users fail with a foreign-key violation, so
+    # accounts with any activity could never actually be deleted.
     db.execute("DELETE FROM sessions WHERE user_id = %s", (uid,))
+    db.execute("DELETE FROM member_highlights WHERE user_id = %s", (uid,))
+    db.execute("DELETE FROM contributions WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM notifications WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM help_chat_messages WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM science_program_suggestions WHERE user_id = %s", (uid,))

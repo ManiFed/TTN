@@ -56,6 +56,34 @@ from src.commissioning import CommissioningManager
 app = Flask(__name__)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+@app.before_request
+def _reject_cross_origin():
+    """Block DNS-rebinding and browser CSRF against this local control API.
+
+    The agent binds to 127.0.0.1, but a malicious web page can still reach it:
+    via DNS rebinding (a hostname that resolves to 127.0.0.1 — caught by the
+    Host check) or via a cross-origin form/fetch POST (the browser sends it
+    with an Origin header — caught by the Origin check).  A native desktop app
+    or curl sends neither a foreign Host nor an Origin, so it is unaffected.
+    Commands here move a physical telescope; this must not be scriptable from
+    a web page.
+    """
+    host = (request.host or "").rsplit(":", 1)[0].strip("[]").lower()
+    if host and host not in {h.strip("[]") for h in _LOCAL_HOSTNAMES}:
+        return jsonify({"error": "forbidden host"}), 403
+    origin = request.headers.get("Origin", "")
+    if origin:
+        try:
+            from urllib.parse import urlsplit
+            o_host = (urlsplit(origin).hostname or "").lower()
+        except ValueError:
+            o_host = ""
+        if o_host not in _LOCAL_HOSTNAMES:
+            return jsonify({"error": "cross-origin request rejected"}), 403
+
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 
@@ -434,7 +462,7 @@ def _capture_image(fits_path: Optional[str] = None,
                 with _state_lock:
                     ra  = _state["telescope"].get("ra")
                     dec = _state["telescope"].get("dec")
-                if ra is not None:
+                if ra is not None and dec is not None:
                     hdr["RA"]  = round(float(ra) * 15.0, 6)   # hours→degrees
                     hdr["DEC"] = round(float(dec), 6)
                 # Durable execution provenance follows the frame into the
@@ -2188,10 +2216,33 @@ def _poll_loop() -> None:
         time.sleep(1.0)
 
 
+_poller_thread: Optional[threading.Thread] = None
+_poller_thread_lock = threading.Lock()
+
+
 def _start_poller() -> None:
-    _poller_stop.clear()
-    t = threading.Thread(target=_poll_loop, daemon=True, name="alpaca-poller")
-    t.start()
+    """Start the device poll loop, ensuring only one instance ever runs.
+
+    A quick disconnect→reconnect used to clear _poller_stop before the old
+    poller thread observed it, leaving two loops polling the devices forever.
+    """
+    global _poller_thread
+    with _poller_thread_lock:
+        old = _poller_thread
+        if old is not None and old.is_alive():
+            _poller_stop.set()
+            # A single hung device call can take up to its 10 s HTTP timeout;
+            # wait it out rather than risk a second concurrent poller.
+            old.join(timeout=15)
+            if old.is_alive():
+                # Leave _poller_stop set so the stuck thread exits when it can;
+                # the next connect attempt will start a fresh poller.
+                logger.warning("Previous poller thread did not exit — not starting another")
+                return
+        _poller_stop.clear()
+        _poller_thread = threading.Thread(
+            target=_poll_loop, daemon=True, name="alpaca-poller")
+        _poller_thread.start()
 
 
 # ── Config helper ──────────────────────────────────────────────────────────────

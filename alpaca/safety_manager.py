@@ -290,6 +290,11 @@ class SafetyManager:
         # Build a lookup table keyed by azimuth, sorted
         knots: list[tuple[float, float]] = sorted(mask, key=lambda p: p[1] % 360)
 
+        # A degenerate mask (one knot, or all knots at one azimuth) cannot be
+        # interpolated — fail safe by applying its highest altitude everywhere.
+        if len({round(k[1] % 360, 6) for k in knots}) < 2:
+            return max(k[0] for k in knots)
+
         az = az_deg % 360.0
 
         # Find the two bracketing knots (wrap-around aware)
@@ -300,6 +305,10 @@ class SafetyManager:
             # Handle wrap from 330° → 0°
             if az1 < az0:
                 az1 += 360.0
+            if az1 == az0:
+                if az == az0 % 360.0:
+                    return max(alt0, alt1)
+                continue
             if az0 <= az <= az1 or az0 <= az + 360 <= az1:
                 t = ((az if az >= az0 else az + 360) - az0) / (az1 - az0)
                 return alt0 + t * (alt1 - alt0)

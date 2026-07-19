@@ -481,6 +481,12 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # every reflex-triggered confirmation instead of the raw n_nodes/
     # n_detections counts alone (cloud/survey.py::_posterior_confidence).
     ("discovery_candidates", "confidence", "DOUBLE PRECISION DEFAULT 0.0"),
+    # AAVSO batches now carry their own Extended Format text in the database
+    # (not just a disk file_path) so the admin dashboard can serve downloads
+    # without depending on the filesystem/volume the batch was written on.
+    ("aavso_batches", "file_text",             "TEXT DEFAULT ''"),
+    ("aavso_batches", "manually_submitted",    "INTEGER DEFAULT 0"),
+    ("aavso_batches", "manually_submitted_at", "TEXT DEFAULT ''"),
 ]
 
 # Tables added after initial schema — created idempotently in init().

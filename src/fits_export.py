@@ -102,8 +102,8 @@ def export_enhanced_fits(
                 _set_if_absent(hdr, "AIRMASS", float(result["airmass"]))
             if result.get("bjd") is not None:
                 _set_if_absent(hdr, "BJD-OBS", float(result["bjd"]),
-                               comment="Barycentric Julian Date (TCB)")
-                _set_if_absent(hdr, "BARY-SYS", "TCB")
+                               comment="Barycentric Julian Date (TDB)")
+                _set_if_absent(hdr, "BARY-SYS", "TDB")
 
             # ── Processing block ──────────────────────────────────────────────
             node_id  = phot_cfg.get("node_id", "node_unknown")
@@ -123,7 +123,7 @@ def export_enhanced_fits(
                     f"snr={snr:.1f} quality={qf}"
                 )
             if result.get("bjd") is not None:
-                hdr["HISTORY"] = "BJD-OBS computed via astropy barycentric correction (TCB)"
+                hdr["HISTORY"] = "BJD-OBS computed via astropy barycentric correction (TDB)"
             if result.get("comparison_stars") is not None:
                 hdr["HISTORY"] = f"Comparison stars used: {result['comparison_stars']}"
             if result.get("zero_point") is not None:
@@ -161,7 +161,7 @@ def _date_str_from_result(result: dict, fits_path: str) -> str:
     try:
         if result.get("bjd"):
             from astropy.time import Time
-            t = Time(result["bjd"], format="jd", scale="tcb")
+            t = Time(result["bjd"], format="jd", scale="tdb")
             return t.utc.datetime.strftime("%Y-%m-%d")
     except Exception:
         pass
