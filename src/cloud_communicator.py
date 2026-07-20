@@ -395,6 +395,8 @@ class CloudCommunicator:
         import requests
         resp = requests.post(self._url + path, json=payload,
                              headers=self._headers() if auth else {}, timeout=30)
+        if auth and resp.status_code == 401:
+            self._handle_unauthorized(resp)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
@@ -402,9 +404,38 @@ class CloudCommunicator:
     def _get(self, path: str) -> dict:
         import requests
         resp = requests.get(self._url + path, headers=self._headers(), timeout=30)
+        if resp.status_code == 401:
+            self._handle_unauthorized(resp)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
+
+    def _handle_unauthorized(self, resp) -> None:
+        """The cloud rejects our node_id/api_key outright (as opposed to a
+        transient/5xx/429 failure) — the stale credential will never start
+        working again on retry, so drop it and let _ensure_registered() get
+        a fresh one instead of heartbeating against a dead key forever."""
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if body.get("error") == "invalid node credentials":
+            self._clear_credentials("invalid node credentials")
+
+    def _clear_credentials(self, reason: str) -> None:
+        logger.warning("Cloud rejected stored node credentials (%s) — "
+                       "clearing and re-registering", reason)
+        self._node_id = ""
+        self._api_key = ""
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
+        except keyring.errors.KeyringError:
+            pass
+        self._save_state()
+        self.status["registered"] = False
+        self.status["node_id"] = ""
+        self.status["error"] = f"credentials rejected by cloud ({reason}) — re-registering"
+        self._telemetry_event("credentials_rejected", "error", {"reason": reason})
 
     # ── Heartbeat loop ─────────────────────────────────────────────────────────
 

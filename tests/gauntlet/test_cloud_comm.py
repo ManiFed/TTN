@@ -86,6 +86,41 @@ class CloudCommGauntletTest(TempCwdTestCase):
         # Structured evidence of the failure exists.
         self.assertGreaterEqual(telemetry.counters().get("registration_failed", 0), 1)
 
+    def test_rejected_credentials_clear_and_reregister(self):
+        """A 401 'invalid node credentials' means the stored key is dead, not
+        transiently unavailable — the node must drop it and register fresh
+        rather than heartbeat against it forever (see _handle_unauthorized)."""
+        keystore: dict = {}
+        with patch.object(keyring, "set_password",
+                          side_effect=lambda svc, acct, pw: keystore.__setitem__((svc, acct), pw)), \
+             patch.object(keyring, "get_password",
+                          side_effect=lambda svc, acct: keystore.get((svc, acct))), \
+             patch.object(keyring, "delete_password",
+                          side_effect=lambda svc, acct: keystore.pop((svc, acct), None)):
+            comm = self._comm()
+            self.assertTrue(comm._ensure_registered())
+            self.assertTrue(keystore)
+
+            self.fake.mode = "unauthorized"
+            with self.assertRaises(RuntimeError):
+                comm._post("/api/v1/nodes/heartbeat", {"conditions": {}, "state": {}})
+
+            self.assertEqual(comm._node_id, "")
+            self.assertEqual(comm._api_key, "")
+            self.assertFalse(comm.status["registered"])
+            self.assertEqual(keystore, {})
+            state = json.loads(pathlib.Path("data", "cloud_state.json").read_text())
+            self.assertEqual(state["node_id"], "")
+            self.assertGreaterEqual(telemetry.counters().get("credentials_rejected", 0), 1)
+
+            # Recovery: the next heartbeat cycle registers fresh instead of
+            # retrying the dead key forever.
+            self.fake.mode = "ok"
+            self.fake.clear()
+            self.assertTrue(comm._ensure_registered())
+            self.assertNotEqual(comm._node_id, "")
+            self.assertEqual(len(self.fake.paths("/register")), 1)
+
     def test_registration_outage_recovers_after_backoff(self):
         self.fake.mode = "http500"
         comm = self._comm()

@@ -7,6 +7,8 @@ exercised through its actual network stack.  Behavior is switched per-test:
     fake.mode = "http500"   → every request returns 500
     fake.mode = "reject"    → registration/uploads rejected with 400/409
     fake.mode = "down"      → connections are dropped without a response
+    fake.mode = "unauthorized" → every authenticated request returns 401
+                                  {"error": "invalid node credentials"}
 """
 
 import json
@@ -107,6 +109,9 @@ class FakeCloud:
                     return
                 if fake.mode == "reject":
                     self._reply(409, {"error": "activation code already used"})
+                    return
+                if fake.mode == "unauthorized" and self.path != "/api/v1/nodes/register":
+                    self._reply(401, {"error": "invalid node credentials"})
                     return
                 # mode == "ok"
                 if self.path.startswith("/api/v1/stream"):
