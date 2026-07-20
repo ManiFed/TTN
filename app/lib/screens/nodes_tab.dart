@@ -2060,6 +2060,10 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   // cloud account link -- these used to be conflated, so "Connected!" showed
   // even when the telescope itself was never reached (see _link()).
   bool _telescopeConnected = false;
+  // Whether installCredentials() actually reached the local node agent.
+  // If this is false the cloud thinks the node is linked but the agent on
+  // this computer is still running with stale/no credentials (see _link()).
+  bool _credentialsInstalled = true;
   String? _nodeId;
   String? _apiKey;
   _LocStep _step = _LocStep.idle;
@@ -2283,6 +2287,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       }
       // Install credentials on the local node agent when it's running.
       bool telescopeConnected = false;
+      bool credentialsInstalled = true;
       try {
         final agent = NodeAgentClient();
         final status = await agent.status();
@@ -2327,7 +2332,11 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         }
       } on NodeAgentException {
         // Local agent may not be running yet — credentials are still on the
-        // cloud account; user can reopen Connect later once the service is up.
+        // cloud account, but the agent on this computer is now out of sync
+        // with the cloud (it may still hold stale/revoked credentials).
+        // Surface this in the UI below rather than silently reporting the
+        // link as fully successful.
+        credentialsInstalled = false;
       }
       if (!mounted) return;
       await context.read<AppState>().refreshNodes();
@@ -2336,6 +2345,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           _busy = false;
           _linked = true;
           _telescopeConnected = telescopeConnected;
+          _credentialsInstalled = credentialsInstalled;
           _nodeId = nodeId;
           _apiKey = apiKey;
         });
@@ -2346,15 +2356,23 @@ class _ClaimSheetState extends State<_ClaimSheet> {
   }
 
   /// Re-scans for the telescope and connects it, without re-running the
-  /// cloud attach step (the node is already linked at this point).
+  /// cloud attach step (the node is already linked at this point). Also
+  /// retries pushing credentials to the local agent if that failed during
+  /// _link() -- otherwise the agent on this computer would stay stuck with
+  /// stale/no credentials even after the telescope itself is found.
   Future<void> _retryTelescopeConnect() async {
     final nodeId = _nodeId;
     final apiKey = _apiKey;
     if (nodeId == null || apiKey == null) return;
     setState(() { _busy = true; _error = null; });
     var connected = false;
+    var credentialsInstalled = _credentialsInstalled;
     try {
       final agent = NodeAgentClient();
+      if (!credentialsInstalled) {
+        await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
+        credentialsInstalled = true;
+      }
       final servers = await agent.discoverAlpacaServers();
       if (servers.isNotEmpty) {
         final chosen = servers.first;
@@ -2369,7 +2387,11 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       // Still not found -- leave the "not connected" state showing.
     }
     if (mounted) {
-      setState(() { _busy = false; _telescopeConnected = connected; });
+      setState(() {
+        _busy = false;
+        _telescopeConnected = connected;
+        _credentialsInstalled = credentialsInstalled;
+      });
     }
   }
 
@@ -2399,28 +2421,39 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           const SizedBox(height: 10),
           if (_linked) ...[
             Icon(
-              _telescopeConnected
-                  ? Icons.check_circle_outline
-                  : Icons.warning_amber_rounded,
-              color: _telescopeConnected ? BSTheme.success : BSTheme.warning,
+              !_credentialsInstalled
+                  ? Icons.error_outline
+                  : (_telescopeConnected
+                      ? Icons.check_circle_outline
+                      : Icons.warning_amber_rounded),
+              color: !_credentialsInstalled
+                  ? BSTheme.danger
+                  : (_telescopeConnected ? BSTheme.success : BSTheme.warning),
               size: 48,
             ),
             const SizedBox(height: 16),
             Text(
-              _telescopeConnected
-                  ? 'Telescope connected!'
-                  : 'Account linked — telescope not found yet',
+              !_credentialsInstalled
+                  ? 'Linked to your account, but not connected on this computer'
+                  : (_telescopeConnected
+                      ? 'Telescope connected!'
+                      : 'Account linked — telescope not found yet'),
               style: tt.titleLarge,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              _telescopeConnected
-                  ? 'This telescope is linked to your account and the local '
-                      'node service is talking to it.'
-                  : 'Your account is linked, but this computer could not find '
-                      'the telescope on the network. Make sure it\'s powered '
-                      'on and connected to the same WiFi, then try again.',
+              !_credentialsInstalled
+                  ? 'Your account is linked, but this computer\'s node service '
+                      'could not be reached to finish setup, so it may still be '
+                      'running with old credentials. Make sure the node service '
+                      'is running on this computer, then tap Retry.'
+                  : (_telescopeConnected
+                      ? 'This telescope is linked to your account and the local '
+                          'node service is talking to it.'
+                      : 'Your account is linked, but this computer could not find '
+                          'the telescope on the network. Make sure it\'s powered '
+                          'on and connected to the same WiFi, then try again.'),
               style: tt.bodyMedium,
               textAlign: TextAlign.center,
             ),
@@ -2428,7 +2461,9 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             if (!_telescopeConnected) ...[
               OutlinedButton(
                 onPressed: _busy ? null : _retryTelescopeConnect,
-                child: Text(_busy ? 'Searching…' : 'Try again'),
+                child: Text(_busy
+                    ? (!_credentialsInstalled ? 'Connecting…' : 'Searching…')
+                    : 'Retry'),
               ),
               const SizedBox(height: 10),
             ],
