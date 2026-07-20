@@ -406,6 +406,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "perf_updated_at",      "TEXT DEFAULT ''"),
     ("nodes", "portable",             "INTEGER DEFAULT 0"),
     ("nodes", "vacation_until",       "TEXT DEFAULT ''"),
+    ("nodes", "vacation_from",        "TEXT DEFAULT ''"),
     ("nodes", "session_lat",          "DOUBLE PRECISION DEFAULT 0"),
     ("nodes", "session_lon",          "DOUBLE PRECISION DEFAULT 0"),
     ("nodes", "session_city",         "TEXT DEFAULT ''"),
@@ -480,6 +481,12 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # every reflex-triggered confirmation instead of the raw n_nodes/
     # n_detections counts alone (cloud/survey.py::_posterior_confidence).
     ("discovery_candidates", "confidence", "DOUBLE PRECISION DEFAULT 0.0"),
+    # AAVSO batches now carry their own Extended Format text in the database
+    # (not just a disk file_path) so the admin dashboard can serve downloads
+    # without depending on the filesystem/volume the batch was written on.
+    ("aavso_batches", "file_text",             "TEXT DEFAULT ''"),
+    ("aavso_batches", "manually_submitted",    "INTEGER DEFAULT 0"),
+    ("aavso_batches", "manually_submitted_at", "TEXT DEFAULT ''"),
 ]
 
 # Tables added after initial schema — created idempotently in init().
@@ -946,7 +953,7 @@ _LATE_TABLES: list[str] = [
         node_id               TEXT NOT NULL,
         filter                TEXT NOT NULL DEFAULT 'CV',
         state                 TEXT NOT NULL DEFAULT 'collecting',
-        offset                DOUBLE PRECISION DEFAULT 0,
+        "offset"              DOUBLE PRECISION DEFAULT 0,
         color_term            DOUBLE PRECISION DEFAULT 0,
         extinction            DOUBLE PRECISION DEFAULT 0,
         drift_per_day         DOUBLE PRECISION DEFAULT 0,
@@ -1162,12 +1169,30 @@ def release(conn) -> None:
 
 # ── Convenience helpers ────────────────────────────────────────────────────────
 
+def _clean_params(params):
+    """Strip NUL bytes from string parameters.
+
+    PostgreSQL TEXT can never store 0x00 — psycopg2 raises mid-statement,
+    which turns any client-supplied string containing a NUL into a 500 (and
+    can crash *error-path* code like incident logging, hiding the original
+    failure). NUL carries no meaning in any field we store, so drop it.
+    """
+    if not params:
+        return params
+    if isinstance(params, (tuple, list)) and any(
+            isinstance(p, str) and "\x00" in p for p in params):
+        cleaned = [p.replace("\x00", "") if isinstance(p, str) else p
+                   for p in params]
+        return type(params)(cleaned) if isinstance(params, tuple) else cleaned
+    return params
+
+
 def query(sql: str, params: tuple = ()) -> list:
     """Run a SELECT and return a list of plain dicts."""
     conn = connect()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
+        cur.execute(sql, _clean_params(params))
         return [dict(r) for r in cur.fetchall()]
     except Exception:
         conn.rollback()
@@ -1194,7 +1219,7 @@ def execute(sql: str, params: tuple = (), returning_id: bool = False) -> int:
     try:
         with conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(run_sql, params)
+            cur.execute(run_sql, _clean_params(params))
             if returning_id:
                 row = cur.fetchone()
                 return row["id"] if row else 0
@@ -1208,7 +1233,7 @@ def executemany(sql: str, seq: list) -> None:
     try:
         with conn:
             cur = conn.cursor()
-            cur.executemany(sql, seq)
+            cur.executemany(sql, [_clean_params(p) for p in seq])
     finally:
         release(conn)
 

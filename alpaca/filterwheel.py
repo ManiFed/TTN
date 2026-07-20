@@ -35,11 +35,25 @@ class FilterWheel:
         return list(self._c._get("names"))
 
     def set_position(self, slot: int) -> None:
-        """Rotate the wheel to *slot* (0-based) and wait until settled."""
+        """Rotate the wheel to *slot* (0-based) and wait until it settles there.
+
+        Waits for position == slot rather than merely "not moving": some
+        drivers briefly report the old position before the move starts, and a
+        wheel that settles on the wrong slot must raise — a silently wrong
+        filter corrupts the photometric band of every subsequent frame.
+        """
         logger.info("FilterWheel moving to slot %d", slot)
         self._c._put("position", Position=slot)
-        self._c.wait_for(lambda: not self.is_moving(), timeout=30, label="filter wheel move")
-        logger.info("FilterWheel at slot %d", self.position())
+        try:
+            self._c.wait_for(lambda: self.position() == slot,
+                             timeout=30, label=f"filter wheel at slot {slot}")
+        except TimeoutError:
+            final = self.position()
+            raise RuntimeError(
+                f"FilterWheel did not reach slot {slot} within 30 s "
+                f"(reports {'moving' if final == _MOVING else f'slot {final}'})"
+            )
+        logger.info("FilterWheel at slot %d", slot)
 
     def set_position_by_name(self, name: str) -> None:
         """Rotate the wheel to the named filter (case-insensitive)."""

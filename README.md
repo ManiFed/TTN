@@ -31,9 +31,12 @@ See `SIMULATION.md` (model + assumptions + how to run) and
 ## Beta-node readiness
 
 ```bash
-make preflight    # read-only node/config/cloud/storage readiness check
-make beta-init    # create the C1–C7 real-data capture corpus
-make beta-audit   # verify captured FITS checksums and campaign coverage
+make preflight        # read-only node/config/cloud/storage readiness check
+make preflight-active # same, but actually authenticates to the cloud, writes
+                       # to each runtime dir, and launches the solver binary
+                       # — run this before each observing session
+make beta-init         # create the C1–C7 real-data capture corpus
+make beta-audit        # verify captured FITS checksums and campaign coverage
 ```
 
 Add a frame with

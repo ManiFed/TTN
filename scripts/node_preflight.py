@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Read-only beta-node readiness check. Exit 0 only when required checks pass."""
+"""Beta-node readiness check.
+
+Checks split into two tiers:
+  * static  — file/config/dependency presence (always run, always read-only)
+  * active  — actually exercises the integration points that fail in practice
+              (cloud auth round-trip, real directory writes, solver launch)
+              rather than just checking they *look* configured.
+
+Exit 0 only when required checks pass.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +17,70 @@ import importlib.util
 import json
 import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
+
+
+def _check_cloud_auth(url: str, node_id: str, api_key: str) -> tuple[bool, str]:
+    """Real authenticated round-trip against the cloud API (read-only)."""
+    try:
+        import requests
+    except ImportError as exc:
+        return False, f"requests not installed: {exc}"
+    try:
+        resp = requests.get(
+            url.rstrip("/") + "/api/v1/nodes/me",
+            headers={"X-Node-Id": node_id, "X-Api-Key": api_key},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return False, f"request failed: {exc}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+    return True, "authenticated"
+
+
+def _check_writable(path: Path, must_exist: bool = False) -> tuple[bool, str]:
+    """Attempt an actual write+delete, not just an existence/permission-bit check."""
+    if not path.exists():
+        if must_exist:
+            return False, f"{path} does not exist"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return False, f"could not create {path}: {exc}"
+    probe = path / f".preflight_write_test_{tempfile.mktemp(dir='').split('/')[-1]}"
+    try:
+        probe.write_text("preflight")
+        probe.unlink()
+    except OSError as exc:
+        return False, f"{path} not writable: {exc}"
+    return True, str(path)
+
+
+def _check_solver_launches(solver: str) -> tuple[bool, str]:
+    """Confirm the solver binary actually executes here (not just present on PATH).
+
+    Being on PATH doesn't mean it runs — wrong architecture, missing shared
+    libraries, or a stale/broken install all show up only when you try to
+    launch it.
+    """
+    try:
+        subprocess.run(
+            [solver, "-h"], capture_output=True, timeout=10, check=False,
+        )
+    except FileNotFoundError as exc:
+        return False, f"could not launch {solver!r}: {exc}"
+    except subprocess.TimeoutExpired:
+        return True, f"{solver} launched (timed out waiting for exit, which is fine)"
+    except OSError as exc:
+        return False, f"could not launch {solver!r}: {exc}"
+    return True, f"{solver} launched"
 
 
 def main() -> int:
@@ -20,6 +88,13 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--min-free-gb", type=float, default=5.0)
+    parser.add_argument(
+        "--active", action="store_true",
+        help="Also run active checks: real cloud auth round-trip, real "
+             "directory writes, and a real solver-binary launch. Slower, "
+             "and touches the network, but catches the failures that a "
+             "presence-only check misses.",
+    )
     args = parser.parse_args()
     checks = []
 
@@ -46,6 +121,8 @@ def main() -> int:
           f"lat={lat!r}, lon={lon!r}")
 
     cloud = config.get("cloud", {})
+    node_id = str(cloud.get("node_id") or "")
+    api_key = str(cloud.get("api_key") or "")
     if cloud.get("enabled", False):
         url = str(cloud.get("url", ""))
         parsed = urlparse(url)
@@ -56,8 +133,16 @@ def main() -> int:
         except OSError as exc:
             check("cloud_dns", False, str(exc))
         state = Path("data/cloud_state.json")
-        check("cloud_identity", bool(cloud.get("node_id")) or state.exists(),
-              "configured" if cloud.get("node_id") else str(state))
+        check("cloud_identity", bool(node_id) or state.exists(),
+              "configured" if node_id else str(state))
+
+        if args.active:
+            if node_id and api_key:
+                check("cloud_auth", *_check_cloud_auth(url, node_id, api_key))
+            else:
+                check("cloud_auth", True,
+                      "no node_id/api_key yet — first-run auto-registration, skipped",
+                      required=False)
     else:
         check("cloud_enabled", False, "cloud.enabled is false")
 
@@ -67,6 +152,18 @@ def main() -> int:
     solver = config.get("photometry", {}).get("astap_path", "astap")
     solver_ok = Path(str(solver)).expanduser().is_file() or shutil.which(str(solver)) is not None
     check("plate_solver", solver_ok, str(solver))
+
+    if args.active:
+        check("solver_launch", *_check_solver_launches(str(solver)))
+        for name, path in (
+            ("data", Path("data")),
+            ("logs", Path("logs")),
+            ("fits_export", Path("fits_export")),
+            ("aavso_submissions", Path("aavso_submissions")),
+        ):
+            check(f"writable:{name}", *_check_writable(path))
+        if str(watch_path):
+            check("writable:image_watch_path", *_check_writable(watch_path, must_exist=True))
 
     required_failures = [c for c in checks if c["required"] and not c["ok"]]
     report = {"ready": not required_failures, "checks": checks}

@@ -1,0 +1,8 @@
+{"seed": 0, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.4}
+{"seed": 1, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.4}
+{"seed": 3, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.5}
+{"seed": 2, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.5}
+{"seed": 4, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.3}
+{"seed": 5, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.3}
+{"seed": 6, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.3}
+{"seed": 7, "profile": "none", "violations": ["child exited 0 without a result"], "stderr": "", "elapsed_s": 10.3}

@@ -226,9 +226,13 @@ class ApiClient {
   /// End a portable node's session early (returns it to sleeping).
   Future<void> endNodeSession(String nodeId) => _delete('/me/nodes/$nodeId/session');
 
-  /// Put a node on vacation until [untilDate] ('YYYY-MM-DD').
-  Future<void> setNodeVacation(String nodeId, String untilDate) =>
-      _put('/me/nodes/$nodeId/vacation', {'until_date': untilDate});
+  /// Schedule a node's vacation from [fromDate] through [untilDate] ('YYYY-MM-DD').
+  /// [fromDate] is optional and defaults to today (immediate start) when omitted.
+  Future<void> setNodeVacation(String nodeId, String untilDate, {String? fromDate}) =>
+      _put('/me/nodes/$nodeId/vacation', {
+        'until_date': untilDate,
+        if (fromDate != null && fromDate.isNotEmpty) 'from_date': fromDate,
+      });
 
   /// Cancel a node's active vacation.
   Future<void> cancelNodeVacation(String nodeId) => _delete('/me/nodes/$nodeId/vacation');

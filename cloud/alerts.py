@@ -249,9 +249,11 @@ def fetch_atlas(cfg: dict) -> list:
         raise RuntimeError("ATLAS auth returned no token")
 
     mag_limit = float(cfg.get("mag_limit", 16.5))
+    days_back = int(cfg.get("days_back", 14))
+    date_threshold = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%S")
     payload = _http_get_json(
         "https://psweb.mp.qub.ac.uk/sne/atlas4/api/objectlist/",
-        params={"objectlistid": 2, "format": "json"},
+        params={"objectlistid": 2, "format": "json", "datethreshold": date_threshold},
         headers={"Authorization": f"Token {token}"},
         timeout=180,
     )
@@ -439,7 +441,10 @@ def fetch_tess(cfg: dict) -> list:
             period = float(row["pl_orbper"])
             epoch_bjd = float(row["pl_tranmid"])
             dur_h = float(row["pl_trandur"])
-            depth_ppt = float(row.get("pl_trandep") or 0) * 1000  # ppm → ppt
+            # NASA Exoplanet Archive ps.pl_trandep is in PERCENT.
+            # 1% = 10 ppt. (The old ×1000 "ppm→ppt" conversion inflated every
+            # depth 100×, so the min-depth filter passed undetectable transits.)
+            depth_ppt = float(row.get("pl_trandep") or 0) * 10.0
         except (TypeError, ValueError, KeyError):
             continue
 

@@ -28,6 +28,12 @@ Admin endpoints (X-Admin-Key header):
     POST /api/v1/admin/replan            → rescore + regenerate all plans
     GET  /api/v1/admin/tuning            → active scoring weights + tuning history
     POST /api/v1/admin/tuning/rollback   → restore the previous scoring weights
+    GET  /api/v1/admin/aavso-batches                    → list recent AAVSO batches
+    GET  /api/v1/admin/aavso-batches/<id>/download       → download batch .txt
+    POST /api/v1/admin/aavso-batches/<id>/mark-submitted → mark as emailed to AAVSO
+
+Admin dashboard page (prompts for the admin key client-side):
+    GET  /admin/aavso                    → download today's AAVSO batch, mark it emailed
 """
 
 import json
@@ -44,7 +50,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 from defusedxml import ElementTree as ET
-from flask import Flask, jsonify, redirect as _redirect, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect as _redirect, request, send_from_directory
+from werkzeug.exceptions import HTTPException as _HTTPException
+from werkzeug.routing import IntegerConverter as _IntegerConverter
+from werkzeug.routing import ValidationError as _ValidationError
 from werkzeug.utils import safe_join
 
 from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
@@ -55,6 +64,21 @@ logger = logging.getLogger("cloud.server")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
+
+
+class _PgIntConverter(_IntegerConverter):
+    """<int:> URL ids land in PostgreSQL INTEGER columns; anything beyond
+    2^31-1 would raise NumericValueOutOfRange mid-query. No such row can
+    exist, so out-of-range ids simply fail to match the route (404)."""
+
+    def to_python(self, value):
+        v = super().to_python(value)
+        if v > 2**31 - 1:
+            raise _ValidationError()
+        return v
+
+
+app.url_map.converters["int"] = _PgIntConverter
 
 _config: dict = {}   # set by create_app()
 
@@ -181,6 +205,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _json_body() -> dict:
+    """The request's JSON body as a dict — {} for anything else.
+
+    A top-level JSON scalar or list is syntactically valid JSON, so
+    get_json() happily returns it, and every subsequent body.get() would
+    raise AttributeError. No endpoint here accepts a non-object body.
+    """
+    body = request.get_json(force=True, silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 # ── Auth decorators ────────────────────────────────────────────────────────────
 
 def require_node(fn):
@@ -274,7 +309,7 @@ def api_pair_submit(user):
     Body: {pairing_token, node_id, api_key}
     (Activation codes are retired — credentials come from /me/nodes/attach.)
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     token = str(body.get("pairing_token") or "").strip().upper()
     node_id = str(body.get("node_id") or "").strip()
     api_key = str(body.get("api_key") or "").strip()
@@ -300,14 +335,44 @@ def api_pair_submit(user):
                 token, user["user_id"], node_id)
     return jsonify({"ok": True})
 
+# Failed-claim rate limiting: the pairing token space is small (word + 4
+# digits), and a successful guess hands out live node credentials, so an
+# unauthenticated claimer must not be able to enumerate tokens.  Legitimate
+# node agents poll one fixed token every 30 s — far under this ceiling.
+_PAIR_CLAIM_WINDOW_S = 600.0
+_PAIR_CLAIM_MAX_MISSES = 30
+_pair_claim_misses: dict = {}   # ip → [monotonic timestamps of misses]
+
+
+def _pair_claim_limited(ip: str) -> bool:
+    now = _time.monotonic()
+    with _pair_lock:
+        stamps = [t for t in _pair_claim_misses.get(ip, [])
+                  if now - t < _PAIR_CLAIM_WINDOW_S]
+        _pair_claim_misses[ip] = stamps
+        if len(_pair_claim_misses) > 10000:   # bound memory under a spray
+            _pair_claim_misses.clear()
+            _pair_claim_misses[ip] = stamps
+        return len(stamps) >= _PAIR_CLAIM_MAX_MISSES
+
+
+def _pair_claim_record_miss(ip: str) -> None:
+    with _pair_lock:
+        _pair_claim_misses.setdefault(ip, []).append(_time.monotonic())
+
+
 @app.route("/api/v1/nodes/pair/<token>", methods=["GET"])
 def api_pair_claim(token):
     """Node polls this to receive credentials. Consumes the entry."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
+    if _pair_claim_limited(ip):
+        return jsonify({"error": "too many attempts — try again later"}), 429
     token = token.strip().upper()
     _pair_gc()
     with _pair_lock:
         entry = _pair_store.pop(token, None)
     if not entry:
+        _pair_claim_record_miss(ip)
         return jsonify({"node_id": None, "api_key": None})
     logger.info("Pairing claimed for token %s → %s", token, entry.get("node_id"))
     return jsonify({"node_id": entry["node_id"], "api_key": entry["api_key"]})
@@ -321,7 +386,7 @@ def api_register():
     (signed-in app) or POST /me/nodes/<id> (claim with credentials).
     Activation codes are no longer accepted.
     """
-    info = request.get_json(force=True, silent=True) or {}
+    info = _json_body()
     if info.pop("activation_code", None):
         return jsonify({
             "error": "activation codes are retired — sign in to the app and "
@@ -331,7 +396,7 @@ def api_register():
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     return jsonify(creds)
@@ -343,7 +408,7 @@ def api_characterization(node):
     """Self-measured optics from the node's own plate solves. A dedicated
     endpoint: re-POSTing register would overwrite owner/location wholesale,
     and heartbeat conditions only land in a JSON blob nothing reads."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     result = registry.update_characterization(node["node_id"], body)
     return (jsonify(result), 200) if result.get("ok") else (jsonify(result), 400)
 
@@ -351,7 +416,7 @@ def api_characterization(node):
 @app.route("/api/v1/nodes/heartbeat", methods=["POST"])
 @require_node
 def api_heartbeat(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     registry.heartbeat(node["node_id"], body.get("conditions"))
     if body.get("clock_skew_s") is not None:
         try:
@@ -391,7 +456,7 @@ def api_node_incident(node):
     failures, emergency parks, disk exhaustion etc. are visible to a remote
     operator the moment they happen instead of the morning after.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     incident_type = str(body.get("incident_type") or "").strip()
     if not incident_type:
         return jsonify({"error": "incident_type required"}), 400
@@ -453,7 +518,7 @@ def api_autonomy_bundle(node):
 @app.route("/api/v1/nodes/execution-outcomes", methods=["POST"])
 @require_node
 def api_execution_outcomes(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     outcomes = body.get("outcomes") or []
     if not isinstance(outcomes, list):
         return jsonify({"error": "outcomes must be a list"}), 400
@@ -583,7 +648,7 @@ def api_admin_event_cancel(event_id):
 @app.route("/api/v1/measurements", methods=["POST"])
 @require_node
 def api_measurements(node):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     measurement = body.get("measurement") or body   # accept bare measurement dicts
     result = data_pipeline.ingest_measurement(
         node["node_id"], measurement, body.get("conditions"))
@@ -770,7 +835,7 @@ def api_interrupt_ack(node, interrupt_id: int):
 @app.route("/api/v1/interrupts", methods=["POST"])
 @require_admin
 def api_interrupts_post():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         name = str(body["name"])
         ra_deg = float(body["ra_deg"])
@@ -1143,7 +1208,7 @@ def api_site_config():
 @app.route("/api/v1/site/config", methods=["PATCH"])
 @require_admin
 def api_site_config_update():
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     if "member_count" in body:
         db.execute(
             "UPDATE site_config SET member_count = %s, updated_at = %s WHERE id = 1",
@@ -1156,7 +1221,7 @@ def api_site_config_update():
 
 @app.route("/api/v1/subscribe", methods=["POST"])
 def api_subscribe():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     email = str(body.get("email") or "").strip().lower()
     if not email or "@" not in email:
         return jsonify({"error": "valid email required"}), 400
@@ -1193,7 +1258,7 @@ def api_admin_subscribers():
 @app.route("/api/v1/admin/subscribers/<int:sub_id>/status", methods=["PATCH"])
 @require_admin
 def api_admin_subscriber_status(sub_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = str(body.get("status") or "").strip()
     if status not in ("pending", "sent", "onboarded"):
         return jsonify({"error": "status must be pending, sent, or onboarded"}), 400
@@ -1249,6 +1314,165 @@ def api_admin_tuning_rollback():
     tuning.restore_weights(
         restored, f"manual rollback (was: {last.get('rationale','')})", _config)
     return jsonify({"restored_weights": tuning.active_obs_weights(_config)})
+
+
+_ADMIN_AAVSO_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>AAVSO batches</title>
+<style>
+  :root { color-scheme: light dark; --fg: #222; --bg: #fff; --border: #ddd; --muted: #666; --btn-bg: #eee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8e8e8; --bg: #1a1a1a; --border: #444; --muted: #aaa; --btn-bg: #333; }
+  }
+  body { font: 14px/1.4 -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
+  a { color: #6ab0f3; }
+  h1 { font-size: 1.3rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  th { color: var(--muted); font-weight: 600; }
+  tr.done { opacity: 0.5; }
+  button { cursor: pointer; padding: 0.25rem 0.6rem; margin-right: 0.3rem; color: var(--fg); background: var(--btn-bg); border: 1px solid var(--border); border-radius: 3px; }
+  #key-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  #key-bar input { flex: 1; padding: 0.4rem; color: #222; background: #fff; }
+  .status { font-size: 0.8rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: var(--btn-bg); color: #222; }
+  .status.dry_run, .status.accepted { background: #9fd89f; }
+  .status.error, .status.rejected { background: #e59a9a; }
+  #msg { color: #e57373; font-size: 0.85rem; }
+</style></head>
+<body>
+  <h1>AAVSO batches</h1>
+  <p>Every 6&nbsp;hours the cloud service formats pending observations into an
+  AAVSO Extended Format batch. Download the newest one below and email it to
+  <a href="mailto:observations@aavso.org">observations@aavso.org</a>, then mark it submitted.</p>
+  <div id="key-bar">
+    <input id="key" type="password" placeholder="admin key" autocomplete="off">
+    <button onclick="load()">Load</button>
+  </div>
+  <div id="msg"></div>
+  <table id="tbl" style="display:none">
+    <thead><tr><th>Submitted</th><th>#Obs</th><th>Status</th><th>Message</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+<script>
+function key() {
+  const k = document.getElementById('key').value;
+  if (k) sessionStorage.setItem('aavso_admin_key', k);
+  return k || sessionStorage.getItem('aavso_admin_key') || '';
+}
+async function load() {
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  try {
+    const resp = await fetch('/api/v1/admin/aavso-batches', { headers: { 'X-Admin-Key': key() } });
+    if (!resp.ok) { msg.textContent = 'Failed to load (' + resp.status + ') — check the admin key.'; return; }
+    const data = await resp.json();
+    render(data.batches);
+  } catch (e) { msg.textContent = 'Failed to load: ' + e; }
+}
+function render(batches) {
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '';
+  document.getElementById('tbl').style.display = batches.length ? '' : 'none';
+  for (const b of batches) {
+    const tr = document.createElement('tr');
+    if (b.manually_submitted) tr.className = 'done';
+    tr.innerHTML = `
+      <td>${b.submitted_at.replace('T', ' ').slice(0, 19)}</td>
+      <td>${b.n_obs}</td>
+      <td><span class="status ${b.status}">${b.status}</span></td>
+      <td>${b.message || ''}${b.manually_submitted ? ' · emailed ' + b.manually_submitted_at.slice(0, 19).replace('T', ' ') : ''}</td>
+      <td></td>`;
+    const actions = tr.lastElementChild;
+    if (b.has_text) {
+      const dl = document.createElement('button');
+      dl.textContent = 'Download';
+      dl.onclick = () => download(b.id);
+      actions.appendChild(dl);
+    }
+    if (!b.manually_submitted) {
+      const mk = document.createElement('button');
+      mk.textContent = 'Mark emailed';
+      mk.onclick = () => markSubmitted(b.id);
+      actions.appendChild(mk);
+    }
+    rows.appendChild(tr);
+  }
+}
+async function download(id) {
+  const resp = await fetch(`/api/v1/admin/aavso-batches/${id}/download`, { headers: { 'X-Admin-Key': key() } });
+  if (!resp.ok) { document.getElementById('msg').textContent = 'Download failed (' + resp.status + ')'; return; }
+  const blob = await resp.blob();
+  const disposition = resp.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = match ? match[1] : `aavso_batch_${id}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+async function markSubmitted(id) {
+  const resp = await fetch(`/api/v1/admin/aavso-batches/${id}/mark-submitted`, {
+    method: 'POST', headers: { 'X-Admin-Key': key() } });
+  if (!resp.ok) { document.getElementById('msg').textContent = 'Failed to mark submitted (' + resp.status + ')'; return; }
+  load();
+}
+if (sessionStorage.getItem('aavso_admin_key')) load();
+</script>
+</body></html>
+"""
+
+
+@app.route("/admin/aavso", methods=["GET"])
+def admin_aavso_page():
+    """Server-rendered admin page: today's AAVSO batch, ready to download and
+    email to observations@aavso.org by hand. Prompts for the admin key
+    client-side and passes it as X-Admin-Key on every fetch — the page
+    itself carries no data until an admin key is entered."""
+    return Response(_ADMIN_AAVSO_HTML, mimetype="text/html")
+
+
+@app.route("/api/v1/admin/aavso-batches", methods=["GET"])
+@require_admin
+def api_admin_aavso_batches():
+    """Recent AAVSO batches, newest first. ?limit=N (default 20)."""
+    limit = min(int(request.args.get("limit", 20)), 100)
+    rows = db.query(
+        """SELECT id, submitted_at, n_obs, status, accepted, rejected, message,
+                  manually_submitted, manually_submitted_at,
+                  (file_text <> '') AS has_text
+             FROM aavso_batches
+            ORDER BY submitted_at DESC LIMIT %s""",
+        (limit,),
+    )
+    return jsonify({"batches": rows})
+
+
+@app.route("/api/v1/admin/aavso-batches/<int:batch_id>/download", methods=["GET"])
+@require_admin
+def api_admin_aavso_batch_download(batch_id):
+    row = db.query_one(
+        "SELECT submitted_at, file_text FROM aavso_batches WHERE id = %s", (batch_id,))
+    if not row or not row.get("file_text"):
+        return jsonify({"error": "batch not found or has no stored text"}), 404
+    stamp = re.sub(r"[^0-9A-Za-z]", "", row["submitted_at"])[:14]
+    return Response(
+        row["file_text"],
+        mimetype="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="aavso_batch_{stamp}.txt"'},
+    )
+
+
+@app.route("/api/v1/admin/aavso-batches/<int:batch_id>/mark-submitted", methods=["POST"])
+@require_admin
+def api_admin_aavso_batch_mark_submitted(batch_id):
+    row = db.query_one("SELECT id FROM aavso_batches WHERE id = %s", (batch_id,))
+    if not row:
+        return jsonify({"error": "batch not found"}), 404
+    db.execute(
+        "UPDATE aavso_batches SET manually_submitted = 1, manually_submitted_at = %s WHERE id = %s",
+        (_now(), batch_id),
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/api/v1/admin/sky-quality", methods=["GET"])
@@ -1328,7 +1552,7 @@ def api_admin_candidate_update(cand_id: int):
     next replan cycle.
     """
     from cloud import crossmatch as _cm
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     action = str(body.get("action") or "").lower()
     if action == "confirm":
         result = _cm.confirm_candidate(
@@ -1372,7 +1596,7 @@ def api_admin_asteroid_candidate_update(cand_id: int):
     submission (see GET /api/v1/mpc-files).
     """
     from cloud import moving_objects
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     action = str(body.get("action") or "").lower()
     if action == "confirm":
         result = moving_objects.confirm_candidate(
@@ -1419,7 +1643,7 @@ def api_admin_incident_update(incident_id: int):
         resolution_note free text
         resolver        name/email of person resolving
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     allowed = {"status", "root_cause", "resolution_note", "resolver"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -1530,6 +1754,10 @@ def api_telescopes():
 
 @app.errorhandler(Exception)
 def handle_unhandled_error(exc):
+    # A catch-all Exception handler also intercepts HTTPExceptions (404, 405,
+    # 413, ...) — those must pass through with their real status, not 500.
+    if isinstance(exc, _HTTPException):
+        return exc
     logger.error("Unhandled exception: %s", exc, exc_info=True)
     return jsonify({"error": "internal server error"}), 500
 
@@ -1538,7 +1766,7 @@ def handle_unhandled_error(exc):
 
 @app.route("/api/v1/auth/register", methods=["POST"])
 def api_auth_register():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = auth.register(
             body.get("email", ""),
@@ -1570,7 +1798,7 @@ def api_admin_calibration_rollback(model_version):
 
 @app.route("/api/v1/auth/login", methods=["POST"])
 def api_auth_login():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = auth.login(body.get("email", ""), body.get("password", ""))
     except ValueError as exc:
@@ -1614,7 +1842,7 @@ def api_me_nodes(user):
     """All nodes this member has claimed."""
     rows = db.query(
         """SELECT n.node_id, n.telescope_model, n.telescope_name, n.city, n.country, n.status,
-                  n.last_heartbeat, n.last_conditions, n.portable, n.vacation_until,
+                  n.last_heartbeat, n.last_conditions, n.portable, n.vacation_until, n.vacation_from,
                   n.session_city, n.session_site_name, n.previous_locations,
                   nm.claimed_at, nm.display_name
            FROM nodes n
@@ -1683,7 +1911,7 @@ def api_me_claim_node(user, node_id):
     Claim a node by presenting its api_key.
     The member must know the node_id and api_key returned at registration.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     node = registry.authenticate(node_id, body.get("api_key", ""))
     if node is None:
         return jsonify({"error": "invalid node credentials"}), 401
@@ -1713,7 +1941,7 @@ def api_me_attach_node(user):
 
     Returns {node_id, api_key} for the desktop app to install on the local agent.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
 
     existing_id = str(body.get("node_id") or "").strip()
     existing_key = str(body.get("api_key") or "").strip()
@@ -1784,7 +2012,7 @@ def api_me_attach_node(user):
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     if not db.query_one(
@@ -1818,7 +2046,7 @@ def api_me_start_session(user, node_id):
     """
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         lat = float(body["lat"])
         lon = float(body["lon"])
@@ -1849,21 +2077,31 @@ def api_me_end_session(user, node_id):
 @app.route("/api/v1/me/nodes/<node_id>/vacation", methods=["PUT"])
 @auth.require_member
 def api_me_set_vacation(user, node_id):
-    """Put a node on vacation until *until_date* (ISO date 'YYYY-MM-DD').
+    """Schedule a node's vacation from *from_date* through *until_date* (ISO 'YYYY-MM-DD').
 
-    Body: {until_date: "YYYY-MM-DD"}
+    Body: {until_date: "YYYY-MM-DD", from_date: "YYYY-MM-DD"}
+    from_date is optional and defaults to today (immediate start), so a
+    member can plan a future trip in advance instead of only picking a
+    return date.
     """
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     until_date = str(body.get("until_date") or "").strip()
+    from_date = str(body.get("from_date") or "").strip()
     if not until_date:
         return jsonify({"error": "until_date required (YYYY-MM-DD)"}), 400
     import re as _re
-    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", until_date):
+    date_re = r"\d{4}-\d{2}-\d{2}"
+    if not _re.fullmatch(date_re, until_date):
         return jsonify({"error": "until_date must be YYYY-MM-DD"}), 400
-    registry.set_vacation(node_id, until_date)
-    return jsonify({"ok": True, "vacation_until": until_date})
+    if from_date and not _re.fullmatch(date_re, from_date):
+        return jsonify({"error": "from_date must be YYYY-MM-DD"}), 400
+    if from_date and from_date > until_date:
+        return jsonify({"error": "from_date must be on or before until_date"}), 400
+    registry.set_vacation(node_id, until_date, from_date)
+    return jsonify({"ok": True, "vacation_until": until_date,
+                     "vacation_from": from_date or None})
 
 
 @app.route("/api/v1/me/nodes/<node_id>/vacation", methods=["DELETE"])
@@ -1882,7 +2120,7 @@ def api_me_update_node(user, node_id):
     """Update member-specific settings for a claimed node (e.g. display name)."""
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     if "display_name" in body:
         display_name = str(body.get("display_name") or "").strip()[:80]
         db.execute(
@@ -2271,7 +2509,7 @@ def api_me_contribute_manifest(user):
     """Archive dedup: a bulk uploader sends the sha256 list of an image folder
     and learns which frames are new, so years of history upload without
     re-sending anything the network already has (contributions.sha256 UNIQUE)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     shas = body.get("sha256") or []
     if not isinstance(shas, list) or not shas:
         return jsonify({"error": "sha256 list required"}), 400
@@ -2366,7 +2604,7 @@ def api_admin_generate_code():
 @auth.require_member
 def api_me_science_program_suggestion(user):
     """Submit a science program idea from the member app."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     title = str(body.get("title") or "").strip()
     description = str(body.get("description") or "").strip()
     if not title or not description:
@@ -2401,7 +2639,7 @@ def api_admin_science_program_suggestions():
 @app.route("/api/v1/admin/science-program-suggestions/<int:suggestion_id>/status", methods=["PATCH"])
 @require_admin
 def api_admin_science_program_suggestion_status(suggestion_id: int):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = str(body.get("status") or "").strip()
     if status not in ("pending", "reviewed", "accepted", "declined"):
         return jsonify({"error": "status must be pending, reviewed, accepted, or declined"}), 400
@@ -2423,7 +2661,7 @@ def api_me_help_session(user):
 @auth.require_member
 def api_me_help_chat(user):
     """Send one help message to the OpenRouter assistant (5 user messages/week)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     try:
         result = help_chat.chat(
             user["user_id"],
@@ -2451,7 +2689,7 @@ def api_node_config_patches(node):
 @app.route("/api/v1/nodes/config-patches/<int:patch_id>/ack", methods=["POST"])
 @require_node
 def api_node_config_patch_ack(node, patch_id: int):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     ok = bool(body.get("ok", True))
     error = str(body.get("error") or "")[:500]
     help_chat.ack_patch(patch_id, node["node_id"], ok, error)
@@ -2461,7 +2699,7 @@ def api_node_config_patch_ack(node, patch_id: int):
 @app.route("/api/v1/me/notifications/prefs", methods=["PUT"])
 @auth.require_member
 def api_me_notification_prefs(user):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     fields, params = [], []
     for col in ("notification_email", "notification_push"):
         if col in body:
@@ -2484,13 +2722,18 @@ def api_me_delete(user):
     Permanently delete the member's account and all associated data.
     Requires the member to confirm by sending {"confirm": true} in the body.
     """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     if not body.get("confirm"):
         return jsonify({"error": "send {\"confirm\": true} to confirm deletion"}), 400
 
     uid = user["user_id"]
-    # Remove all member-owned data in dependency order.
+    # Remove all member-owned data in dependency order.  member_highlights and
+    # contributions both carry FK references to users — leaving them in place
+    # made the final DELETE FROM users fail with a foreign-key violation, so
+    # accounts with any activity could never actually be deleted.
     db.execute("DELETE FROM sessions WHERE user_id = %s", (uid,))
+    db.execute("DELETE FROM member_highlights WHERE user_id = %s", (uid,))
+    db.execute("DELETE FROM contributions WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM notifications WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM help_chat_messages WHERE user_id = %s", (uid,))
     db.execute("DELETE FROM science_program_suggestions WHERE user_id = %s", (uid,))

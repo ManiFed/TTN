@@ -176,8 +176,21 @@ def build_for_node(node_id: str, config: dict, force: bool = False) -> Optional[
 def store_outcomes(node_id: str, outcomes: list) -> dict:
     accepted = duplicates = rejected = 0
     touched_bundles = set()
+
+    def _frames(v) -> int:
+        # Untrusted counter: non-numeric, non-finite, or absurd values must
+        # not crash the insert or overflow the INTEGER column.
+        try:
+            n = int(float(v or 0))
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(n, 10**6))
+
     allowed = {"received", "started", "completed", "skipped", "failed", "cancelled"}
     for raw in outcomes[:1000]:
+        if not isinstance(raw, dict):
+            rejected += 1
+            continue
         attempt_id = str(raw.get("attempt_id") or "")
         state = str(raw.get("state") or "")
         if not attempt_id or state not in allowed:
@@ -197,8 +210,8 @@ def store_outcomes(node_id: str, outcomes: list) -> dict:
                     "frames_completed=%s,last_checkpoint=%s,failure_reason=%s,detail=%s,received_at=%s "
                     "WHERE attempt_id=%s",
                     (state, str(raw.get("finished_at") or ""),
-                     int(raw.get("frames_attempted") or 0),
-                     int(raw.get("frames_completed") or 0),
+                     _frames(raw.get("frames_attempted")),
+                     _frames(raw.get("frames_completed")),
                      str(raw.get("last_checkpoint") or ""),
                      str(raw.get("failure_reason") or "")[:500],
                      json.dumps(raw.get("detail") or {}), _iso(_now_dt()), attempt_id))
@@ -219,7 +232,7 @@ def store_outcomes(node_id: str, outcomes: list) -> dict:
             (attempt_id, node_id, str(raw.get("item_id") or ""),
              str(raw.get("bundle_id") or ""), str(raw.get("task_id") or ""),
              state, str(raw.get("started_at") or ""), str(raw.get("finished_at") or ""),
-             int(raw.get("frames_attempted") or 0), int(raw.get("frames_completed") or 0),
+             _frames(raw.get("frames_attempted")), _frames(raw.get("frames_completed")),
              str(raw.get("last_checkpoint") or ""),
              str(raw.get("failure_reason") or "")[:500],
              json.dumps(raw.get("detail") or {}), _iso(_now_dt())))

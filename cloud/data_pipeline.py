@@ -116,7 +116,7 @@ def ingest_measurement(node_id: str, payload: dict,
                 "snr": m.snr,
             },
         )
-    cross_validate(m.target_name, m.bjd)
+    cross_validate(m.target_name, m.bjd, m.filter)
     if row_id and m.response_fingerprint:
         try:
             from cloud import calibration
@@ -188,16 +188,29 @@ def _maybe_create_highlights(measurement_id: int, node_id: str,
 
 # ── Cross-validation ───────────────────────────────────────────────────────────
 
-def cross_validate(target_name: str, bjd: float) -> None:
+def cross_validate(target_name: str, bjd: float,
+                   filter_name: Optional[str] = None) -> None:
     """
     Compare all measurements of a target within the co-temporal window around
     `bjd`, across nodes.  Marks each as consistent / outlier / single.
+
+    Only measurements in the *same filter* are compared: a B-band point can
+    legitimately sit several tenths of a magnitude from the V-band median
+    purely from stellar colour, and must not be flagged as an outlier for it.
     """
-    rows = db.query(
-        """SELECT id, node_id, magnitude, uncertainty FROM measurements
-           WHERE target_name = %s AND bjd BETWEEN %s AND %s""",
-        (target_name, bjd - XVAL_WINDOW_DAYS, bjd + XVAL_WINDOW_DAYS),
-    )
+    if filter_name:
+        rows = db.query(
+            """SELECT id, node_id, magnitude, uncertainty FROM measurements
+               WHERE target_name = %s AND bjd BETWEEN %s AND %s AND filter = %s""",
+            (target_name, bjd - XVAL_WINDOW_DAYS, bjd + XVAL_WINDOW_DAYS,
+             filter_name),
+        )
+    else:
+        rows = db.query(
+            """SELECT id, node_id, magnitude, uncertainty FROM measurements
+               WHERE target_name = %s AND bjd BETWEEN %s AND %s""",
+            (target_name, bjd - XVAL_WINDOW_DAYS, bjd + XVAL_WINDOW_DAYS),
+        )
     if len(rows) < 2:
         for r in rows:
             db.execute("UPDATE measurements SET validation_status='single' WHERE id=%s",
@@ -258,23 +271,28 @@ def light_curve(target_name: str, days: float = 365.0) -> list:
     return rows
 
 
-def compute_consensus(target_name: str, bjd_center: float) -> Optional[dict]:
+def compute_consensus(target_name: str, bjd_center: float,
+                      filter_name: Optional[str] = None) -> Optional[dict]:
     """
     Inverse-variance-weighted consensus of all consistent co-temporal measurements.
 
     Returns a dict with bjd, magnitude, uncertainty, n_nodes, node_ids when 2+
     consistent measurements exist in the cross-validation window; else None.
+    Pass filter_name to keep the average single-band — averaging magnitudes
+    across different filters produces a value in no physical system.
     """
-    rows = db.query(
-        """SELECT node_id, bjd, magnitude, uncertainty FROM measurements
+    sql = """SELECT node_id, bjd, magnitude, uncertainty FROM measurements
            WHERE target_name = %s
              AND bjd BETWEEN %s AND %s
              AND validation_status = 'consistent'
-             AND quality_flag IN ('good', 'acceptable')""",
-        (target_name,
-         bjd_center - XVAL_WINDOW_DAYS,
-         bjd_center + XVAL_WINDOW_DAYS),
-    )
+             AND quality_flag IN ('good', 'acceptable')"""
+    params: tuple = (target_name,
+                     bjd_center - XVAL_WINDOW_DAYS,
+                     bjd_center + XVAL_WINDOW_DAYS)
+    if filter_name:
+        sql += " AND filter = %s"
+        params = params + (filter_name,)
+    rows = db.query(sql, params)
     if len(rows) < 2:
         return None
 
@@ -303,10 +321,10 @@ def consensus_light_curve(target_name: str, days: float = 365.0) -> list:
     measurements exist in the same co-temporal window (~43 min).
     """
     rows = db.query(
-        """SELECT bjd FROM measurements
+        """SELECT bjd, filter FROM measurements
            WHERE target_name = %s AND validation_status = 'consistent'
              AND quality_flag IN ('good', 'acceptable')
-           ORDER BY bjd""",
+           ORDER BY filter, bjd""",
         (target_name,),
     )
     if not rows:
@@ -315,12 +333,22 @@ def consensus_light_curve(target_name: str, days: float = 365.0) -> list:
         latest = max(r["bjd"] for r in rows)
         rows = [r for r in rows if latest - r["bjd"] <= days]
 
-    clusters: list[float] = []
+    # Cluster per filter so a consensus point never averages different bands.
+    clusters: list[tuple[float, Optional[str]]] = []
     for r in rows:
-        if not clusters or r["bjd"] - clusters[-1] > XVAL_WINDOW_DAYS:
-            clusters.append(r["bjd"])
+        filt = r.get("filter")
+        if (not clusters or clusters[-1][1] != filt
+                or r["bjd"] - clusters[-1][0] > XVAL_WINDOW_DAYS):
+            clusters.append((r["bjd"], filt))
 
-    return [p for p in (compute_consensus(target_name, c) for c in clusters) if p]
+    points = []
+    for c_bjd, c_filt in clusters:
+        p = compute_consensus(target_name, c_bjd, c_filt)
+        if p:
+            p["filter"] = c_filt
+            points.append(p)
+    points.sort(key=lambda p: p["bjd"])
+    return points
 
 
 # ── Patrol alert storage ───────────────────────────────────────────────────────
@@ -405,9 +433,9 @@ def submit_pending_batch(config: dict) -> dict:
 
     db.execute(
         """INSERT INTO aavso_batches
-               (submitted_at, file_path, n_obs, status, accepted, rejected, message)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-        (_now(), str(file_path), len(rows), status, accepted, rejected, message),
+               (submitted_at, file_path, file_text, n_obs, status, accepted, rejected, message)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (_now(), str(file_path), text, len(rows), status, accepted, rejected, message),
     )
     logger.info("AAVSO batch: %d obs, status=%s (%s)", len(rows), status, message)
     return {"status": status, "n_obs": len(rows), "file_path": str(file_path),
