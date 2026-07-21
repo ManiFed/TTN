@@ -30,6 +30,11 @@ class FakeCloud:
         # Status the fake returns for member contribution uploads (200 ok,
         # 409 duplicate, 429 cap) — set per-test.
         self.contrib_status = 200
+        # Recovery-token rekey: register() hands out this token; rekey()
+        # accepts it once and rotates to a new one, mirroring the real
+        # cloud/registry.py rekey_node() so tests can exercise the full
+        # silent-recovery loop without a real database.
+        self.recovery_token = "recovery_test01"
 
         fake = self
 
@@ -110,6 +115,17 @@ class FakeCloud:
                 if fake.mode == "reject":
                     self._reply(409, {"error": "activation code already used"})
                     return
+                if self.path == "/api/v1/nodes/rekey":
+                    with fake._lock:
+                        body = fake.requests[-1]["body"]
+                    if body.get("node_id") == "node_test01" and \
+                            body.get("recovery_token") == fake.recovery_token:
+                        fake.recovery_token = fake.recovery_token + "_rotated"
+                        self._reply(200, {"api_key": "key_test01_rekeyed",
+                                          "recovery_token": fake.recovery_token})
+                    else:
+                        self._reply(401, {"error": "invalid node_id or recovery_token"})
+                    return
                 if fake.mode == "unauthorized" and self.path != "/api/v1/nodes/register":
                     self._reply(401, {"error": "invalid node credentials"})
                     return
@@ -118,7 +134,8 @@ class FakeCloud:
                     self._stream()
                 elif self.path == "/api/v1/nodes/register":
                     self._reply(200, {"node_id": "node_test01",
-                                      "api_key": "key_test01"})
+                                      "api_key": "key_test01",
+                                      "recovery_token": fake.recovery_token})
                 elif self.path == "/api/v1/nodes/heartbeat":
                     self._reply(200, {"ok": True})
                 elif self.path == "/api/v1/measurements":
