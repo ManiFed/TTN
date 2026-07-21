@@ -87,9 +87,13 @@ class CloudCommGauntletTest(TempCwdTestCase):
         self.assertGreaterEqual(telemetry.counters().get("registration_failed", 0), 1)
 
     def test_rejected_credentials_clear_and_reregister(self):
-        """A 401 'invalid node credentials' means the stored key is dead, not
-        transiently unavailable — the node must drop it and register fresh
-        rather than heartbeat against it forever (see _handle_unauthorized)."""
+        """A 401 'invalid node credentials' with no recovery_token available
+        (e.g. a node registered before recovery_token existed) means the
+        stored key is dead, not transiently unavailable, and there's no way
+        to heal it in place — the node must drop it and register fresh
+        rather than heartbeat against it forever (see _handle_unauthorized).
+        See test_rejected_credentials_recover_via_recovery_token_without_losing_identity
+        for the (now more common) case where recovery works instead."""
         keystore: dict = {}
         with patch.object(keyring, "set_password",
                           side_effect=lambda svc, acct, pw: keystore.__setitem__((svc, acct), pw)), \
@@ -100,6 +104,10 @@ class CloudCommGauntletTest(TempCwdTestCase):
             comm = self._comm()
             self.assertTrue(comm._ensure_registered())
             self.assertTrue(keystore)
+            # Simulate a pre-recovery-token node: no recovery_token on file,
+            # so rekey isn't an option and the fallback path is what's tested.
+            comm._recovery_token = ""
+            keystore.pop(("the-telescope-node", "cloud-recovery-token"), None)
 
             self.fake.mode = "unauthorized"
             with self.assertRaises(RuntimeError):
@@ -120,6 +128,55 @@ class CloudCommGauntletTest(TempCwdTestCase):
             self.assertTrue(comm._ensure_registered())
             self.assertNotEqual(comm._node_id, "")
             self.assertEqual(len(self.fake.paths("/register")), 1)
+
+    def test_rejected_credentials_recover_via_recovery_token_without_losing_identity(self):
+        """When a recovery_token is on hand, a rejected api_key must be healed
+        in place -- same node_id, no re-registration, no lost history. This
+        is the whole point of recovery_token: unlike the bare clear-and-
+        reregister fallback above, the node never becomes a new, unlinked
+        node that a human has to go re-attach in the app."""
+        keystore: dict = {}
+        with patch.object(keyring, "set_password",
+                          side_effect=lambda svc, acct, pw: keystore.__setitem__((svc, acct), pw)), \
+             patch.object(keyring, "get_password",
+                          side_effect=lambda svc, acct: keystore.get((svc, acct))), \
+             patch.object(keyring, "delete_password",
+                          side_effect=lambda svc, acct: keystore.pop((svc, acct), None)):
+            comm = self._comm()
+            self.assertTrue(comm._ensure_registered())
+            original_node_id = comm._node_id
+            self.assertEqual(comm._recovery_token, "recovery_test01")
+
+            # The api_key is now dead (e.g. a DB reset invalidated it), but the
+            # recovery_token is a separate secret and still good. The failing
+            # call itself still raises (same as the no-recovery-token case) --
+            # what matters is that credentials are healed in place for the
+            # *next* attempt, which the heartbeat loop makes ~1 cycle later.
+            self.fake.mode = "unauthorized"
+            self.fake.clear()
+            with self.assertRaises(RuntimeError):
+                comm._post("/api/v1/nodes/heartbeat", {"conditions": {}, "state": {}})
+
+            self.assertEqual(comm._node_id, original_node_id)
+            self.assertEqual(comm._api_key, "key_test01_rekeyed")
+            self.assertTrue(comm.status["registered"])
+            self.assertEqual(self.fake.paths("/register"), [])
+            self.assertEqual(len(self.fake.paths("/rekey")), 1)
+            self.assertGreaterEqual(telemetry.counters().get("credentials_rekeyed", 0), 1)
+
+            # The rotated recovery_token survived too, in the keyring.
+            self.assertEqual(
+                keystore.get(("the-telescope-node", "cloud-recovery-token")),
+                "recovery_test01_rotated")
+
+            # And the very next heartbeat goes through cleanly on the healed
+            # api_key -- no re-registration, no re-linking, nothing for a
+            # human to notice.
+            self.fake.mode = "ok"
+            self.fake.clear()
+            ok = comm._post("/api/v1/nodes/heartbeat", {"conditions": {}, "state": {}})
+            self.assertEqual(ok, {"ok": True})
+            self.assertEqual(self.fake.paths("/register"), [])
 
     def test_registration_outage_recovers_after_backoff(self):
         self.fake.mode = "http500"

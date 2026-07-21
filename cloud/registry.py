@@ -74,9 +74,14 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
 
     if existing:
         node_id, api_key = existing["node_id"], existing["api_key"]
+        recovery_token = existing.get("recovery_token") or secrets.token_urlsafe(32)
     else:
         node_id = node.node_id or f"node_{secrets.token_hex(4)}"
         api_key = secrets.token_urlsafe(32)
+        # Lets the node agent silently recover from a revoked api_key later
+        # (see rekey_node) without losing this node_id's history -- kept
+        # separately from api_key so routine traffic never exposes it.
+        recovery_token = secrets.token_urlsafe(32)
 
     mpsas, bortle = fetch_light_pollution(node.latitude, node.longitude, lp_api_key)
 
@@ -102,7 +107,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
 
     db.execute(
         """INSERT INTO nodes (
-               node_id, api_key, owner_name, owner_email,
+               node_id, api_key, recovery_token, owner_name, owner_email,
                latitude, longitude, elevation, city, country, utc_offset_hours,
                light_pollution_mpsas, bortle,
                tier, telescope_model, telescope_serial, telescope_name,
@@ -113,7 +118,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                has_dew_heater, has_power_mgmt, has_enclosure, has_ups,
                horizon_mask, scheduling_notes, preferred_targets,
                portable, status, vacation_until, vacation_from, registered_at, last_heartbeat)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id) DO UPDATE SET
                owner_name=excluded.owner_name, owner_email=excluded.owner_email,
                latitude=excluded.latitude, longitude=excluded.longitude,
@@ -147,7 +152,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                portable=excluded.portable,
                last_heartbeat=excluded.last_heartbeat""",
         (
-            node_id, api_key, node.owner_name, node.owner_email,
+            node_id, api_key, recovery_token, node.owner_name, node.owner_email,
             node.latitude, node.longitude, node.elevation,
             node.city, node.country, node.utc_offset_hours,
             mpsas, bortle,
@@ -180,7 +185,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
         tier, node.telescope_model,
         mpsas, bortle,
     )
-    return {"node_id": node_id, "api_key": api_key}
+    return {"node_id": node_id, "api_key": api_key, "recovery_token": recovery_token}
 
 
 # ── Authentication ─────────────────────────────────────────────────────────────
@@ -193,6 +198,32 @@ def authenticate(node_id: str, api_key: str) -> Optional[dict]:
     if row is None or not secrets.compare_digest(row["api_key"], api_key):
         return None
     return row
+
+
+def rekey_node(node_id: str, recovery_token: str) -> Optional[dict]:
+    """Issue a fresh api_key for node_id, proven by its recovery_token instead
+    of the (now-dead) api_key. Preserves node_id, and with it every bit of the
+    node's history -- unlike falling back to a brand new registration.
+
+    Rotates recovery_token too, so a leaked one-time use doesn't grant
+    standing access -- the caller must persist the new one to keep the
+    ability to self-recover again later. Returns {"api_key", "recovery_token"},
+    or None if the token is wrong or the node never had one (nodes registered
+    before this existed)."""
+    if not node_id or not recovery_token:
+        return None
+    row = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
+    if (row is None or not row.get("recovery_token")
+            or not secrets.compare_digest(row["recovery_token"], recovery_token)):
+        return None
+    new_api_key = secrets.token_urlsafe(32)
+    new_recovery_token = secrets.token_urlsafe(32)
+    db.execute(
+        "UPDATE nodes SET api_key = %s, recovery_token = %s WHERE node_id = %s",
+        (new_api_key, new_recovery_token, node_id),
+    )
+    logger.info("Node %s recovered via recovery_token — issued fresh api_key", node_id)
+    return {"api_key": new_api_key, "recovery_token": new_recovery_token}
 
 
 # ── Heartbeats ─────────────────────────────────────────────────────────────────

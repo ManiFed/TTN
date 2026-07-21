@@ -402,6 +402,32 @@ def api_register():
     return jsonify(creds)
 
 
+@app.route("/api/v1/nodes/rekey", methods=["POST"])
+def api_rekey():
+    """Silent recovery for a node whose api_key the cloud has rejected.
+
+    Proven by recovery_token (a separate secret issued at registration,
+    never sent on routine calls) instead of the dead api_key, so the node
+    agent can recover on its own -- no human re-linking, no lost history,
+    because node_id never changes. Nodes registered before this endpoint
+    existed have no recovery_token and fall back to re-registering fresh.
+
+    Same abuse shape as pairing-token claims (small-ish secret space,
+    a hit hands out live credentials), so it gets the same IP throttle.
+    """
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
+    if _pair_claim_limited(ip):
+        return jsonify({"error": "too many attempts — try again later"}), 429
+    body = _json_body()
+    node_id = str(body.get("node_id") or "").strip()
+    recovery_token = str(body.get("recovery_token") or "").strip()
+    result = registry.rekey_node(node_id, recovery_token)
+    if result is None:
+        _pair_claim_record_miss(ip)
+        return jsonify({"error": "invalid node_id or recovery_token"}), 401
+    return jsonify(result)
+
+
 @app.route("/api/v1/nodes/characterization", methods=["POST"])
 @require_node
 def api_characterization(node):
