@@ -202,7 +202,10 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     (sky temperature, detected cloud, safety state, utc_offset_hours, ...).
 
     Does not override disabled/contributor status — those are app-managed states.
-    Wakes a sleeping portable node to active when it starts heartbeating.
+    Does not wake a sleeping portable node — the owner starts it explicitly
+    for tonight (start_session); merely powering on and heartbeating is not
+    enough, otherwise a portable node left running at home would show as
+    online without anyone choosing to observe.
     Auto-applies a scheduled vacation once vacation_from arrives, and clears
     it once vacation_until has passed — both are plain ISO date strings, so
     lexicographic comparison against today's date works directly.
@@ -212,7 +215,7 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     sql = (
         "UPDATE nodes SET last_heartbeat = %s, "
         "status = CASE "
-        "WHEN status IN ('disabled', 'contributor') THEN status "
+        "WHEN status IN ('disabled', 'contributor', 'sleeping') THEN status "
         "WHEN vacation_until <> '' AND vacation_until >= %s "
         "     AND (vacation_from = '' OR vacation_from <= %s) THEN 'vacation' "
         "ELSE 'active' END"
@@ -588,4 +591,33 @@ def clear_vacation(node_id: str) -> None:
             (node_id,),
         )
     logger.info("Node %s vacation cleared → %s", node_id, new_status)
+
+
+def effective_status(node_row: dict) -> str:
+    """The node's status as it should be displayed right now.
+
+    The stored `status` column only flips out of 'vacation' as a side effect
+    of the next heartbeat (see heartbeat() above), so a node that stops
+    heartbeating — offline, unplugged, a portable node left sleeping — can
+    show a stale 'vacation until <past date>' indefinitely even though the
+    window has closed. Recompute from the date fields directly, the same way
+    network_planner.build_node_context() already does for scheduling, so the
+    member-facing view never lags behind the calendar.
+    """
+    status = node_row.get("status", "active")
+    if status != "vacation":
+        return status
+    vac_until = (node_row.get("vacation_until") or "").strip()
+    if not vac_until:
+        return status
+    try:
+        today = datetime.now(timezone.utc).date()
+        vac_from = (node_row.get("vacation_from") or "").strip()
+        from_d = datetime.fromisoformat(vac_from).date() if vac_from else today
+        until_d = datetime.fromisoformat(vac_until).date()
+    except ValueError:
+        return status
+    if from_d <= today <= until_d:
+        return status
+    return "sleeping" if node_row.get("portable") else "active"
 

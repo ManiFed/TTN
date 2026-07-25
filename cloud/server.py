@@ -893,7 +893,7 @@ def _eligible_interrupt_nodes(target: dict, min_score: float = 0.35) -> list[str
         "discovered_at": _now(),
     }
     for node in registry.list_nodes():
-        if node.get("status") in ("disabled", "vacation"):
+        if registry.effective_status(node) in ("disabled", "vacation"):
             continue
         try:
             night = night_window(node["latitude"], node["longitude"])
@@ -1851,6 +1851,7 @@ def api_me_nodes(user):
         (user["user_id"],),
     )
     for r in rows:
+        r["status"] = registry.effective_status(r)
         r["online"] = registry.is_online(r)
         r["portable"] = bool(r.get("portable"))
         r["previous_locations"] = db.loads(r.get("previous_locations"), [])
