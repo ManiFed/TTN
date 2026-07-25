@@ -4,7 +4,7 @@
 
 alpaca:
   discovery_port: 32227
-  discovery_timeout: 5
+  discovery_timeout: 8
   api_version: 1
   default_server:
     address: ''          # left blank: auto-discovered from Seestar Station Mode

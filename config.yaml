@@ -9,10 +9,10 @@ aavso:
 alpaca:
   api_version: 1
   default_server:
-    address: 172.22.6.32
+    address: ''          # left blank: auto-discovered from Seestar Station Mode
     port: 32323
   discovery_port: 32227
-  discovery_timeout: 5
+  discovery_timeout: 8
 autofocus:
   exposure_s: 2
   max_position: null

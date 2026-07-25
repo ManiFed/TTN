@@ -73,6 +73,7 @@ def _utc_offset_hours() -> float:
 _STATE_FILE = Path("data") / "cloud_state.json"
 _KEYRING_SERVICE = "the-telescope-node"
 _KEYRING_ACCOUNT = "cloud-api-key"
+_KEYRING_ACCOUNT_RECOVERY = "cloud-recovery-token"
 _QUEUE_FILE = Path("data") / "cloud_upload_queue.json"
 _QUEUE_MAX = 500
 # Survey source lists are ~10-50 KB each, so this queue is capped by bytes
@@ -124,6 +125,7 @@ class CloudCommunicator:
         # that resolves from the environment.  An unset var expands to "" so the
         # node falls through to auto-registration as if no key were configured.
         self._api_key = str(expand_env(cloud_cfg.get("api_key", "")) or "")
+        self._recovery_token: str = ""
         self._pair_token: str = ""
         self._load_state()
 
@@ -305,16 +307,25 @@ class CloudCommunicator:
             return False
         self._register_failures = 0
         self._register_next_attempt = 0.0
-        self.install_credentials(resp["node_id"], resp["api_key"])
+        self.install_credentials(resp["node_id"], resp["api_key"],
+                                  recovery_token=resp.get("recovery_token", ""))
         logger.info("Registered with cloud as %s (unlinked — use app Connect telescope)",
                     self._node_id)
         self._telemetry_event("registered", "info", {"node_id": self._node_id})
         return True
 
-    def install_credentials(self, node_id: str, api_key: str) -> None:
-        """Install cloud credentials from the signed-in member app (or register)."""
+    def install_credentials(self, node_id: str, api_key: str,
+                             recovery_token: Optional[str] = None) -> None:
+        """Install cloud credentials from the signed-in member app (or register).
+
+        recovery_token is omitted (not cleared) when the caller doesn't have
+        one to offer -- e.g. the app pushing credentials for an existing node
+        doesn't know its recovery_token, and dropping a good one here would
+        break self-recovery for no reason."""
         self._node_id = str(node_id or "").strip()
         self._api_key = str(api_key or "").strip()
+        if recovery_token:
+            self._recovery_token = str(recovery_token).strip()
         self._save_state()
         self.status["registered"] = bool(self._node_id and self._api_key)
         self.status["node_id"] = self._node_id
@@ -337,6 +348,8 @@ class CloudCommunicator:
                     keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, state["api_key"])
                     self._api_key = state["api_key"]
                     migrated_legacy_secret = True
+                self._recovery_token = keyring.get_password(
+                    _KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY) or ""
             self._pair_token = state.get("pair_token", "")
         except (OSError, ValueError, keyring.errors.KeyringError) as exc:
             logger.warning("Could not load cloud credentials from the system keyring: %s", exc)
@@ -357,6 +370,14 @@ class CloudCommunicator:
                 logger.warning(
                     "Could not persist cloud API key to the system keyring; "
                     "it will not survive a restart: %s", exc)
+        if self._recovery_token:
+            try:
+                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY,
+                                      self._recovery_token)
+            except keyring.errors.KeyringError as exc:
+                logger.warning(
+                    "Could not persist cloud recovery token to the system keyring; "
+                    "a future revoked api_key won't self-heal without it: %s", exc)
         payload = {"node_id": self._node_id, "pair_token": self._pair_token}
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
@@ -395,6 +416,8 @@ class CloudCommunicator:
         import requests
         resp = requests.post(self._url + path, json=payload,
                              headers=self._headers() if auth else {}, timeout=30)
+        if auth and resp.status_code == 401:
+            self._handle_unauthorized(resp)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
@@ -402,9 +425,75 @@ class CloudCommunicator:
     def _get(self, path: str) -> dict:
         import requests
         resp = requests.get(self._url + path, headers=self._headers(), timeout=30)
+        if resp.status_code == 401:
+            self._handle_unauthorized(resp)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
+
+    def _handle_unauthorized(self, resp) -> None:
+        """The cloud rejects our node_id/api_key outright (as opposed to a
+        transient/5xx/429 failure) — the stale credential will never start
+        working again on retry. Try to recover silently first: if we hold a
+        recovery_token for this exact node_id, trade it for a fresh api_key
+        and keep going under the same identity (same history, no re-linking).
+        Only if that's unavailable or also rejected do we fall back to
+        wiping credentials and registering as a brand new, unlinked node."""
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if body.get("error") != "invalid node credentials":
+            return
+        if self._recovery_token and self._rekey():
+            return
+        self._clear_credentials("invalid node credentials")
+
+    def _rekey(self) -> bool:
+        """POST the recovery_token to trade it for a fresh api_key without
+        losing node_id (see cloud/registry.py rekey_node). Deliberately not
+        routed through _post()/_get() -- those call _handle_unauthorized on
+        401, which would recurse back into this method."""
+        import requests
+        try:
+            resp = requests.post(
+                self._url + "/api/v1/nodes/rekey",
+                json={"node_id": self._node_id, "recovery_token": self._recovery_token},
+                timeout=30)
+        except requests.RequestException as exc:
+            logger.warning("Recovery-token rekey request failed: %s", exc)
+            return False
+        if resp.status_code != 200:
+            logger.warning("Recovery-token rekey rejected (HTTP %d) — "
+                            "falling back to fresh registration", resp.status_code)
+            return False
+        body = resp.json()
+        self.install_credentials(self._node_id, body["api_key"],
+                                  recovery_token=body.get("recovery_token", ""))
+        logger.info("Recovered node %s via recovery_token — same identity, no re-linking needed",
+                    self._node_id)
+        self._telemetry_event("credentials_rekeyed", "info", {"node_id": self._node_id})
+        return True
+
+    def _clear_credentials(self, reason: str) -> None:
+        logger.warning("Cloud rejected stored node credentials (%s) — "
+                       "clearing and re-registering", reason)
+        self._node_id = ""
+        self._api_key = ""
+        self._recovery_token = ""
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
+        except keyring.errors.KeyringError:
+            pass
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY)
+        except keyring.errors.KeyringError:
+            pass
+        self._save_state()
+        self.status["registered"] = False
+        self.status["node_id"] = ""
+        self.status["error"] = f"credentials rejected by cloud ({reason}) — re-registering"
+        self._telemetry_event("credentials_rejected", "error", {"reason": reason})
 
     # ── Heartbeat loop ─────────────────────────────────────────────────────────
 

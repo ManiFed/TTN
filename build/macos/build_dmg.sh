@@ -151,10 +151,12 @@ if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
 fi
 
 # pkgbuild only runs scripts named exactly "preinstall" / "postinstall"
-# (no .sh extension). Stage a copy so the repo can keep postinstall.sh.
+# (no .sh extension). Stage copies so the repo can keep the .sh names.
 SCRIPTS_STAGING="${DIST_DIR}/pkg_scripts"
 rm -rf "${SCRIPTS_STAGING}"
 mkdir -p "${SCRIPTS_STAGING}"
+cp "${BUILD_DIR}/preinstall.sh" "${SCRIPTS_STAGING}/preinstall"
+chmod 755 "${SCRIPTS_STAGING}/preinstall"
 cp "${BUILD_DIR}/postinstall.sh" "${SCRIPTS_STAGING}/postinstall"
 chmod 755 "${SCRIPTS_STAGING}/postinstall"
 

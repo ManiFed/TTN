@@ -10,9 +10,12 @@ class NodeAgentClient {
   final http.Client _http;
 
   Future<NodeAgentStatus> status() async {
+    // /api/status does real work on the agent (camera state, commissioning
+    // checks, AAVSO, etc.) and can be slow right after other agent activity,
+    // so give it more room than a simple health check would need.
     final response = await _http
         .get(_base.replace(path: '/api/status'))
-        .timeout(const Duration(seconds: 3));
+        .timeout(const Duration(seconds: 8));
     if (response.statusCode != 200) {
       throw NodeAgentException(
         'The local node service returned ${response.statusCode}.',

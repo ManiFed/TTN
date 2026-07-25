@@ -1067,7 +1067,10 @@ image_watcher:
 ## Troubleshooting
 
 ### "No ALPACA servers found"
-- Verify the Seestar is powered on and on the same subnet
+- Verify the Seestar is in **Station mode** (joined to your home WiFi), not its own AP/hotspot. The native ALPACA server only comes up in Station mode; the Seestar app shows "connected" in either mode, so that alone doesn't tell you which one you're in.
+- Verify the Seestar's firmware is up to date — native ALPACA support requires a recent firmware version.
+- Verify the Seestar is powered on and on the same subnet as the node machine
+- Bump `alpaca.discovery_timeout` in `config.yaml` to 8–10s if discovery is intermittent — the native firmware responder can be slower to answer than third-party ALPACA servers
 - Some routers block UDP broadcast; check with `tcpdump -i en0 udp port 32227`
 - macOS may require allowing Python in System Preferences → Privacy & Security
 
@@ -1129,7 +1132,7 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Node Agent | Python 3.10+ / Flask | Runs Windows, macOS, Linux; pip only |
-| Telescope control | ALPACA REST via seestar_alp | Vendor-neutral; replaceable in Phase 4 |
+| Telescope control | ALPACA REST — Seestar's native server (Station mode) or [seestar_alp](https://github.com/smart-underworld/seestar_alp) | Vendor-neutral; node agent is a pure ALPACA client either way |
 | Plate solving | ASTAP + D50/D80 catalogue | Fast, offline, accurate on Seestar images |
 | Image stacking | NumPy + RANSAC | Sub-pixel alignment, no external binaries |
 | Photometry | astropy + custom aperture code | Differential against AAVSO/Gaia comp stars |

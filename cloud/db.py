@@ -412,6 +412,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("nodes", "session_city",         "TEXT DEFAULT ''"),
     ("nodes", "session_site_name",    "TEXT DEFAULT ''"),
     ("nodes", "previous_locations",   "TEXT DEFAULT '[]'"),
+    ("nodes", "recovery_token",       "TEXT DEFAULT ''"),
     ("activation_codes", "portable",  "INTEGER DEFAULT 0"),
     ("activation_codes", "telescope_display_name", "TEXT DEFAULT ''"),
     ("node_members", "display_name", "TEXT DEFAULT ''"),
