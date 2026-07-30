@@ -314,6 +314,15 @@ class CloudCommunicator:
         self._telemetry_event("registered", "info", {"node_id": self._node_id})
         return True
 
+    def credentials(self) -> tuple:
+        """Current (node_id, api_key). Either may be "" when unregistered.
+
+        For the local member app, which needs them to claim this node rather
+        than register a duplicate. The api_key is never put in `status`,
+        which the dashboard serves widely.
+        """
+        return self._node_id, self._api_key
+
     def install_credentials(self, node_id: str, api_key: str,
                              recovery_token: Optional[str] = None) -> None:
         """Install cloud credentials from the signed-in member app (or register).

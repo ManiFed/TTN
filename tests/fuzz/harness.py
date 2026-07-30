@@ -41,7 +41,13 @@ safety:
   reconnect_delay: 0.5
   park_at_dawn: false
   observer: {{latitude: 31.5, longitude: -99.2}}
-observatory: {{}}
+# A real node has a location (set by the owner, or auto-detected from IP on
+# first run), which is what lets it self-register with the cloud.
+observatory:
+  latitude: 31.5
+  longitude: -99.2
+  elevation: 500
+  telescope: ZWO Seestar S50
 cloud:
   enabled: true
   url: {cloud_url}
@@ -163,6 +169,11 @@ class NodeHarness:
         journey itself instead of jumping straight to observing.
         """
         import os
+        # The node addresses config.yaml, data/ and logs/ relative to cwd, so
+        # the harness has to move into its scratch dir. Remember where we came
+        # from: leaving cwd inside a temp dir leaks into every later test in
+        # the same process, which silently breaks ones that use relative paths.
+        self._orig_cwd = os.getcwd()
         os.chdir(self.workdir)
         restrict_network_to_localhost()
 
@@ -257,6 +268,13 @@ class NodeHarness:
                 if closer is not None:
                     closer.stop()
             except Exception:
+                pass
+        orig = getattr(self, "_orig_cwd", "")
+        if orig:
+            import os
+            try:
+                os.chdir(orig)
+            except OSError:
                 pass
 
     def _schedule_items(self) -> list[dict]:

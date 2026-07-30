@@ -311,43 +311,72 @@ def api_pair_submit(user):
     return jsonify({"ok": True})
 
 # Failed-claim rate limiting: the pairing token space is small (word + 4
-# digits), and a successful guess hands out live node credentials, so an
-# unauthenticated claimer must not be able to enumerate tokens.  Legitimate
-# node agents poll one fixed token every 30 s — far under this ceiling.
+# digits) and a successful guess hands out live node credentials, so an
+# unauthenticated claimer must not be able to enumerate tokens.
+#
+# The budget counts DISTINCT tokens tried, not total misses. Enumeration
+# needs many different tokens; a legitimate agent polls one fixed token
+# every 30 s forever while it waits to be linked. Counting total misses
+# punished exactly the legitimate behaviour — one waiting node spent 20 of
+# every 30 allowed misses, so two telescopes behind one home router (or a
+# school, or a club) tripped the limit and could be rate-limited at the
+# moment their owner finally pushed credentials.
 _PAIR_CLAIM_WINDOW_S = 600.0
-_PAIR_CLAIM_MAX_MISSES = 30
-_pair_claim_misses: dict = {}   # ip → [monotonic timestamps of misses]
+_PAIR_CLAIM_MAX_TOKENS = 50     # distinct tokens per source per window
+_PAIR_CLAIM_MAX_SOURCES = 10000
+_PAIR_CLAIM_MAX_PER_SOURCE = 200
+_pair_claim_misses: dict = {}   # source → {token: last monotonic time}
 
 
-def _pair_claim_limited(ip: str) -> bool:
+def _claim_source_ip() -> str:
+    """Client address for rate-limiting purposes.
+
+    Only the *rightmost* X-Forwarded-For entry is trustworthy: it is the one
+    our own edge proxy appended. Anything to the left was supplied by the
+    caller, so keying on it let an enumerating client reset its budget at
+    will just by varying a header.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if hops:
+            return hops[-1]
+    return request.remote_addr or "?"
+
+
+def _pair_claim_limited(source: str) -> bool:
     now = _time.monotonic()
     with _pair_lock:
-        stamps = [t for t in _pair_claim_misses.get(ip, [])
-                  if now - t < _PAIR_CLAIM_WINDOW_S]
-        _pair_claim_misses[ip] = stamps
-        if len(_pair_claim_misses) > 10000:   # bound memory under a spray
+        seen = {tok: t for tok, t in _pair_claim_misses.get(source, {}).items()
+                if now - t < _PAIR_CLAIM_WINDOW_S}
+        _pair_claim_misses[source] = seen
+        if len(_pair_claim_misses) > _PAIR_CLAIM_MAX_SOURCES:
             _pair_claim_misses.clear()
-            _pair_claim_misses[ip] = stamps
-        return len(stamps) >= _PAIR_CLAIM_MAX_MISSES
+            _pair_claim_misses[source] = seen
+        return len(seen) >= _PAIR_CLAIM_MAX_TOKENS
 
 
-def _pair_claim_record_miss(ip: str) -> None:
+def _pair_claim_record_miss(source: str, token: str) -> None:
     with _pair_lock:
-        _pair_claim_misses.setdefault(ip, []).append(_time.monotonic())
+        seen = _pair_claim_misses.setdefault(source, {})
+        seen[token] = _time.monotonic()
+        if len(seen) > _PAIR_CLAIM_MAX_PER_SOURCE:
+            for tok, _t in sorted(seen.items(), key=lambda kv: kv[1])[:len(seen) // 2]:
+                seen.pop(tok, None)
 
 
 @app.route("/api/v1/nodes/pair/<token>", methods=["GET"])
 def api_pair_claim(token):
     """Node polls this to receive credentials. Consumes the entry."""
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
-    if _pair_claim_limited(ip):
-        return jsonify({"error": "too many attempts — try again later"}), 429
+    source = _claim_source_ip()
     token = token.strip().upper()
+    if _pair_claim_limited(source):
+        return jsonify({"error": "too many attempts — try again later"}), 429
     _pair_gc()
     with _pair_lock:
         entry = _pair_store.pop(token, None)
     if not entry:
-        _pair_claim_record_miss(ip)
+        _pair_claim_record_miss(source, token)
         return jsonify({"node_id": None, "api_key": None})
     logger.info("Pairing claimed for token %s → %s", token, entry.get("node_id"))
     return jsonify({"node_id": entry["node_id"], "api_key": entry["api_key"]})
@@ -1853,7 +1882,8 @@ def api_me_nodes(user):
     """All nodes this member has claimed."""
     rows = db.query(
         """SELECT n.node_id, n.telescope_model, n.telescope_name, n.city, n.country, n.status,
-                  n.last_heartbeat, n.last_conditions, n.portable, n.vacation_until, n.vacation_from,
+                  n.last_heartbeat, n.first_heartbeat_at,
+                  n.last_conditions, n.portable, n.vacation_until, n.vacation_from,
                   n.session_city, n.session_site_name, n.previous_locations,
                   nm.claimed_at, nm.display_name
            FROM nodes n

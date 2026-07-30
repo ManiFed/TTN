@@ -2283,7 +2283,22 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       final scopeModel =
           _scopeIsCustom ? _scopeCtrl.text.trim() : _selectedScope?.displayName;
       final api = context.read<AppState>().api;
+      // This computer's node agent registers itself anonymously on first
+      // boot, so a cloud node for it usually already exists. Claim that one
+      // — attaching without it registers a duplicate and orphans the
+      // original, leaving accounts and fleet counts full of nodes that
+      // never observe. Best-effort: if the agent can't be reached we fall
+      // through to creating a new node, which is the old behaviour.
+      final agent = NodeAgentClient();
+      Map<String, String>? existing;
+      try {
+        existing = await agent.identity();
+      } on NodeAgentException {
+        existing = null;
+      }
       final creds = await api.attachNode(
+            existingNodeId: existing?['node_id'],
+            existingApiKey: existing?['api_key'],
             locationName: location.isEmpty ? null : location,
             lat: _lat,
             lon: _lon,
@@ -2308,7 +2323,6 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       // node linked in the cloud but never on the machine.
       bool telescopeConnected = false;
       bool credentialsInstalled = false;
-      final agent = NodeAgentClient();
       try {
         await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
         credentialsInstalled = true;

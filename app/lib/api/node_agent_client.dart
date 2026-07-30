@@ -87,6 +87,29 @@ class NodeAgentClient {
     );
   }
 
+  /// This node's existing cloud credentials, if it already registered itself.
+  ///
+  /// Returned so the app can *claim* the node this computer already has
+  /// instead of registering a second one and orphaning the first. Null when
+  /// the agent is unreachable or not yet registered.
+  Future<Map<String, String>?> identity() async {
+    final response = await _guard(
+      () => _http
+          .get(_base.replace(path: '/api/cloud/identity'))
+          .timeout(const Duration(seconds: 5)),
+      'reading node identity',
+    );
+    if (response.statusCode != 200) return null;
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map || decoded['registered'] != true) return null;
+    final nodeId = decoded['node_id'] as String?;
+    final apiKey = decoded['api_key'] as String?;
+    if (nodeId == null || apiKey == null || nodeId.isEmpty || apiKey.isEmpty) {
+      return null;
+    }
+    return {'node_id': nodeId, 'api_key': apiKey};
+  }
+
   /// Install cloud credentials produced by POST /me/nodes/attach.
   Future<void> installCredentials({
     required String nodeId,

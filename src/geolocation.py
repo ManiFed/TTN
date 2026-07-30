@@ -69,26 +69,33 @@ def enrich_config_with_location(config: Dict[str, Any]) -> Dict[str, Any]:
     has_lat = lat is not None and lat != 0.0
     has_lon = lon is not None and lon != 0.0
 
+    def _apply(latitude, longitude) -> None:
+        """Write the location to both places that read one.
+
+        They are read independently — cloud registration reads
+        `observatory`, airmass/safety reads `safety.observer` — so a
+        location present in only one of them left the other at 0.0. A node
+        configured solely under `safety.observer` looked configured here,
+        skipped detection, and then registered with 0/0, which the cloud
+        rejects as "latitude/longitude not set" forever: the owner can see
+        their coordinates in config.yaml while the node insists it has none.
+        """
+        config.setdefault("observatory", {})
+        config["observatory"]["latitude"] = latitude
+        config["observatory"]["longitude"] = longitude
+        config.setdefault("safety", {}).setdefault("observer", {})
+        config["safety"]["observer"]["latitude"] = latitude
+        config["safety"]["observer"]["longitude"] = longitude
+
     if has_lat and has_lon:
         logger.debug("Observatory location already configured")
+        _apply(lat, lon)          # mirror it into whichever half was empty
         return config
 
     # Try to auto-detect
     location = detect_location()
     if location:
-        if "observatory" not in config:
-            config["observatory"] = {}
-        config["observatory"]["latitude"] = location["latitude"]
-        config["observatory"]["longitude"] = location["longitude"]
-
-        # Also update safety.observer for airmass calculations
-        if "safety" not in config:
-            config["safety"] = {}
-        if "observer" not in config["safety"]:
-            config["safety"]["observer"] = {}
-        config["safety"]["observer"]["latitude"] = location["latitude"]
-        config["safety"]["observer"]["longitude"] = location["longitude"]
-
+        _apply(location["latitude"], location["longitude"])
         logger.info("Updated config with auto-detected location")
 
     return config

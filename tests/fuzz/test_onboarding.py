@@ -57,19 +57,29 @@ class OnboardingJourneyTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.h.stop()
 
-    def test_01_agent_offers_a_pairing_token(self):
-        """The app cannot start pairing if the agent won't hand out a token."""
+    def test_01_agent_offers_a_pairing_token_and_self_registers(self):
+        """A node with a location registers itself on first boot, and always
+        offers a pairing code for the app to display."""
         cloud = self.h.get("/api/cloud")
         self.assertTrue(cloud.get("enabled"),
                         "agent reports cloud disabled — app shows nothing to pair")
-        self.assertFalse(cloud.get("registered"),
-                         "a virgin node must not claim to be registered")
         token = cloud.get("pair_token") or ""
         self.assertRegex(
             token, r"^[A-Z]{4}-\d{4}$",
             f"agent exposed no usable pairing token (got {token!r}) — the app's "
             "Connect telescope screen has nothing to show or send")
         type(self).token = token
+
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if self.h.get("/api/cloud").get("registered"):
+                break
+            time.sleep(2)
+        type(self).agent_identity = self.h.get("/api/cloud/identity")
+        self.assertTrue(
+            self.agent_identity.get("registered"),
+            "the node never registered itself, so the app has no existing "
+            f"node to claim: {self.agent_identity}")
 
     def test_02_member_can_sign_up(self):
         status, body = _cloud_post(
@@ -80,62 +90,69 @@ class OnboardingJourneyTest(unittest.TestCase):
         self.assertTrue(body.get("token"), f"no session token issued: {body}")
         type(self).auth = {"Authorization": f"Bearer {body['token']}"}
 
-    def test_03_attach_returns_installable_credentials(self):
+    def test_03_attach_claims_this_computers_node_instead_of_duplicating(self):
+        """What the desktop app does: hand the agent's own credentials to
+        attach, so the member claims the node this computer already
+        registered rather than creating a second, orphaning the first."""
         status, body = _cloud_post(
             self.cloud_url, "/api/v1/me/nodes/attach",
-            {"latitude": 31.5, "longitude": -99.2,
+            {"node_id": self.agent_identity["node_id"],
+             "api_key": self.agent_identity["api_key"],
+             "latitude": 31.5, "longitude": -99.2,
              "location_name": "Backyard", "owner_name": "Journey",
              "telescope_model": "ZWO Seestar S50"}, self.auth)
         self.assertEqual(status, 200, f"attach failed: {body}")
         self.assertTrue(body.get("node_id") and body.get("api_key"),
                         f"attach returned no credentials to install: {body}")
+        self.assertEqual(
+            body["node_id"], self.agent_identity["node_id"],
+            "linking registered a second node instead of claiming the one "
+            "this computer is already running")
         type(self).creds = {"node_id": body["node_id"], "api_key": body["api_key"]}
 
-    def test_04_pairing_push_is_accepted(self):
-        """The remote path: app pushes creds to the token the agent polls."""
+    def test_04_pairing_push_reaches_a_node_polling_that_token(self):
+        """The pairing code path still has to work for a node that cannot
+        self-register (no location yet, or offline at first boot)."""
         status, body = _cloud_post(
             self.cloud_url, "/api/v1/nodes/pair",
             {"pairing_token": self.token, **self.creds}, self.auth)
         self.assertEqual(status, 200,
                          f"cloud rejected the pairing push: {body}")
+        with urllib.request.urlopen(
+                f"{self.cloud_url}/api/v1/nodes/pair/{self.token}",
+                timeout=20) as resp:
+            claimed = json.loads(resp.read() or b"{}")
+        self.assertEqual(
+            claimed.get("node_id"), self.creds["node_id"],
+            f"a node polling its pairing code got nothing back: {claimed}")
 
-    def test_05_agent_picks_up_credentials_and_registers(self):
-        """The agent must notice within a reasonable wait, unattended."""
-        deadline = time.monotonic() + 75
-        last = {}
-        while time.monotonic() < deadline:
-            last = self.h.get("/api/cloud")
-            if last.get("registered"):
-                break
-            time.sleep(2)
-        self.assertTrue(
-            last.get("registered"),
-            "the node never picked up its credentials — a member would sit on "
-            f"'waiting to connect' forever. Agent cloud status: {last}")
-        self.assertEqual(last.get("node_id"), self.creds["node_id"])
-
-    def test_06_node_heartbeats_and_appears_for_the_member(self):
-        deadline = time.monotonic() + 45
+    def test_05_node_really_makes_contact_and_appears_for_the_member(self):
+        """first_heartbeat_at, not last_heartbeat: every node is *born* with
+        last_heartbeat stamped at registration, so asserting on it would
+        pass even for a telescope that never once called home."""
+        deadline = time.monotonic() + 60
         nodes = []
         while time.monotonic() < deadline:
             req = urllib.request.Request(
                 self.cloud_url + "/api/v1/me/nodes", headers=self.auth)
             with urllib.request.urlopen(req, timeout=20) as resp:
                 nodes = json.loads(resp.read() or b"{}").get("nodes", [])
-            if nodes and nodes[0].get("last_heartbeat"):
+            if nodes and nodes[0].get("first_heartbeat_at"):
                 break
             time.sleep(2)
         self.assertTrue(nodes, "the linked telescope does not appear under the "
                                "member's account")
+        self.assertEqual(len(nodes), 1,
+                         f"member should see exactly one telescope: {nodes}")
         self.assertTrue(
-            nodes[0].get("last_heartbeat"),
-            "the node never heartbeated after linking — the app shows it "
+            nodes[0].get("first_heartbeat_at"),
+            "the node never actually heartbeated — the app would show it "
             f"offline: {nodes[0]}")
 
-    def test_07_a_working_telescope_is_never_reused_by_a_new_link(self):
+    def test_06_a_working_telescope_is_never_reused_by_a_new_link(self):
         """Duplicate-suppression must only ever absorb nodes that never came
-        online. Once a telescope has heartbeated it is a real instrument, and
-        adding a second telescope must create a second node."""
+        online. Once a telescope has made contact it is a real instrument,
+        and adding a second telescope must create a second node."""
         status, body = _cloud_post(
             self.cloud_url, "/api/v1/me/nodes/attach",
             {"latitude": 31.5, "longitude": -99.2,
@@ -146,7 +163,7 @@ class OnboardingJourneyTest(unittest.TestCase):
             body["node_id"], self.creds["node_id"],
             "adding a telescope hijacked the one already observing")
 
-    def test_08_agent_reports_ready_to_observe(self):
+    def test_07_agent_reports_ready_to_observe(self):
         """Connect the (fake) telescope and confirm the agent can observe."""
         status, body = self.h.post(
             "/api/connect", {"host": "127.0.0.1", "port": self.h.obs.port})
@@ -198,6 +215,62 @@ class RetryDoesNotCreateGhostNodesTest(unittest.TestCase):
             nodes = json.loads(resp.read() or b"{}").get("nodes", [])
         self.assertEqual(len(nodes), 1,
                          f"expected one telescope on the account, got {len(nodes)}")
+
+
+class SelfRegisteredNodeIsClaimedNotDuplicatedTest(unittest.TestCase):
+    """A node registers itself anonymously on first boot, so by the time its
+    owner links it a cloud node for this computer already exists. The app
+    must claim that one; registering a second orphans the first — a row
+    nobody owns, that never observes, inflating fleet counts forever."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = NodeHarness(CLEAN, scenario_s=5, cloud_mode="real",
+                            registered=False).boot()
+        cls.url = cls.h.cloud.url
+        _, body = _cloud_post(cls.url, "/api/v1/auth/register",
+                              {"email": "claim@example.org",
+                               "password": "hunter2hunter2"}, {})
+        cls.auth = {"Authorization": f"Bearer {body['token']}"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    def test_agent_exposes_its_identity_to_a_local_caller(self):
+        deadline = time.monotonic() + 60
+        ident = {}
+        while time.monotonic() < deadline:
+            ident = self.h.get("/api/cloud/identity")
+            if ident.get("registered"):
+                break
+            time.sleep(2)
+        self.assertTrue(
+            ident.get("registered"),
+            f"agent never exposed credentials for the app to claim: {ident}")
+        self.assertTrue(ident.get("node_id") and ident.get("api_key"), ident)
+        type(self).ident = ident
+
+    def test_attaching_with_them_claims_rather_than_duplicates(self):
+        status, body = _cloud_post(
+            self.url, "/api/v1/me/nodes/attach",
+            {"node_id": self.ident["node_id"],
+             "api_key": self.ident["api_key"],
+             "latitude": 31.5, "longitude": -99.2,
+             "telescope_model": "ZWO Seestar S50"}, self.auth)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            body["node_id"], self.ident["node_id"],
+            "linking created a new node instead of claiming the one this "
+            "computer had already registered")
+
+        req = urllib.request.Request(
+            self.url + "/api/v1/me/nodes", headers=self.auth)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            nodes = json.loads(resp.read() or b"{}").get("nodes", [])
+        self.assertEqual(
+            len(nodes), 1,
+            f"expected the one telescope this computer runs, got {len(nodes)}")
 
 
 class SetupPageTest(unittest.TestCase):

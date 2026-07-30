@@ -3245,6 +3245,32 @@ def api_cloud_credentials():
     return jsonify({"ok": True, "registered": True, "node_id": node_id})
 
 
+@app.route("/api/cloud/identity")
+def api_cloud_identity():
+    """This node's existing cloud credentials, for the local member app.
+
+    A node registers itself anonymously on first boot, so by the time its
+    owner links it in the app a cloud node already exists for this computer.
+    Without a way to read those credentials the app cannot prove ownership,
+    so it registers a *second* node and the first is orphaned — a row nobody
+    owns that never observes. Handing the identity to a local caller lets the
+    app claim the existing node instead (POST /me/nodes/attach with
+    node_id + api_key).
+
+    Localhost only, matching POST /api/cloud/credentials, which is strictly
+    more powerful (it can repoint this node at another identity entirely).
+    Browser access is separately blocked by the cross-origin guard.
+    """
+    if request.remote_addr not in ("127.0.0.1", "::1", "localhost"):
+        return jsonify({"error": "local only"}), 403
+    if _cloud is None:
+        return jsonify({"registered": False})
+    node_id, api_key = _cloud.credentials()
+    if not (node_id and api_key):
+        return jsonify({"registered": False})
+    return jsonify({"registered": True, "node_id": node_id, "api_key": api_key})
+
+
 @app.route("/api/safety")
 def api_safety():
     if _safety_mgr is None:
