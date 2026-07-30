@@ -26,6 +26,17 @@ lib/
   widgets/async_view.dart Loading / error / empty + pull-to-refresh helper
 ```
 
+## Platforms
+
+Desktop only — macOS, Windows, and Linux/Raspberry Pi OS. This is *the* member
+app and the only place a member controls a telescope; it runs on the same
+computer as the node agent and reaches it on `http://127.0.0.1:5173`.
+
+iOS is deactivated: both the standalone SwiftUI app and this project's iOS build
+target live in `archive/ios/` and are not built, shipped, or tested. Do not
+re-add an `ios/` platform folder here without reading `archive/README.md` first —
+the onboarding contract it was written against no longer exists.
+
 ## First-time setup
 
 The Flutter SDK is **not** installed on the build machine yet, and this folder

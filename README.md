@@ -113,7 +113,7 @@ node_v1-main/
 │   ├── README.md         Website documentation and API integration guide
 │   └── future/           Phase 2+ portal and future interfaces
 │
-├── app/                 Flutter desktop member app (macOS, Windows, Linux, Raspberry Pi OS)
+├── app/                 Flutter desktop member app — the only member app (macOS, Windows, Linux, Raspberry Pi OS)
 │   ├── lib/              Screens (dashboard, observations, help/AI chat, nodes, notifications, more), API client, state, Aladin widgets
 │   ├── pubspec.yaml
 │   └── README.md         App build and accessibility notes
@@ -129,13 +129,16 @@ node_v1-main/
 │   ├── FIXTURE_MANIFEST.md   Real-data corpus spec for beta nodes
 │   └── evidence/             Latest validation run (report, results.json, figures)
 │
-└── build/                Installer build system
-    ├── node_agent.spec   PyInstaller spec
-    ├── build.py          Cross-platform build orchestration
-    ├── config.template.yaml  Config template written by installers
-    ├── windows/install.nsi   NSIS Windows installer
-    ├── macos/            macOS .pkg + launchd plist
-    └── linux/            systemd unit + install.sh
+├── build/                Installer build system
+│   ├── node_agent.spec   PyInstaller spec
+│   ├── build.py          Cross-platform build orchestration
+│   ├── config.template.yaml  Config template written by installers
+│   ├── windows/install.nsi   NSIS Windows installer
+│   ├── macos/            macOS .pkg + launchd plist
+│   └── linux/            systemd unit + install.sh
+│
+└── archive/              Deactivated code — never built, shipped, or tested
+    └── ios/              Retired iOS member apps (see archive/README.md)
 ```
 
 ---
@@ -146,7 +149,7 @@ node_v1-main/
 |-------|--------|------|
 | **0 — Proof of Concept** | ✅ Code complete | First AAVSO-accepted automated observation |
 | **1 — Core System** | 🚀 In progress | Installers shipped, member accounts live, **founding network site live**, Flutter app in development, 3–5 beta nodes |
-| **2 — Launch** | 🔜 Next | 50 nodes, member portal app on stores, first ATel, first grant application |
+| **2 — Launch** | 🔜 Next | 50 nodes, signed desktop app distribution, first ATel, first grant application |
 | **3 — Growth** | Not started | 200 nodes, 25 countries, 10,000+ AAVSO submissions |
 
 ---
@@ -210,7 +213,7 @@ Two structural additions on top of CHORUS and Open Aperture — see
   - Aladin Lite sky visualization integrated into the operational dashboard
 - **Dashboard iterations**: institutional/no-scroll layouts, workbench-style IDE UI, mission control previews (see `app/archive/`)
 - **Deployment**: Railway one-command API deploys (`scripts/deploy-api.sh`) and GitHub Actions desktop builds
-- **Native iOS app**: SwiftUI member app under `app/ios-native/`, using the canonical `net.thetelescope.node` Firebase configuration
+- **iOS apps deactivated** (2026-07-19): the desktop app is the only member application. Both the standalone SwiftUI app and the Flutter iOS build target moved to `archive/ios/` — not built, shipped, or tested. See `archive/README.md`.
 
 ### Marketing Site Launch (`website/tour.html`)
 - **Interactive founding network experience** — single-page scrollytelling site
@@ -557,9 +560,21 @@ Then refresh your browser and watch the stats, map, and light curve populate.
 
 ---
 
-## Member App (`app/`) — Flutter Member Experience
+## Member App (`app/`) — Flutter Desktop Member Experience
 
-The Flutter app is the primary interface for members. It provides telescope status, observation history, night summaries, an AI help assistant, science program suggestions, and push notifications. Designed with strong accessibility principles (large text, haptics, audio descriptions, screen reader support).
+The Flutter **desktop** app is *the* place members control a telescope — the only
+member application, on macOS, Windows, and Linux/Raspberry Pi OS. It provides
+telescope status, observation history, night summaries, an AI help assistant,
+science program suggestions, and push notifications. Designed with strong
+accessibility principles (large text, haptics, audio descriptions, screen reader
+support).
+
+It runs on the same computer as the node agent and talks to it directly on
+`http://127.0.0.1:5173` to install credentials and connect the telescope, which
+is why linking is a desktop operation. The node's own setup page at that address
+shows the pairing code and link state.
+
+> iOS is deactivated — see `archive/ios/`. There is no mobile member app.
 
 ### Current Screens / Tabs
 

@@ -2460,7 +2460,7 @@ async function tick(){
         + 'the network will send this telescope work automatically.</p></div>'
       : '<div class="card"><strong>Pairing code</strong>'
         + '<div class="token">' + esc(cl.pair_token || "unavailable") + '</div>'
-        + '<ol><li>Open the app and sign in.</li>'
+        + '<ol><li>Open the desktop app on this computer and sign in.</li>'
         + '<li>Choose <strong>Connect telescope</strong>.</li>'
         + '<li>Enter this pairing code when asked.</li></ol>'
         + '<p class="sub">This page updates by itself once the link succeeds — '
