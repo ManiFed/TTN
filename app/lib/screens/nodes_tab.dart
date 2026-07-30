@@ -2286,12 +2286,25 @@ class _ClaimSheetState extends State<_ClaimSheet> {
         throw Exception('Cloud did not return node credentials.');
       }
       // Install credentials on the local node agent when it's running.
+      //
+      // This is the step that actually links this computer, so it goes
+      // first and on its own: /api/status does real work (camera,
+      // commissioning, AAVSO) and can be slow, and running it first meant a
+      // busy agent could time out and skip the install entirely — leaving a
+      // node linked in the cloud but never on the machine.
       bool telescopeConnected = false;
-      bool credentialsInstalled = true;
+      bool credentialsInstalled = false;
+      final agent = NodeAgentClient();
       try {
-        final agent = NodeAgentClient();
-        final status = await agent.status();
         await agent.installCredentials(nodeId: nodeId, apiKey: apiKey);
+        credentialsInstalled = true;
+      } on NodeAgentException {
+        credentialsInstalled = false;
+      }
+      // Everything below is best-effort convenience: the account link above
+      // already succeeded, so nothing here may fail the whole operation.
+      try {
+        final status = await agent.status();
         var chosen = _selectedAlpacaServer;
         // Discovery ran once when this sheet opened -- if the Seestar wasn't
         // reachable yet at that instant (still booting, just powered on),
@@ -2331,12 +2344,10 @@ class _ClaimSheetState extends State<_ClaimSheet> {
           } catch (_) {}
         }
       } on NodeAgentException {
-        // Local agent may not be running yet — credentials are still on the
-        // cloud account, but the agent on this computer is now out of sync
-        // with the cloud (it may still hold stale/revoked credentials).
-        // Surface this in the UI below rather than silently reporting the
-        // link as fully successful.
-        credentialsInstalled = false;
+        // Status/discovery/pair-push are conveniences. Whether they worked
+        // says nothing about the credential install above, so the install
+        // result is deliberately left as-is here; the UI reports the two
+        // independently.
       }
       if (!mounted) return;
       await context.read<AppState>().refreshNodes();

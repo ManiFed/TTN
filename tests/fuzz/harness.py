@@ -46,9 +46,7 @@ cloud:
   enabled: true
   url: {cloud_url}
   realtime_url: {cloud_url}
-  node_id: node_test01
-  api_key: key_test01
-  heartbeat_interval: 1.0
+{credentials}  heartbeat_interval: 1.0
   plan_poll_interval: 3.0
 photometry:
   enabled: false
@@ -144,18 +142,26 @@ class RealCloud:
 class NodeHarness:
     def __init__(self, plan: FaultPlan, scenario_s: float = 25.0,
                  workdir: str | None = None, disconnect_timeout: float = 6.0,
-                 cloud_mode: str = "fake"):
+                 cloud_mode: str = "fake", registered: bool = True):
         self.plan = plan
         self.scenario_s = scenario_s
         self.disconnect_timeout = disconnect_timeout
         self.cloud_mode = cloud_mode
+        # registered=False boots a virgin node with no credentials, so the
+        # pairing loop runs — the real first-run onboarding path.
+        self.registered = registered
         self.workdir = Path(workdir or tempfile.mkdtemp(prefix="nodefuzz_"))
         self.thread_exceptions: list[dict] = []
         self.result: dict = {}
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
-    def run(self) -> dict:
+    def boot(self) -> "NodeHarness":
+        """Start the fakes and the real node agent; return once it answers.
+
+        Split out of run() so an onboarding test can drive the pairing
+        journey itself instead of jumping straight to observing.
+        """
         import os
         os.chdir(self.workdir)
         restrict_network_to_localhost()
@@ -179,10 +185,11 @@ class NodeHarness:
             node_id, api_key = "node_test01", "key_test01"
         self.obs = FakeObservatory(self.plan).start()
 
+        creds = (f"  node_id: {node_id}\n  api_key: {api_key}\n"
+                 if self.registered else "")
         (self.workdir / "config.yaml").write_text(_CONFIG_TEMPLATE.format(
-            cloud_url=self.cloud.url,
-            disconnect_timeout=self.disconnect_timeout)
-            .replace("node_test01", node_id).replace("key_test01", api_key))
+            cloud_url=self.cloud.url, credentials=creds,
+            disconnect_timeout=self.disconnect_timeout))
 
         import src.dashboard as dashboard
         self.dashboard = dashboard
@@ -191,8 +198,12 @@ class NodeHarness:
         threading.Thread(target=dashboard.launch, args=(port,),
                          daemon=True, name="node-launch").start()
 
+        self._wait_ready()
+        return self
+
+    def run(self) -> dict:
+        self.boot()
         try:
-            self._wait_ready()
             self._api("/api/connect", {"host": "127.0.0.1", "port": self.obs.port})
             self._api("/api/schedule/run", {"items": self._schedule_items()})
             self._observe()
@@ -231,6 +242,22 @@ class NodeHarness:
                 return resp.status, json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read() or b"{}")
+
+    def get(self, path: str) -> dict:
+        """GET a node-agent endpoint (what the member app does)."""
+        with urllib.request.urlopen(self.base + path, timeout=15) as resp:
+            return json.loads(resp.read() or b"{}")
+
+    def post(self, path: str, payload: dict) -> tuple[int, dict]:
+        return self._api(path, payload)
+
+    def stop(self) -> None:
+        for closer in (getattr(self, "cloud", None), getattr(self, "obs", None)):
+            try:
+                if closer is not None:
+                    closer.stop()
+            except Exception:
+                pass
 
     def _schedule_items(self) -> list[dict]:
         return [

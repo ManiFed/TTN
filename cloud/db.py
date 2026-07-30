@@ -485,6 +485,12 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # AAVSO batches now carry their own Extended Format text in the database
     # (not just a disk file_path) so the admin dashboard can serve downloads
     # without depending on the filesystem/volume the batch was written on.
+    # Set the first time a node actually heartbeats. registered_at/
+    # last_heartbeat are both stamped at registration, so neither can tell a
+    # telescope that has come online from one that never did — which the
+    # attach flow needs in order to reuse a failed link's node instead of
+    # creating a duplicate (cloud/server.py::api_me_attach_node).
+    ("nodes", "first_heartbeat_at", "TEXT DEFAULT ''"),
     ("aavso_batches", "file_text",             "TEXT DEFAULT ''"),
     ("aavso_batches", "manually_submitted",    "INTEGER DEFAULT 0"),
     ("aavso_batches", "manually_submitted_at", "TEXT DEFAULT ''"),

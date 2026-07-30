@@ -2036,11 +2036,40 @@ def api_me_attach_node(user):
             continue
         info[key] = json.dumps(val) if key == "filter_set" and not isinstance(val, str) else val
 
+    # Reuse this member's identical telescope that has never come online
+    # instead of minting another row. Linking is retried often in practice
+    # (the local agent may not answer on the first try), and every retry used
+    # to create a fresh node — leaving accounts full of duplicate telescopes
+    # that never observe anything. A node with no heartbeat has never done
+    # any work, so re-issuing it is lossless; once it has heartbeated even
+    # once it is a real instrument and is never reused.
+    ghost = db.query_one(
+        """SELECT n.node_id FROM nodes n
+             JOIN node_members nm USING (node_id)
+            WHERE nm.user_id = %s
+              AND COALESCE(n.first_heartbeat_at, '') = ''
+              AND n.telescope_model = %s
+              AND round(n.latitude::numeric, 4) = round(%s::numeric, 4)
+              AND round(n.longitude::numeric, 4) = round(%s::numeric, 4)
+            ORDER BY n.registered_at DESC LIMIT 1""",
+        (user["user_id"], info.get("telescope_model") or telescope_model,
+         lat, lon),
+    )
+    if ghost:
+        info["node_id"] = ghost["node_id"]
+        info["api_key"] = db.query_one(
+            "SELECT api_key FROM nodes WHERE node_id = %s",
+            (ghost["node_id"],))["api_key"]
+
     try:
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
+
+    if ghost:
+        logger.info("Member %s re-linked never-online node %s instead of "
+                    "creating a duplicate", user["user_id"], creds["node_id"])
 
     if not db.query_one(
         "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",

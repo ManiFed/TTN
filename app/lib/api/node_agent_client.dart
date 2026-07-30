@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -9,13 +10,46 @@ class NodeAgentClient {
   static final Uri _base = Uri.parse('http://127.0.0.1:5173');
   final http.Client _http;
 
+  /// Run one request, reporting every failure as a [NodeAgentException].
+  ///
+  /// A refused connection or a timeout arrives as SocketException /
+  /// ClientException / TimeoutException — none of which are
+  /// NodeAgentException. Callers that guard with `on NodeAgentException`
+  /// were therefore letting exactly the common failures (agent still
+  /// starting, or busy enough that a slow endpoint times out) escape as
+  /// unhandled errors, which turned a recoverable "agent not reachable
+  /// yet" into a total failure of whatever the user was doing.
+  Future<http.Response> _guard(
+    Future<http.Response> Function() send,
+    String what,
+  ) async {
+    try {
+      return await send();
+    } on NodeAgentException {
+      rethrow;
+    } on TimeoutException {
+      throw NodeAgentException(
+        'The node software on this computer did not respond in time '
+        '($what). It may still be starting up — try again in a moment.',
+      );
+    } catch (_) {
+      throw NodeAgentException(
+        'Could not reach the node software on this computer ($what). '
+        'Make sure it is running, then try again.',
+      );
+    }
+  }
+
   Future<NodeAgentStatus> status() async {
     // /api/status does real work on the agent (camera state, commissioning
     // checks, AAVSO, etc.) and can be slow right after other agent activity,
     // so give it more room than a simple health check would need.
-    final response = await _http
-        .get(_base.replace(path: '/api/status'))
-        .timeout(const Duration(seconds: 8));
+    final response = await _guard(
+      () => _http
+          .get(_base.replace(path: '/api/status'))
+          .timeout(const Duration(seconds: 8)),
+      'reading status',
+    );
     if (response.statusCode != 200) {
       throw NodeAgentException(
         'The local node service returned ${response.statusCode}.',
@@ -58,13 +92,16 @@ class NodeAgentClient {
     required String nodeId,
     required String apiKey,
   }) async {
-    final response = await _http
-        .post(
-          _base.replace(path: '/api/cloud/credentials'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'node_id': nodeId, 'api_key': apiKey}),
-        )
-        .timeout(const Duration(seconds: 8));
+    final response = await _guard(
+      () => _http
+          .post(
+            _base.replace(path: '/api/cloud/credentials'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'node_id': nodeId, 'api_key': apiKey}),
+          )
+          .timeout(const Duration(seconds: 15)),
+      'installing credentials',
+    );
     if (response.statusCode != 200) {
       String detail = 'Could not install credentials (${response.statusCode}).';
       try {
@@ -80,9 +117,12 @@ class NodeAgentClient {
   /// Broadcast an ALPACA discovery request on this computer's local network
   /// and return every server that responded.
   Future<List<Map<String, dynamic>>> discoverAlpacaServers() async {
-    final response = await _http
-        .post(_base.replace(path: '/api/discover'))
-        .timeout(const Duration(seconds: 10));
+    final response = await _guard(
+      () => _http
+          .post(_base.replace(path: '/api/discover'))
+          .timeout(const Duration(seconds: 10)),
+      'searching for the telescope',
+    );
     if (response.statusCode != 200) {
       throw NodeAgentException(
         'ALPACA discovery failed (${response.statusCode}).',
@@ -105,17 +145,20 @@ class NodeAgentClient {
     required int port,
     bool setAsDefault = false,
   }) async {
-    final response = await _http
-        .post(
-          _base.replace(path: '/api/connect'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'host': host,
-            'port': port,
-            'set_as_default': setAsDefault,
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
+    final response = await _guard(
+      () => _http
+          .post(
+            _base.replace(path: '/api/connect'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'host': host,
+              'port': port,
+              'set_as_default': setAsDefault,
+            }),
+          )
+          .timeout(const Duration(seconds: 15)),
+      'connecting the telescope',
+    );
     if (response.statusCode != 200) {
       String detail = 'Could not connect to the telescope server (${response.statusCode}).';
       try {

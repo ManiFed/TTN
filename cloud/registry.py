@@ -253,6 +253,10 @@ def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     )
     params.append(today)
     params.append(today)
+    # Record first contact once and never overwrite it.
+    sql += (", first_heartbeat_at = CASE WHEN COALESCE(first_heartbeat_at, '') = ''"
+            " THEN %s ELSE first_heartbeat_at END")
+    params.append(_now())
     if not isinstance(conditions, dict):
         conditions = None
     if conditions:

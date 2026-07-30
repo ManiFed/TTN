@@ -2398,6 +2398,95 @@ def _pier_cam_loop() -> None:
     logger.info("Pier cam stopped")
 
 
+# ── Setup page ────────────────────────────────────────────────────────────────
+# The apps tell people to "open http://localhost:5173 on the computer running
+# the node software" — until now that was a 404, and the pairing token existed
+# only in the service's stdout, which nobody running it as a background service
+# can see. This page is the one place a human can read the token and find out
+# what the node is waiting for.
+
+_SETUP_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Telescope Node — Setup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fff; --muted:#666;
+          --card:#f5f5f7; --border:#ddd; --ok:#1a7f37; --warn:#9a6700; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e8e8; --bg:#161618; --muted:#a0a0a8; --card:#232326;
+            --border:#3a3a3e; --ok:#3fb950; --warn:#d29922; }
+  }
+  * { box-sizing: border-box; }
+  body { font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         color: var(--fg); background: var(--bg); margin: 0; padding: 2rem 1rem; }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+  .token { font: 700 2.5rem/1.1 ui-monospace, SFMono-Regular, Menlo, monospace;
+           letter-spacing: .06em; margin: .5rem 0; word-break: break-all; }
+  .row { display: flex; justify-content: space-between; gap: 1rem;
+         padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .row .k { color: var(--muted); }
+  .ok { color: var(--ok); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  ol { padding-left: 1.25rem; } li { margin: .4rem 0; }
+  button { font: inherit; padding: .5rem .9rem; border-radius: 8px;
+           border: 1px solid var(--border); background: var(--bg);
+           color: var(--fg); cursor: pointer; }
+</style></head>
+<body><main>
+  <h1>Telescope node</h1>
+  <p class="sub">This computer runs the telescope. Keep it awake and online at night.</p>
+  <div id="link"></div>
+  <div class="card">
+    <div class="row"><span class="k">Telescope</span><span id="scope">…</span></div>
+    <div class="row"><span class="k">Camera</span><span id="cam">…</span></div>
+    <div class="row"><span class="k">Cloud account</span><span id="cloud">…</span></div>
+    <div class="row"><span class="k">Node ID</span><span id="nid">…</span></div>
+  </div>
+  <p class="sub" id="err"></p>
+<script>
+async function j(p){ const r = await fetch(p); if(!r.ok) throw new Error(p+" -> "+r.status); return r.json(); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+async function tick(){
+  try {
+    const [st, cl] = await Promise.all([j("/api/status"), j("/api/cloud")]);
+    const linked = cl.enabled && cl.registered;
+    document.getElementById("link").innerHTML = linked
+      ? '<div class="card"><strong class="ok">Linked to your account.</strong>'
+        + '<p class="sub" style="margin:.5rem 0 0">Nothing else to do here — '
+        + 'the network will send this telescope work automatically.</p></div>'
+      : '<div class="card"><strong>Pairing code</strong>'
+        + '<div class="token">' + esc(cl.pair_token || "unavailable") + '</div>'
+        + '<ol><li>Open the app and sign in.</li>'
+        + '<li>Choose <strong>Connect telescope</strong>.</li>'
+        + '<li>Enter this pairing code when asked.</li></ol>'
+        + '<p class="sub">This page updates by itself once the link succeeds — '
+        + 'you can leave it open.</p></div>';
+    const scope = st.telescope || {}, cam = st.camera || {};
+    document.getElementById("scope").innerHTML = scope.connected
+      ? '<span class="ok">connected</span>' : '<span class="warn">not connected</span>';
+    document.getElementById("cam").innerHTML = cam.connected
+      ? '<span class="ok">connected</span>' : '<span class="warn">not connected</span>';
+    document.getElementById("cloud").innerHTML = linked
+      ? '<span class="ok">linked</span>' : '<span class="warn">waiting to be linked</span>';
+    document.getElementById("nid").textContent = cl.node_id || "—";
+    document.getElementById("err").textContent = "";
+  } catch (e) { document.getElementById("err").textContent = String(e); }
+}
+tick(); setInterval(tick, 3000);
+</script>
+</main></body></html>
+"""
+
+
+@app.route("/")
+def setup_page():
+    return Response(_SETUP_HTML, mimetype="text/html")
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/status")
