@@ -920,16 +920,25 @@ def api_targets():
            LEFT JOIN measurements m ON m.target_name = t.name
            WHERE t.active = 1
            GROUP BY t.target_id ORDER BY best_score DESC LIMIT 200""")
+    target_ids = [r["target_id"] for r in rows]
+    # One query for every row's top-scoring node instead of one query per row —
+    # the per-row version turned this endpoint into up to 200 sequential DB
+    # round trips.
+    best_by_target = {}
+    if target_ids:
+        for b in db.query(
+            """SELECT DISTINCT ON (target_id) target_id, node_id, components
+               FROM scores WHERE target_id = ANY(%s)
+               ORDER BY target_id, total DESC""",
+            (target_ids,),
+        ):
+            best_by_target[b["target_id"]] = b
     for r in rows:
         r["sources"] = db.loads(r["sources"], [])
         r["science_program"] = science_program_for_type(r.get("target_type") or "")
-        best = db.query_one(
-            """SELECT node_id, components FROM scores
-               WHERE target_id = %s ORDER BY total DESC LIMIT 1""",
-            (r["target_id"],),
-        )
-        comp = db.loads((best or {}).get("components"), {})
-        r["best_node_id"] = (best or {}).get("node_id", "")
+        best = best_by_target.get(r["target_id"], {})
+        comp = db.loads(best.get("components"), {})
+        r["best_node_id"] = best.get("node_id", "")
         r["score_explanation"] = comp.get("explanation", {})
     return jsonify({"targets": rows})
 

@@ -16,9 +16,14 @@ import 'target_detail_screen.dart';
 /// "Tonight" — operational observing plan with telescope status, field preview,
 /// active target details, and recent observations grouped into one workspace.
 class DashboardTab extends StatefulWidget {
-  const DashboardTab({super.key, this.onNavigateToTab});
+  const DashboardTab({super.key, this.onNavigateToTab, this.isActive = true});
 
   final void Function(int)? onNavigateToTab;
+  // Whether this tab is the one currently visible in the IndexedStack. Other
+  // tabs stay mounted (and keep their own poll timers) even while hidden, so
+  // this flag stops every tab from independently re-fetching the same data
+  // every 15s regardless of which one the member is actually looking at.
+  final bool isActive;
 
   @override
   State<DashboardTab> createState() => _DashboardTabState();
@@ -62,7 +67,19 @@ class _DashboardTabState extends State<DashboardTab> {
   void initState() {
     super.initState();
     _refresh();
-    _pollTimer = Timer.periodic(_pollInterval, (_) => _refresh(silent: true));
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      if (widget.isActive) _refresh(silent: true);
+    });
+  }
+
+  @override
+  void didUpdateWidget(DashboardTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Catch up immediately when the member switches back to this tab, rather
+    // than waiting up to 15s for the next poll tick.
+    if (widget.isActive && !oldWidget.isActive) {
+      _refresh(silent: true);
+    }
   }
 
   @override

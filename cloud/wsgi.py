@@ -25,6 +25,14 @@ logging.basicConfig(
 )
 
 db.init(_config.get("database", {}).get("url", ""))
-start_background_loops(_config)
+
+# Guard against a second service accidentally pointing at this entrypoint
+# (e.g. a misconfigured Railway config-file path) and running the full
+# scoring/planning/ingest pipeline a second time against the same database.
+if os.environ.get("RUN_BACKGROUND_LOOPS", "1") == "1":
+    start_background_loops(_config)
+else:
+    logging.getLogger("cloud.wsgi").warning(
+        "RUN_BACKGROUND_LOOPS=0 — background loops disabled on this service")
 
 app = create_app(_config)

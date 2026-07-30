@@ -34,7 +34,11 @@ Future<bool> showClaimSheet(BuildContext context) async {
 }
 
 class NodesTab extends StatefulWidget {
-  const NodesTab({super.key});
+  const NodesTab({super.key, this.isActive = true});
+
+  // See DashboardTab.isActive — this tab stays mounted while hidden behind
+  // the IndexedStack, so its own poll timer must not fire off-screen.
+  final bool isActive;
 
   @override
   State<NodesTab> createState() => _NodesTabState();
@@ -59,7 +63,17 @@ class _NodesTabState extends State<NodesTab> {
     _future = _load()..then((nodes) {
       if (mounted) setState(() => _liveNodes = nodes);
     });
-    _pollTimer = Timer.periodic(_pollInterval, (_) => _silentRefresh());
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      if (widget.isActive) _silentRefresh();
+    });
+  }
+
+  @override
+  void didUpdateWidget(NodesTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      _silentRefresh();
+    }
   }
 
   @override

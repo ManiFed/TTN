@@ -102,8 +102,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final name = state.member?.displayName ?? '';
 
     final pages = [
-      DashboardTab(onNavigateToTab: (_) => _showAlertsSheet()),
-      const NodesTab(),
+      DashboardTab(
+        isActive: _index == 0,
+        onNavigateToTab: (_) => _showAlertsSheet(),
+      ),
+      NodesTab(isActive: _index == 1),
       const ObservationsTab(),
       const MeScreen(showAppBar: false),
       const MoreTab(),
