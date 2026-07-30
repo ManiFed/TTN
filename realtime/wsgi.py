@@ -21,8 +21,8 @@ except Exception:  # pragma: no cover - dev without gevent installed
 
 import logging
 
-from cloud.main import load_config
 from realtime.app import create_app
+from realtime.config import load_config
 
 _config = load_config(os.environ.get("CLOUD_CONFIG", "cloud/config.production.yaml"))
 

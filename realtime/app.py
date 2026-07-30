@@ -235,7 +235,7 @@ def create_app(config: dict):
 
 def main() -> None:
     import sys
-    from cloud.main import load_config
+    from realtime.config import load_config
     config = load_config(sys.argv[1] if len(sys.argv) > 1 else None)
     logging.basicConfig(
         level=config.get("logging", {}).get("level", "INFO"),
