@@ -78,7 +78,7 @@ device doubles):
 | `test_safety_manager.py` | unreachable telescope, failing park commands, dawn/dusk transitions, exploding callbacks |
 | `test_image_watcher.py` | partial writes, atomic renames, junk files, vanished watch paths, crashing photometry callbacks |
 | `test_config_faults.py` | truncated/hand-mangled config.yaml, non-mapping roots, patch atomicity |
-| `test_cloud_api.py` | unauthenticated incident posts, oversized payloads, lost registration responses (activation retry window) |
+| `test_cloud_api.py` | unauthenticated incident posts, oversized payloads, lost registration responses, retired activation-code endpoints |
 | `test_telemetry.py` | unwritable log dirs, corrupt event files, forwarder crashes, file growth |
 
 Run it:

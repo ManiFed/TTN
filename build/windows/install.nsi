@@ -40,7 +40,6 @@ ShowUnInstDetails show
 ; Installer pages
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\..\LICENSE"
-Page custom ActivationCodePage ActivationCodePageLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -52,41 +51,9 @@ Page custom ActivationCodePage ActivationCodePageLeave
 !insertmacro MUI_LANGUAGE "English"
 
 ;-----------------------------------------------------------------------------
-; Activation code custom page
-;-----------------------------------------------------------------------------
-Var ActivationCodeCtrl
-Var ActivationCode
-
-Function ActivationCodePage
-  !insertmacro MUI_HEADER_TEXT "Activation Code" \
-    "Enter the Node Activation Code from your The Telescope Net account."
-
-  nsDialogs::Create 1018
-  Pop $0
-
-  ${NSD_CreateLabel} 0 0 100% 40u \
-    "Your activation code looks like: BS-2025-XXXXXXXX$\r$\n$\r$\nGet your code at telescopenet.org/account after signing up."
-  Pop $0
-
-  ${NSD_CreateText} 0 50u 100% 14u $ActivationCode
-  Pop $ActivationCodeCtrl
-
-  nsDialogs::Show
-FunctionEnd
-
-Function ActivationCodePageLeave
-  ${NSD_GetText} $ActivationCodeCtrl $ActivationCode
-  ; Validate format: must start with BS- or be blank (skip for now)
-  StrLen $R0 $ActivationCode
-  ${If} $R0 > 0
-    StrCpy $R1 $ActivationCode 3
-    ${If} $R1 != "BS-"
-      MessageBox MB_OK|MB_ICONEXCLAMATION \
-        "Activation codes start with 'BS-'. Please check your code and try again.$\r$\n$\r$\nYou can skip this and enter the code later in config.yaml."
-    ${EndIf}
-  ${EndIf}
-FunctionEnd
-
+; No activation-code page: there are no activation codes. The member signs in
+; to the desktop app after install and uses "Connect telescope", which links
+; the node and installs its credentials on the local agent.
 ;-----------------------------------------------------------------------------
 ; Installer sections
 ;-----------------------------------------------------------------------------
@@ -108,28 +75,10 @@ Section "Node Agent (required)" SecMain
   ; Copy NSSM (Windows Service wrapper)
   File "nssm\nssm.exe"
 
-  ; Write config.yaml from template, substituting the activation code
+  ; Write config.yaml from the template as-is — nothing to substitute.
   SetOutPath "${DATA_DIR}"
   File "..\..\build\config.template.yaml"
   CopyFiles "${DATA_DIR}\config.template.yaml" "${DATA_DIR}\config.yaml"
-
-  ; Substitute activation code placeholder in config.yaml
-  ${If} $ActivationCode != ""
-    ; Use a simple sed-like replacement via NSIS string replacement
-    FileOpen $0 "${DATA_DIR}\config.yaml" r
-    FileOpen $1 "${DATA_DIR}\config.yaml.tmp" w
-    loop:
-      FileRead $0 $2
-      IfErrors done
-      ${StrRep} $3 $2 "ACTIVATION_CODE_PLACEHOLDER" $ActivationCode
-      FileWrite $1 $3
-      Goto loop
-    done:
-    FileClose $0
-    FileClose $1
-    Delete "${DATA_DIR}\config.yaml"
-    Rename "${DATA_DIR}\config.yaml.tmp" "${DATA_DIR}\config.yaml"
-  ${EndIf}
   Delete "${DATA_DIR}\config.template.yaml"
 
   ; Prevent system sleep during overnight operation

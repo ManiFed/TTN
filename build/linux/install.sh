@@ -4,7 +4,10 @@
 # Usage:
 #   curl -sSL https://telescopenet.org/install.sh | sudo bash
 #   -- or --
-#   sudo bash build/linux/install.sh [--code BS-YYYY-XXXXXXXX]
+#   sudo bash build/linux/install.sh
+#
+# There is no activation code. After install, sign in to the desktop app and
+# use "Connect telescope" — it installs the node credentials on this agent.
 #
 # Supports: Debian/Ubuntu, Fedora/RHEL, Arch Linux
 # Requires: systemd, curl or wget, internet access
@@ -17,12 +20,10 @@ LOG_DIR="/var/log/telescopenet"
 SERVICE_USER="telescopenet"
 SERVICE_FILE="/etc/systemd/system/telescopenet-node.service"
 RELEASE_URL="https://api.thetelescope.net/download/node-agent/linux"
-ACTIVATION_CODE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --code) ACTIVATION_CODE="$2"; shift 2 ;;
         --url)  RELEASE_URL="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -87,7 +88,6 @@ if [ ! -f "${CONFIG}" ]; then
 cloud:
   enabled: true
   url: 'https://api.thetelescope.net'
-  activation_code: 'ACTIVATION_CODE_PLACEHOLDER'
   node_id: ''
   api_key: ''
   heartbeat_interval: 60
@@ -108,12 +108,8 @@ logging:
 YAML
     fi
 
-    if [ -n "${ACTIVATION_CODE}" ]; then
-        sed -i "s/ACTIVATION_CODE_PLACEHOLDER/${ACTIVATION_CODE}/g" "${CONFIG}"
-        echo "Activation code written to config.yaml"
-    else
-        sed -i "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}"
-    fi
+    # Strip any leftover legacy activation-code placeholder from an old template.
+    sed -i "s/ACTIVATION_CODE_PLACEHOLDER//g" "${CONFIG}"
 
     chmod 600 "${CONFIG}"
     chown "${SERVICE_USER}:${SERVICE_USER}" "${CONFIG}"
@@ -179,11 +175,10 @@ echo "  Dashboard      : http://localhost:5173"
 echo "  Config file    : ${CONFIG}"
 echo ""
 
-if [ -z "${ACTIVATION_CODE}" ]; then
-    echo "NOTE: No activation code was provided."
-    echo "Edit ${CONFIG} and add your code under cloud.activation_code,"
-    echo "then restart: sudo systemctl restart telescopenet-node"
-    echo ""
-fi
+echo "NEXT: sign in to The Telescope Net app and use \"Connect telescope\"."
+echo "It links this node to your account and installs its credentials."
+echo "If the app can't reach this machine, open http://localhost:5173"
+echo "for the pairing code."
+echo ""
 
 systemctl status telescopenet-node --no-pager || true

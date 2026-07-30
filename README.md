@@ -46,7 +46,7 @@ instructions.
 
 ### Automatic commissioning after signup
 
-When a node successfully consumes its activation code, commissioning starts
+When a node receives its cloud credentials, commissioning starts
 without another member action. It persists in `data/commissioning.json`,
 checks location, disk, plate solving, telescope/camera connectivity and FITS
 ingest, and resumes after restarts or temporarily disconnected hardware.
@@ -376,58 +376,47 @@ simultaneously.
 
 ---
 
-## Activation Code System
+## Linking a Telescope
 
-Every node is registered with a **Node Activation Code** (`BS-YYYY-XXXXXXXX`). This
-is the link between a member's account, their telescope hardware, and the cloud
-scheduler. It is also the data that seeds the `nodes` row — every field group
-described above gets populated from this first registration.
+> **There are no activation codes.** They were retired in July 2026. Members link
+> a telescope from the desktop app — nothing to request, nothing to copy into a
+> config file. `POST /api/v1/me/activation-code` and
+> `POST /api/v1/admin/activation-codes` still exist only to return a 410 pointing
+> at the current flow, and `POST /api/v1/nodes/register` rejects any request that
+> carries an `activation_code`.
+
+Linking is what creates the `nodes` row — every field group described above gets
+populated from the attach payload.
 
 ```
-Member signs up on the website
+Member creates an account and signs in to the desktop app
          ↓
-Member requests a code (POST /api/v1/me/activation-code)
-or admin bulk-generates codes (scripts/manage.py generate-code)
+Member installs the Node Agent and taps "Connect telescope"
          ↓
-Code issued: BS-2026-ABCD1234  (expires in 90 days by default)
+App → POST /api/v1/me/nodes/attach   (member bearer token)
+      {latitude, longitude, location_name, telescope_model,
+       telescope_display_name, telescope_specs, portable}
          ↓
-Member downloads the installer for their OS
-Installer prompts for the activation code during setup
-Writes it to config.yaml:
-    cloud:
-      activation_code: 'BS-2026-ABCD1234'
+Cloud creates the nodes row, generates node_id + api_key,
+and links it to the member (node_members)
+  · an identical telescope of this member's that has never
+    heartbeated is reused instead of minting a duplicate
+  · passing an existing {node_id, api_key} claims an
+    already-registered agent instead of creating a new one
          ↓
-Node Agent starts for the first time
-First heartbeat sends POST /api/v1/nodes/register
-with the activation code + full hardware payload
+App installs the credentials on the local agent:
+      POST http://localhost:5173/api/cloud/credentials
          ↓
-Cloud validates the code (not expired, not previously used)
-Cloud auto-generates node_id (e.g. node_a3f9b2c1) + api_key
-Cloud populates the nodes row with all hardware fields
-Cloud links node to the member's account (node_members table)
-Cloud marks code used (activation_codes.used_at = now)
-         ↓
-Node saves node_id + api_key to data/cloud_state.json
-Subsequent API calls use node_id + api_key directly
-The activation code is never sent again
+Agent saves node_id + api_key to data/cloud_state.json
+and every later call authenticates with those two headers
 ```
 
-**Codes are single-use.** A shared or leaked code lets someone else claim your node
-registration slot. If a code is compromised before use, generate a replacement.
-
-**Generating codes:**
-```bash
-# Admin CLI — bulk generation (server-side)
-python3 scripts/manage.py generate-code --count 5 --expires-days 90
-
-# Pre-link codes to a specific member account
-python3 scripts/manage.py generate-code --count 1 --user u_abc123
-
-# Member self-service via the API
-curl -X POST https://api.thetelescope.net/api/v1/me/activation-code \
-     -H "Authorization: Bearer <your_token>"
-# → {"code": "BS-2026-ABCD1234", "expires_at": "2026-09-08T..."}
-```
+**If the app can't reach the agent** (different machine, firewall, headless box),
+the agent falls back to a pairing token. It prints a short token, shows it on its
+setup page at `http://localhost:5173`, and polls
+`GET /api/v1/nodes/pair/<token>`; the app pushes the credentials to that token
+with `POST /api/v1/nodes/pair`. Tokens are short-lived, and failed claims are
+rate-limited per IP because the token space is small.
 
 ---
 
@@ -449,7 +438,7 @@ pip install flask pyyaml numpy astropy pillow requests watchdog photutils astroq
 nano config.yaml
 #    observatory.latitude / longitude
 #    image_watcher.watch_path (Seestar SMB share mount point)
-#    cloud.url + cloud.activation_code
+#    cloud.url  (credentials arrive from the app — there is no code to enter)
 
 # 4. Run (dev mode — auto-restarts src/dashboard.py on file changes)
 python3 main.py
@@ -752,11 +741,6 @@ batch           Dry-run preview of the pending AAVSO batch (does not POST)
 submit          Live AAVSO submission (ignores config dry_run setting)
 check-aavso     Verify credentials config, print a formatted test observation
 nights          Generate/backfill night summaries for all active nodes
-
-generate-code   Create activation codes
-  --count N       Number of codes to generate (default 1, max 100)
-  --user USER_ID  Pre-link to a specific member (optional)
-  --expires-days  Days until expiry (default 90)
 ```
 
 ---
@@ -779,7 +763,8 @@ python3 build/build.py --bundle-only
 ```
 
 **Windows (NSIS + NSSM)**
-- Installer prompts for activation code; writes it to `config.yaml`
+- Writes `config.yaml` from the template; no code to enter — the member links the
+  telescope from the desktop app after install
 - Registers the agent as a Windows service via NSSM; auto-starts at boot
 - Calls `powercfg /change standby-timeout-ac 0` to disable AC idle sleep
 
@@ -808,7 +793,7 @@ sudo bash build/linux/install.sh --code BS-2026-XXXXXXXX
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/nodes/register` | First-boot registration; accepts `activation_code` in JSON body |
+| POST | `/api/v1/nodes/register` | First-boot self-registration (no member link). Rejects any `activation_code` with 410 |
 | POST | `/api/v1/nodes/heartbeat` | 60-second keepalive with optional conditions JSON |
 | GET  | `/api/v1/nodes/me` | Own registry entry (all columns including performance metrics) |
 | GET  | `/api/v1/plan` | Tonight's observation plan |
@@ -824,8 +809,9 @@ sudo bash build/linux/install.sh --code BS-2026-XXXXXXXX
 | POST | `/api/v1/auth/login` | Authenticate; returns bearer token |
 | GET  | `/api/v1/me` | Member profile |
 | GET  | `/api/v1/me/nodes` | My registered nodes |
+| POST | `/api/v1/me/nodes/attach` | Link a telescope to this account; returns `node_id` + `api_key` |
 | POST | `/api/v1/me/nodes/<id>` | Claim an existing node by api_key |
-| POST | `/api/v1/me/activation-code` | Generate a personal activation code |
+| POST | `/api/v1/nodes/pair` | Push credentials to a pairing token the local agent is polling |
 | GET  | `/api/v1/me/observations` | Observation history |
 | GET  | `/api/v1/me/stats` | Cumulative totals (observations, AAVSO accepted, targets covered) |
 | GET  | `/api/v1/me/nights` | Night-by-night summaries |
@@ -848,7 +834,6 @@ sudo bash build/linux/install.sh --code BS-2026-XXXXXXXX
 |--------|------|-------------|
 | POST | `/api/v1/admin/ingest` | Trigger alert ingestion + scoring |
 | POST | `/api/v1/admin/replan` | Trigger rescoring + plan regeneration |
-| POST | `/api/v1/admin/activation-codes` | Generate codes in bulk |
 | POST | `/api/v1/interrupts` | Broadcast a high-priority target interrupt to nodes |
 | GET | `/api/v1/admin/tuning` | Get current active weights, history, and last run timestamp |
 | POST | `/api/v1/admin/tuning/rollback` | Rollback to a previous weight set by history ID |
@@ -966,7 +951,8 @@ cloud/ (Flask, port 8800)
 cloud:
   enabled: true
   url: https://api.thetelescope.net
-  activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
+  # node_id / api_key are written by the app when you link the telescope.
+  # There is no activation code — do not add one.
   auto_run_plans: true     # automatically execute observation plans from the cloud
 ```
 
@@ -1048,7 +1034,8 @@ observatory:
 cloud:
   enabled: true
   url: https://api.thetelescope.net
-  activation_code: ''      # BS-YYYY-XXXXXXXX from your account page; used once on first boot
+  # node_id / api_key are written by the app when you link the telescope.
+  # There is no activation code — do not add one.
   auto_run_plans: true
 ```
 

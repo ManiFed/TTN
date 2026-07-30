@@ -41,7 +41,6 @@ import logging
 import os
 import re
 import secrets
-import string
 import threading as _threading
 import time as _time
 from datetime import datetime, timedelta, timezone
@@ -262,33 +261,9 @@ def _geocode_location(name: str) -> tuple[float | None, float | None]:
     return None, None
 
 
-def _generate_activation_code(year: int | None = None) -> str:
-    """Generate a unique BS-YYYY-XXXXXXXX activation code."""
-    y = year or datetime.now(timezone.utc).year
-    chars = string.ascii_uppercase + string.digits
-    suffix = "".join(secrets.choice(chars) for _ in range(8))
-    return f"BS-{y}-{suffix}"
-
-
-def _validate_and_consume_code(code: str, node_id: str) -> str | None:
-    """
-    Validate an activation code and mark it consumed.
-    Returns the associated user_id (may be None for generic codes), or raises
-    ValueError if the code is invalid, expired, or already used.
-    """
-    row = db.query_one("SELECT * FROM activation_codes WHERE code = %s", (code,))
-    if row is None:
-        raise ValueError(f"activation code not found: {code}")
-    if row["used_at"]:
-        raise ValueError("activation code already used")
-    if row["expires_at"] and row["expires_at"] < _now():
-        raise ValueError("activation code expired")
-
-    db.execute(
-        "UPDATE activation_codes SET used_at = %s, node_id = %s WHERE code = %s",
-        (_now(), node_id, code),
-    )
-    return row["user_id"]  # may be None
+# Activation codes are retired. Nothing issues, validates, or consumes them;
+# the tables and columns survive only so old rows still read. Members link a
+# telescope with POST /me/nodes/attach.
 
 
 _pair_store: dict = {}
@@ -1254,15 +1229,16 @@ def api_subscribe():
     source = str(body.get("source") or "tour")[:64]
     equipment = str(body.get("equipment") or "")[:64]
 
-    existing = db.query_one("SELECT id, activation_code FROM subscribers WHERE email = %s", (email,))
+    existing = db.query_one("SELECT id FROM subscribers WHERE email = %s", (email,))
     if existing:
-        return jsonify({"ok": True, "code": existing["activation_code"], "new": False})
+        return jsonify({"ok": True, "new": False})
 
-    code = _generate_activation_code()
+    # No code is issued: signing up puts you on the list, and you link a
+    # telescope from the app once you have an account.
     db.execute(
-        "INSERT INTO subscribers (email, source, equipment, subscribed_at, activation_code, status)"
-        " VALUES (%s, %s, %s, %s, %s, 'pending')",
-        (email, source, equipment, _now(), code),
+        "INSERT INTO subscribers (email, source, equipment, subscribed_at, status)"
+        " VALUES (%s, %s, %s, %s, 'pending')",
+        (email, source, equipment, _now()),
     )
     db.execute(
         "UPDATE site_config SET member_count = member_count + 1, updated_at = %s WHERE id = 1",
@@ -1275,7 +1251,7 @@ def api_subscribe():
 @require_admin
 def api_admin_subscribers():
     rows = db.query(
-        "SELECT id, email, source, equipment, subscribed_at, activation_code, status"
+        "SELECT id, email, source, equipment, subscribed_at, status"
         " FROM subscribers ORDER BY subscribed_at DESC"
     )
     return jsonify({"subscribers": rows, "total": len(rows)})

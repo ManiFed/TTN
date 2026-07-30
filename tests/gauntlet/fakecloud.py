@@ -113,7 +113,7 @@ class FakeCloud:
                     self._reply(500, {"error": "internal error"})
                     return
                 if fake.mode == "reject":
-                    self._reply(409, {"error": "activation code already used"})
+                    self._reply(409, {"error": "registration rejected"})
                     return
                 if self.path == "/api/v1/nodes/rekey":
                     with fake._lock:

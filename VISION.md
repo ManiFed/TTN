@@ -270,9 +270,9 @@ The Telescope Net provides everything else:
 
 CTA: **Download Node Agent** → triggers installer download + account creation flow.
 
-Every free node gets a Node Activation Code (e.g., BS-2026-XYZ) that auto-registers
-on first boot and ties the node to the member's account. Delivered digitally at signup;
-optionally printed on a physical card for members who prefer it.
+There is no activation code. A member signs in to the desktop app, taps
+**Connect telescope**, and the app links the node to their account and installs
+the credentials on the local agent. Nothing to request, copy, or type.
 
 ---
 
@@ -338,7 +338,7 @@ layer — the Node Agent works identically without it.
 - Matte black vinyl wrap with The Telescope Net logo + QR plate
 - Custom boot splash and Node Agent branding on Pi builds
 - Premium constellation-themed packaging for gifted/loaned units
-- Activation card included in all shipped kits
+- Quick-start card in all shipped kits (install the agent, sign in, Connect telescope)
 
 ---
 
@@ -428,7 +428,7 @@ Grant-oriented funding model with individual donation option.
 **Cloud API surface:**
 
 *Node-authenticated endpoints:*
-- `POST /api/v1/nodes/register` — first-boot registration with activation code
+- `POST /api/v1/nodes/register` — first-boot self-registration (no activation code)
 - `POST /api/v1/nodes/heartbeat` — 60-second keepalive + conditions report
 - `GET  /api/v1/plan` — download tonight's observation plan
 - `POST /api/v1/measurements` — submit photometry result

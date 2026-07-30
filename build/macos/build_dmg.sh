@@ -193,11 +193,11 @@ if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
 <ul>
 <li>macOS 11 or later</li>
 <li>Your telescope connected to your local WiFi or via USB</li>
-<li>A TTN activation code (get one at <strong>app.thetelescope.net</strong>)</li>
+<li>A TTN member account (sign up at <strong>app.thetelescope.net</strong>)</li>
 </ul>
 <p>Everything else — Python, the plate solver, all science libraries — is bundled. No separate downloads required.</p>
 <p style="color:#555;">After installation, The Telescope Net desktop app opens automatically. It connects to the background node service on this Mac.</p>
-<p style="color:#555;">Paste your activation code into the app setup prompt to connect this computer to your member account.</p>
+<p style="color:#555;">Sign in and tap "Connect telescope" to link this computer to your member account. There is no activation code to enter.</p>
 </body>
 </html>
 HTML

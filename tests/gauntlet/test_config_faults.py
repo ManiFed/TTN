@@ -22,9 +22,9 @@ class ConfigPatchTest(TempCwdTestCase):
     def test_patch_deep_merges_and_preserves_unrelated_keys(self):
         self.write("config.yaml",
                    "cloud:\n  enabled: true\n  url: https://x\nsafety:\n  enabled: true\n")
-        apply_config_patch({"cloud": {"activation_code": "BS-2026-NEW"}})
+        apply_config_patch({"cloud": {"heartbeat_interval": 45}})
         cfg = yaml.safe_load(pathlib.Path("config.yaml").read_text())
-        self.assertEqual(cfg["cloud"]["activation_code"], "BS-2026-NEW")
+        self.assertEqual(cfg["cloud"]["heartbeat_interval"], 45)
         self.assertEqual(cfg["cloud"]["url"], "https://x")
         self.assertTrue(cfg["safety"]["enabled"])
 

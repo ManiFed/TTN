@@ -26,7 +26,6 @@ def _config(url: str) -> dict:
             "api_key": "",
             "heartbeat_interval": 1,
             "plan_poll_interval": 1,
-            "activation_code": "BS-2026-TESTCODE",
         },
         "observatory": {"latitude": 31.36, "longitude": -99.44,
                         "elevation": 500, "observer": "Gauntlet"},

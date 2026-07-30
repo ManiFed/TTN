@@ -30,7 +30,6 @@ centering:
   settle_s: 2
   tolerance_arcmin: 3
 cloud:
-  activation_code: BS-2026-NM7SB91F
   api_key: ''
   auto_run_plans: true
   disconnect_park_timeout: 1800
