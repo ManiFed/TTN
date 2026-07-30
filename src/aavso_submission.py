@@ -96,7 +96,11 @@ def submit(measurement: dict, config: dict) -> dict:
             "message":       "quality=poor, submission skipped",
         }
 
-    submission_text = _format_extended(measurement, observer_code, aavso_cfg)
+    try:
+        submission_text = _format_extended(measurement, observer_code, aavso_cfg)
+    except ValueError as exc:
+        logger.error("Cannot format submission: %s", exc)
+        return _error_result(str(exc))
 
     # ── Determine audit file paths ─────────────────────────────────────────────
     target_slug = re.sub(r"[^A-Za-z0-9_-]", "_", measurement.get("target_name", "unknown"))
@@ -171,6 +175,33 @@ def submit(measurement: dict, config: dict) -> dict:
 
 # ── AAVSO Extended File Format ─────────────────────────────────────────────────
 
+def aavso_date(measurement: dict) -> float:
+    """The HJD_UTC to write in the DATE column.
+
+    The pipeline works in BJD_TDB, which the Extended Format does not accept
+    (#DATE= takes JD, HJD or EXCEL). Measurements carry `hjd` computed at
+    photometry time; older ones are converted from their BJD using the target
+    coordinates. Both differ from the BJD by about 68 seconds, so there is no
+    honest way to emit the BJD under an HJD header.
+
+    Raises ValueError when neither is possible — the caller must skip the
+    observation rather than submit a timestamp that is a minute wrong.
+    """
+    hjd = measurement.get("hjd")
+    if hjd:
+        return float(hjd)
+
+    bjd = measurement.get("bjd") or 0.0
+    ra, dec = measurement.get("ra_deg"), measurement.get("dec_deg")
+    if bjd and ra is not None and dec is not None:
+        from src.timescales import hjd_utc_from_bjd_tdb
+        return hjd_utc_from_bjd_tdb(float(bjd), float(ra), float(dec))
+
+    raise ValueError(
+        "measurement has no HJD and cannot be converted (missing target "
+        "coordinates) — refusing to report a BJD as an HJD")
+
+
 def _format_extended(measurement: dict, observer_code: str, aavso_cfg: dict) -> str:
     """
     Build an AAVSO Extended File Format document for a single observation.
@@ -178,6 +209,8 @@ def _format_extended(measurement: dict, observer_code: str, aavso_cfg: dict) -> 
     Spec: https://www.aavso.org/aavso-extended-file-format
 
     Column order: NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES
+
+    Raises ValueError if the measurement carries no HJD — see aavso_date().
     """
     filter_name = measurement.get("filter", "CV")
     chart_id    = aavso_cfg.get("chart_id", "na") or "na"
@@ -187,14 +220,14 @@ def _format_extended(measurement: dict, observer_code: str, aavso_cfg: dict) -> 
         f"#OBSCODE={observer_code}",
         f"#SOFTWARE={_SOFTWARE_ID}",
         "#DELIM=,",
-        "#DATE=BJD",
+        "#DATE=HJD",
         "#OBSTYPE=CCD",
         "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES",
     ])
 
     # Target name must not contain commas — replace with space if present
     name = measurement.get("target_name", "UNKNOWN").replace(",", " ")
-    date = f"{measurement.get('bjd', 0.0):.6f}"
+    date = f"{aavso_date(measurement):.6f}"
     mag  = f"{measurement.get('magnitude', 99.999):.3f}"
     merr = f"{measurement.get('uncertainty', 9.999):.3f}"
 
@@ -215,6 +248,10 @@ def _format_extended(measurement: dict, observer_code: str, aavso_cfg: dict) -> 
         f"node={measurement.get('node_id', 'na')}",
         f"quality={measurement.get('quality_flag', 'na')}",
         f"fits={measurement.get('fits_file', 'na')}",
+        # The DATE column is HJD_UTC because that is what the format accepts;
+        # the full-precision barycentric timestamp travels alongside it so the
+        # archived observation is never the lossy version.
+        f"bjd_tdb={measurement.get('bjd', 0.0):.6f}",
     ])
 
     row = ",".join([

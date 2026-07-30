@@ -178,11 +178,15 @@ Observability requirements:
 #OBSCODE=[network observer code]
 #SOFTWARE=The Telescope Net Pipeline v[X]
 #DELIM=,
-#DATE=BJD
+#DATE=HJD
 #OBSTYPE=CCD
 Fields: STARID, DATE, MAGNITUDE, MAGERR, FILTER, TRANSFORMED, MTYPE,
         CNAME, CMAG, KNAME, KMAG, AMASS, GROUP, CHART, NOTES
 ```
+
+The pipeline times every measurement in BJD_TDB, but the Extended Format only
+accepts JD, HJD or EXCEL — so the DATE column carries HJD_UTC for the same
+instant (they differ by ~68 s), and the BJD rides along in NOTES as `bjd_tdb=`.
 
 ---
 

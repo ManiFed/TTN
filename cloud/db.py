@@ -130,6 +130,7 @@ _SCHEMA: list[str] = [
         node_id            TEXT NOT NULL,
         target_name        TEXT NOT NULL,
         bjd                DOUBLE PRECISION NOT NULL,
+        hjd                DOUBLE PRECISION,
         magnitude          DOUBLE PRECISION NOT NULL,
         uncertainty        DOUBLE PRECISION NOT NULL,
         filter             TEXT DEFAULT 'CV',
@@ -427,6 +428,10 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("measurements", "calibration_model_version", "TEXT DEFAULT ''"),
     ("measurements", "calibration_state", "TEXT DEFAULT ''"),
     ("measurements", "magnitude_system", "TEXT DEFAULT ''"),
+    # HJD_UTC for the same instant as bjd. AAVSO's Extended Format won't take a
+    # BJD, and the two differ by ~68 s, so the reportable timestamp is stored
+    # rather than derived at submission time.
+    ("measurements", "hjd", "DOUBLE PRECISION"),
     ("nodes", "clock_skew_s", "DOUBLE PRECISION"),
     ("nodes", "clock_qualified_at", "TEXT DEFAULT ''"),
     ("calibration_samples", "catalog_band", "TEXT DEFAULT ''"),

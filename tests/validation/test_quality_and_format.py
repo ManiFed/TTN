@@ -125,6 +125,7 @@ def test_measurement_ignores_unknown_keys():
 
 _MEASUREMENT = {
     "target_name": "T CrB, weird", "bjd": 2461000.123456,
+    "hjd": 2461000.122670, "ra_deg": 239.8757, "dec_deg": 25.9202,
     "magnitude": 10.1234, "uncertainty": 0.0567, "filter": "CV",
     "airmass": 1.345, "fwhm": 3.9, "snr": 41.2, "comparison_stars": 6,
     "quality_flag": "good", "node_id": "node_007",
@@ -139,14 +140,15 @@ def test_extended_format_structure():
     rows = [l for l in lines if not l.startswith("#")]
     assert "#TYPE=Extended" in header
     assert "#OBSCODE=XYZA" in header
-    assert "#DATE=BJD" in header
+    assert "#DATE=HJD" in header
     assert "#DELIM=," in header
     assert len(rows) == 1
     fields = rows[0].split(",")
     assert len(fields) == 15, f"expected 15 fields, got {len(fields)}: {fields}"
     name, date, mag, merr, filt, trans, mtype, cname = fields[:8]
     assert "," not in name and name == "T CrB  weird"
-    assert date == "2461000.123456"
+    assert date == "2461000.122670"          # HJD_UTC, not the BJD
+    assert "bjd_tdb=2461000.123456" in fields[14]
     assert mag == "10.123" and merr == "0.057"
     assert filt == "CV" and trans == "NO" and mtype == "DIFF"
     assert cname == "ENSEMBLE"

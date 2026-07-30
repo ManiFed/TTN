@@ -145,6 +145,32 @@ def test_bjd_includes_barycentric_roemer_term():
     assert abs(ltt.to_value("min")) < 8.5
 
 
+def test_hjd_accompanies_bjd_and_differs_by_the_timescale_offset():
+    """AAVSO takes HJD, the pipeline works in BJD_TDB. The provenance must carry
+    a real HJD_UTC — offset by TDB−UTC (~69 s) plus the bary/helio difference —
+    not the BJD under a different name."""
+    hdr = {"DATE-OBS": "2026-03-21T04:00:00", "EXPTIME": 0.001}
+    bjd, prov = P._compute_bjd_ex(hdr, 200.0, -10.0, _SITE)
+    hjd = prov["hjd_utc"]
+    assert hjd is not None
+    delta_s = (bjd - hjd) * 86400.0
+    assert 60.0 < delta_s < 80.0, f"BJD−HJD = {delta_s:.1f} s"
+
+
+def test_hjd_from_bjd_inversion_round_trips():
+    """Converting an archived BJD_TDB back to HJD_UTC must land on the value the
+    pipeline would have computed directly."""
+    from src.timescales import hjd_utc_from_bjd_tdb
+
+    hdr = {"DATE-OBS": "2026-07-30T05:12:33", "EXPTIME": 120.0}
+    ra, dec = 126.30492, 73.11086          # Z Cam
+    bjd, prov = P._compute_bjd_ex(hdr, ra, dec, _SITE)
+    recovered = hjd_utc_from_bjd_tdb(bjd, ra, dec)
+    # Geocentric inversion vs the site-aware direct value: the observer term is
+    # ≤21 ms, so anything above a tenth of a second means the maths is wrong.
+    assert abs(recovered - prov["hjd_utc"]) * 86400.0 < 0.1
+
+
 @pytest.mark.parametrize("date_obs", [
     "2026-01-15T06:30:00",
     "2026-01-15T06:30:00.123",

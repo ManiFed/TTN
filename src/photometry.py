@@ -18,6 +18,7 @@ Output dict (matches AAVSO Extended File Format fields)
     {
         "target_name":      "SN2025abc",
         "bjd":              2460500.1234,   # BJD_TDB, mid-exposure
+        "hjd":              2460500.1226,   # HJD_UTC, same instant (AAVSO reporting)
         "magnitude":        13.42,
         "uncertainty":      0.08,
         "filter":           "CV",
@@ -645,6 +646,9 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     return {
         "target_name":      target_name,
         "bjd":              round(bjd, 6),
+        "hjd":              time_prov.get("hjd_utc"),
+        "ra_deg":           round(float(ra_deg), 6),
+        "dec_deg":          round(float(dec_deg), 6),
         "magnitude":        round(target_mag, 4),
         "instrumental_magnitude": round(target_instr, 5),
         "uncertainty":      round(uncertainty, 4),
@@ -1697,7 +1701,12 @@ def _compute_bjd_ex(header: dict, ra_deg: float, dec_deg: float,
 
     time_provenance records how the timestamp was derived so each measurement
     can be audited: {"time_scale", "time_ref", "date_obs", "exptime_s",
-    "barycentric"}.
+    "barycentric", "hjd_utc"}.
+
+    "hjd_utc" carries the same instant as HJD_UTC, because that is what AAVSO
+    reporting needs — the Extended Format's #DATE= accepts JD, HJD or EXCEL,
+    never BJD.  It is computed here, from the same parsed timestamp, rather
+    than converted downstream from the BJD (see src/timescales.py).
     """
     date_obs = header.get("DATE-OBS", "")
     t = None
@@ -1729,6 +1738,7 @@ def _compute_bjd_ex(header: dict, ra_deg: float, dec_deg: float,
         "date_obs":    str(date_obs) if date_obs else None,
         "exptime_s":   None,
         "barycentric": True,
+        "hjd_utc":     None,
     }
 
     if t is None:
@@ -1761,6 +1771,18 @@ def _compute_bjd_ex(header: dict, ra_deg: float, dec_deg: float,
             prov["time_ref"] = "mid_exposure"
 
     location = _observer_location(config)
+
+    # HJD_UTC for AAVSO. Computed from the same instant, independently of the
+    # barycentric result, so a failure of one does not silently corrupt the
+    # other. If this fails the measurement is still good science — it just
+    # can't be reported to WebObs without a later conversion.
+    try:
+        from src.timescales import heliocentric_jd_utc
+        prov["hjd_utc"] = round(
+            heliocentric_jd_utc(t, ra_deg, dec_deg, location), 6)
+    except Exception as exc:
+        logger.warning("Heliocentric correction failed (%s) — no HJD recorded", exc)
+
     try:
         coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
         ltt = t.light_travel_time(coord, kind="barycentric", location=location)

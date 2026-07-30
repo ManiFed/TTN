@@ -68,12 +68,12 @@ def ingest_measurement(node_id: str, payload: dict,
     try:
         row_id = db.execute(
             """INSERT INTO measurements
-                   (node_id, target_name, bjd, magnitude, uncertainty, filter,
+                   (node_id, target_name, bjd, hjd, magnitude, uncertainty, filter,
                     airmass, fwhm, snr, comparison_stars, quality_flag,
                     zero_point, zp_scatter, fits_file, sky_mag, conditions, received_at,
                     item_id, bundle_id, response_fingerprint, instrumental_magnitude)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-            (m.node_id, m.target_name, m.bjd, m.magnitude, m.uncertainty,
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (m.node_id, m.target_name, m.bjd, m.hjd, m.magnitude, m.uncertainty,
              m.filter, m.airmass, m.fwhm, m.snr, m.comparison_stars,
              m.quality_flag, m.zero_point, m.zp_scatter, m.fits_file,
              m.sky_mag, json.dumps(conditions or {}), _now(), m.item_id,
@@ -401,16 +401,27 @@ def submit_pending_batch(config: dict) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=holdback_h)).isoformat()
 
     rows = db.query(
-        """SELECT * FROM measurements
-           WHERE aavso_submitted = 0
-             AND quality_flag IN ('good', 'acceptable')
-             AND (validation_status = 'consistent'
-                  OR (validation_status = 'single' AND received_at < %s))
-           ORDER BY target_name, bjd LIMIT 500""",
+        """SELECT m.*, t.ra_deg AS target_ra_deg, t.dec_deg AS target_dec_deg
+             FROM measurements m
+             LEFT JOIN targets t ON t.name = m.target_name
+            WHERE m.aavso_submitted = 0
+              AND m.quality_flag IN ('good', 'acceptable')
+              AND (m.validation_status = 'consistent'
+                   OR (m.validation_status = 'single' AND m.received_at < %s))
+            ORDER BY m.target_name, m.bjd LIMIT 500""",
         (cutoff,),
     )
     if not rows:
         return {"status": "empty", "message": "no pending measurements"}
+
+    rows, undatable = _partition_by_reportable_date(rows)
+    if undatable:
+        logger.warning(
+            "%d measurement(s) held back: no HJD and no target coordinates to "
+            "convert one from", len(undatable))
+    if not rows:
+        return {"status": "empty",
+                "message": "no pending measurements with a reportable date"}
 
     text = _format_batch(rows, observer_code, aavso_cfg)
 
@@ -442,16 +453,48 @@ def submit_pending_batch(config: dict) -> dict:
             "accepted": accepted, "rejected": rejected, "message": message}
 
 
+def _partition_by_reportable_date(rows: list) -> tuple:
+    """Split rows into (reportable, undatable), filling in `_hjd` on the first.
+
+    The Extended Format's #DATE= accepts JD, HJD or EXCEL — not the BJD_TDB the
+    pipeline records. Nodes now upload an HJD with every measurement; anything
+    older is converted here from its BJD using the target's coordinates. A row
+    with neither is held back rather than submitted with a timestamp that is
+    ~68 s wrong, and stays unsubmitted so it can be recovered later.
+    """
+    reportable, undatable = [], []
+    for r in rows:
+        hjd = r.get("hjd")
+        if not hjd:
+            ra, dec = r.get("target_ra_deg"), r.get("target_dec_deg")
+            if r.get("bjd") and ra is not None and dec is not None:
+                try:
+                    from src.timescales import hjd_utc_from_bjd_tdb
+                    hjd = hjd_utc_from_bjd_tdb(float(r["bjd"]), float(ra), float(dec))
+                except Exception as exc:
+                    logger.warning("HJD conversion failed for %s bjd=%s: %s",
+                                   r.get("target_name"), r.get("bjd"), exc)
+                    hjd = None
+        if hjd:
+            r["_hjd"] = float(hjd)
+            reportable.append(r)
+        else:
+            undatable.append(r)
+    return reportable, undatable
+
+
 def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
     """AAVSO Extended File Format document for many observations.
-    Mirrors aavso_submission._format_extended on the node, plus per-row node id."""
+    Mirrors aavso_submission._format_extended on the node, plus per-row node id.
+
+    Rows must already carry `_hjd` (see _partition_by_reportable_date)."""
     chart_id = aavso_cfg.get("chart_id", "na") or "na"
     lines = [
         "#TYPE=Extended",
         f"#OBSCODE={observer_code}",
         f"#SOFTWARE={_SOFTWARE_ID}",
         "#DELIM=,",
-        "#DATE=BJD",
+        "#DATE=HJD",
         "#OBSTYPE=CCD",
         "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES",
     ]
@@ -472,9 +515,12 @@ def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
             f"xval={r['validation_status']}",
             f"quality={r['quality_flag']}",
             f"cal={r.get('calibration_model_version') or 'raw'}",
+            # DATE is HJD_UTC because the format demands it; the barycentric
+            # timestamp the science actually uses rides along in the notes.
+            f"bjd_tdb={r['bjd']:.6f}",
         ])
         lines.append(",".join([
-            name, f"{r['bjd']:.6f}",
+            name, f"{r['_hjd']:.6f}",
             f"{magnitude:.3f}", f"{uncertainty:.3f}",
             r["filter"] or "CV",
             "NO", "DIFF",

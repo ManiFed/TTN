@@ -358,7 +358,8 @@ class Measurement:
     the cloud can validate uploads with the same model.
     """
     target_name: str = ""
-    bjd: float = 0.0
+    bjd: float = 0.0                 # BJD_TDB, mid-exposure — the science timestamp
+    hjd: Optional[float] = None      # HJD_UTC, same instant — what AAVSO accepts
     magnitude: float = 0.0
     uncertainty: float = 0.0
     filter: str = "CV"
