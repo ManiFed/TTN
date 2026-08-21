@@ -427,7 +427,7 @@ def api_rekey():
     recovery_token = str(body.get("recovery_token") or "").strip()
     result = registry.rekey_node(node_id, recovery_token)
     if result is None:
-        _pair_claim_record_miss(ip)
+        _pair_claim_record_miss(ip, recovery_token)
         return jsonify({"error": "invalid node_id or recovery_token"}), 401
     return jsonify(result)
 

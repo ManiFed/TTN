@@ -295,6 +295,8 @@ class CloudCommunicator:
         payload.update(self._telescope_payload())
         try:
             resp = self._post("/api/v1/nodes/register", payload, auth=False)
+            node_id = resp["node_id"]
+            api_key = resp["api_key"]
         except Exception as exc:
             logger.warning("Cloud registration failed: %s", exc)
             self.status["error"] = f"registration failed: {exc}"
@@ -310,7 +312,7 @@ class CloudCommunicator:
             return False
         self._register_failures = 0
         self._register_next_attempt = 0.0
-        self.install_credentials(resp["node_id"], resp["api_key"],
+        self.install_credentials(node_id, api_key,
                                   recovery_token=resp.get("recovery_token", ""))
         logger.info("Registered with cloud as %s (unlinked — use app Connect telescope)",
                     self._node_id)
@@ -547,46 +549,60 @@ class CloudCommunicator:
         was_ok: Optional[bool] = None
         while not self._stop.is_set():
             interval = self._heartbeat_s
-            if self._ensure_registered():
-                conditions = {}
-                if self._get_conditions:
+            try:
+                if self._ensure_registered():
+                    conditions = {}
+                    if self._get_conditions:
+                        try:
+                            conditions = self._get_conditions() or {}
+                        except Exception as exc:
+                            logger.debug("Conditions callback failed: %s", exc)
+                    conditions["utc_offset_hours"] = _utc_offset_hours()
+                    state = self._current_state()
+                    interval = self._heartbeat_interval(state)
                     try:
-                        conditions = self._get_conditions() or {}
+                        sent_at = time.time()
+                        resp = self._post("/api/v1/nodes/heartbeat",
+                                          {"conditions": conditions, "state": state,
+                                           "heartbeat_s": interval,
+                                           "clock_skew_s": self.status.get("clock_skew_s"),
+                                           "clock_qualified": self._clock_qualified})
+                        self._record_clock_sample(resp.get("server_time"), sent_at,
+                                                  time.time())
+                        self.status["last_heartbeat_ok"] = True
+                        self.status["error"] = None
+                        self._maybe_report_location(resp.get("observer"))
+                        self._maybe_report_dry_run(resp.get("dry_run"))
                     except Exception as exc:
-                        logger.debug("Conditions callback failed: %s", exc)
-                conditions["utc_offset_hours"] = _utc_offset_hours()
-                state = self._current_state()
-                interval = self._heartbeat_interval(state)
-                try:
-                    sent_at = time.time()
-                    resp = self._post("/api/v1/nodes/heartbeat",
-                                      {"conditions": conditions, "state": state,
-                                       "heartbeat_s": interval,
-                                       "clock_skew_s": self.status.get("clock_skew_s"),
-                                       "clock_qualified": self._clock_qualified})
-                    self._record_clock_sample(resp.get("server_time"), sent_at,
-                                              time.time())
-                    self.status["last_heartbeat_ok"] = True
-                    self.status["error"] = None
-                    self._maybe_report_location(resp.get("observer"))
-                    self._maybe_report_dry_run(resp.get("dry_run"))
-                except Exception as exc:
-                    self.status["last_heartbeat_ok"] = False
-                    self.status["error"] = str(exc)
-                    logger.warning("Heartbeat failed: %s", exc)
-                    if was_ok is not False:
-                        self._telemetry_event(
-                            "cloud_heartbeat_lost", "warning",
-                            {"error": str(exc)[:200]})
-                    was_ok = False
-                else:
-                    if was_ok is False:
-                        self._telemetry_event("cloud_heartbeat_restored", "info", {})
-                    was_ok = True
-                    self._flush_queue()
-                    self._flush_survey_queue()
-                    self._flush_telemetry_queue()
-                    self._flush_execution_outcomes()
+                        self.status["last_heartbeat_ok"] = False
+                        self.status["error"] = str(exc)
+                        logger.warning("Heartbeat failed: %s", exc)
+                        if was_ok is not False:
+                            self._telemetry_event(
+                                "cloud_heartbeat_lost", "warning",
+                                {"error": str(exc)[:200]})
+                        was_ok = False
+                    else:
+                        if was_ok is False:
+                            self._telemetry_event("cloud_heartbeat_restored", "info", {})
+                        was_ok = True
+                        self._flush_queue()
+                        self._flush_survey_queue()
+                        self._flush_telemetry_queue()
+                        self._flush_execution_outcomes()
+            except Exception as exc:
+                # Last-resort catch-all: anything unexpected here (a malformed
+                # server response, a bug in a helper) must never silently kill
+                # this thread -- that orphans the node with no heartbeat and no
+                # error surfaced anywhere, indistinguishable from a healthy
+                # idle node until someone notices weeks later. Log it, tell
+                # the cloud once dry_run/observer are trustworthy again, and
+                # keep looping instead of dying.
+                logger.error("Heartbeat loop: unexpected error (continuing): %s", exc,
+                            exc_info=True)
+                self.status["last_heartbeat_ok"] = False
+                self.status["error"] = f"internal error: {exc}"
+                was_ok = False
             self._wait_or_kick(interval)
 
     def _wait_or_kick(self, interval: float) -> None:
