@@ -135,6 +135,15 @@ class CloudCommunicator:
         self._stop = threading.Event()
         self._kick = threading.Event()
         self._queue_lock = threading.Lock()
+        # Serializes credential mutation (register/rekey/clear). Without this,
+        # the heartbeat/plan/sse/pair threads each independently notice a
+        # stale api_key at nearly the same moment and race to repair it: one
+        # thread's fresh rekey rotates the shared recovery_token, so the next
+        # thread's concurrent rekey attempt (still holding the pre-rotation
+        # token) gets rejected and clears the credentials the first thread
+        # just installed -- an unbounded reject/repair/reject thrash observed
+        # live in production.
+        self._creds_lock = threading.Lock()
         autonomy_cfg = config.get("autonomy") or {}
         self._outbox = DurableOutbox(
             _OUTBOX_FILE,
@@ -265,6 +274,13 @@ class CloudCommunicator:
 
     def _ensure_registered(self) -> bool:
         if self._node_id and self._api_key:
+            return True
+        with self._creds_lock:
+            return self._ensure_registered_locked()
+
+    def _ensure_registered_locked(self) -> bool:
+        if self._node_id and self._api_key:
+            # Another thread registered while we were waiting for the lock.
             return True
 
         # Back off between failed attempts (60 s → 2 min → … → 15 min) so an
@@ -474,9 +490,15 @@ class CloudCommunicator:
             body = {}
         if body.get("error") != "invalid node credentials":
             return
-        if self._recovery_token and self._rekey():
-            return
-        self._clear_credentials("invalid node credentials")
+        attempted_key = self._api_key
+        with self._creds_lock:
+            if self._api_key != attempted_key:
+                # Another thread already repaired credentials while we were
+                # waiting for the lock (this failure was for the stale key).
+                return
+            if self._recovery_token and self._rekey():
+                return
+            self._clear_credentials("invalid node credentials")
 
     def _rekey(self) -> bool:
         """POST the recovery_token to trade it for a fresh api_key without
