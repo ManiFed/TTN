@@ -40,4 +40,13 @@ if [ -d "${DESKTOP_APP}" ]; then
     rm -rf "${DESKTOP_APP}"
 fi
 
+# Clear out any Gatekeeper ".localized" quarantine-rename wrapper left behind
+# by a previous unsigned/unnotarized install (see postinstall.sh) so it can't
+# confuse this install's payload copy.
+LOCALIZED_WRAPPER="${DESKTOP_APP%.app}.localized"
+if [ -d "${LOCALIZED_WRAPPER}" ]; then
+    echo "Removing stale ${LOCALIZED_WRAPPER} from a previous install"
+    rm -rf "${LOCALIZED_WRAPPER}"
+fi
+
 exit 0

@@ -2021,6 +2021,17 @@ def _on_cloud_location(lat: float, lon: float) -> None:
     ).start()
 
 
+def _on_cloud_dry_run(enabled: bool) -> None:
+    """Cloud told us this node's admin dry-run testing mode changed (see
+    cloud/registry.py::dry_run_active). While enabled the safety watchdog
+    ignores actual sun position, so a full night run — real slews, real
+    exposures — can be exercised in daylight. Applied only to the live
+    manager; not persisted to config.yaml since it's a bounded, cloud-owned
+    testing window rather than a standing local setting."""
+    if _safety_mgr is not None:
+        _safety_mgr.set_dry_run(enabled)
+
+
 def _auto_horizon_scan() -> None:
     """Default-parameter horizon scan, applied automatically on completion.
 
@@ -4171,6 +4182,8 @@ def _wait_for_darkness(max_wait_s: float = 16 * 3600) -> bool:
             status = _safety_mgr.status()
         except Exception:
             return True
+        if status.get("dry_run"):
+            return True  # admin dry-run testing mode — ignore actual sun position
         sun = status.get("sun_elevation")
         threshold = status.get("dawn_threshold", -18.0)
         if sun is None:
@@ -4697,6 +4710,7 @@ def launch(port: int = 5173) -> None:
             get_telescope_specs=_cloud_telescope_specs,
             get_state=_cloud_state,
             on_location=_on_cloud_location,
+            on_dry_run=_on_cloud_dry_run,
         )
         _cloud.start()
         threading.Thread(

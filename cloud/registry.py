@@ -602,6 +602,39 @@ def set_vacation(node_id: str, until_date: str, from_date: str = "") -> None:
     logger.info("Node %s on vacation %s → %s", node_id, from_date, until_date)
 
 
+def set_dry_run(node_id: str, minutes: float) -> str:
+    """Enable admin dry-run testing mode for *minutes* from now.
+
+    While active, the cloud planner ignores actual darkness for this node
+    (cloud/network_planner.py::build_node_context) and the node's own hardware
+    safety latch ignores actual sun position (alpaca/safety_manager.py), so a
+    full night run — real slews, real exposures — can be exercised in
+    daylight. Bounded and re-checked every call rather than a standing flag,
+    so it can't be left on by accident.
+    """
+    until = (datetime.now(timezone.utc) + timedelta(minutes=max(1.0, minutes))).isoformat()
+    db.execute("UPDATE nodes SET dry_run_until = %s WHERE node_id = %s", (until, node_id))
+    logger.warning("Node %s: admin dry-run mode enabled until %s", node_id, until)
+    return until
+
+
+def clear_dry_run(node_id: str) -> None:
+    """Disable dry-run mode immediately."""
+    db.execute("UPDATE nodes SET dry_run_until = '' WHERE node_id = %s", (node_id,))
+    logger.info("Node %s: admin dry-run mode cleared", node_id)
+
+
+def dry_run_active(node: dict) -> bool:
+    """Whether *node*'s dry_run_until timestamp is set and still in the future."""
+    until = (node.get("dry_run_until") or "").strip()
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
 def clear_vacation(node_id: str) -> None:
     """Cancel an active or scheduled vacation.
 

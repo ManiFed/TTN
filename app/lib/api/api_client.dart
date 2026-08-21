@@ -237,6 +237,16 @@ class ApiClient {
   /// Cancel a node's active vacation.
   Future<void> cancelNodeVacation(String nodeId) => _delete('/me/nodes/$nodeId/vacation');
 
+  /// Admin-only: enable dry-run testing mode for [minutes] (default 4h) —
+  /// runs a full night pipeline (real plan, real slew/expose) regardless of
+  /// actual sun position. Requires the signed-in account to have role
+  /// 'admin' (cloud/auth.py::require_admin_member); returns 403 otherwise.
+  Future<void> setNodeDryRun(String nodeId, {int minutes = 240}) =>
+      _put('/admin/nodes/$nodeId/dry-run', {'minutes': minutes});
+
+  /// Admin-only: turn off dry-run testing mode immediately.
+  Future<void> clearNodeDryRun(String nodeId) => _delete('/admin/nodes/$nodeId/dry-run');
+
   /// Disconnect a node from this account.
   Future<void> disconnectNode(String nodeId) => _delete('/me/nodes/$nodeId');
 

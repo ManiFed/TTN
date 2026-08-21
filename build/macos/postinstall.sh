@@ -142,6 +142,20 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     fi
     sleep 1
 done
+
+# ── Unwrap a Gatekeeper ".localized" quarantine rename ─────────────────────────
+# Because this .pkg (and the app inside it) aren't signed/notarized, macOS
+# Installer sometimes can't validate the payload during copy and defensively
+# renames the destination folder by appending ".localized", leaving the real
+# app nested one level inside it instead of at DESKTOP_APP. Self-heal that
+# here so members never have to do this by hand.
+LOCALIZED_WRAPPER="${DESKTOP_APP%.app}.localized"
+if [ ! -d "${DESKTOP_APP}" ] && [ -d "${LOCALIZED_WRAPPER}/$(basename "${DESKTOP_APP}")" ]; then
+    echo "Found Gatekeeper-renamed app at ${LOCALIZED_WRAPPER}; unwrapping..."
+    mv "${LOCALIZED_WRAPPER}/$(basename "${DESKTOP_APP}")" "${DESKTOP_APP}"
+    rm -rf "${LOCALIZED_WRAPPER}"
+fi
+
 if [ -d "${DESKTOP_APP}" ]; then
     launchctl asuser "${CONSOLE_UID}" /usr/bin/open -a "${DESKTOP_APP}" || true
     echo "Desktop app opened for ${CONSOLE_USER}: ${DESKTOP_APP}"

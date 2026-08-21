@@ -474,7 +474,10 @@ def api_heartbeat(node):
         observer = {"latitude": node["session_lat"], "longitude": node["session_lon"]}
     else:
         observer = {"latitude": node["latitude"], "longitude": node["longitude"]}
-    return jsonify({"ok": True, "server_time": _now(), "observer": observer})
+    return jsonify({
+        "ok": True, "server_time": _now(), "observer": observer,
+        "dry_run": registry.dry_run_active(node),
+    })
 
 
 @app.route("/api/v1/incidents", methods=["POST"])
@@ -1885,12 +1888,14 @@ def api_me_nodes(user):
                   n.last_heartbeat, n.first_heartbeat_at,
                   n.last_conditions, n.portable, n.vacation_until, n.vacation_from,
                   n.session_city, n.session_site_name, n.previous_locations,
+                  n.dry_run_until,
                   nm.claimed_at, nm.display_name
            FROM nodes n
            JOIN node_members nm ON nm.node_id = n.node_id
            WHERE nm.user_id = %s""",
         (user["user_id"],),
     )
+    is_admin = user.get("role") == "admin"
     for r in rows:
         r["status"] = registry.effective_status(r)
         r["online"] = registry.is_online(r)
@@ -1898,7 +1903,11 @@ def api_me_nodes(user):
         r["previous_locations"] = db.loads(r.get("previous_locations"), [])
         r["conditions"] = db.loads(r.get("last_conditions"), {})
         r.pop("last_conditions", None)
-    return jsonify({"nodes": rows})
+        # Only surface dry-run state to admins -- other members shouldn't see
+        # or be prompted about a testing-only control on someone's node.
+        if not is_admin:
+            r.pop("dry_run_until", None)
+    return jsonify({"nodes": rows, "is_admin": is_admin})
 
 
 @app.route("/api/v1/me/nodes/<node_id>/live", methods=["GET"])
@@ -2182,6 +2191,41 @@ def api_me_cancel_vacation(user, node_id):
     if not _assert_owns_node(user["user_id"], node_id):
         return jsonify({"error": "node not found"}), 404
     registry.clear_vacation(node_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/v1/admin/nodes/<node_id>/dry-run", methods=["PUT"])
+@auth.require_admin_member
+def api_admin_set_dry_run(admin_user, node_id):
+    """Enable dry-run testing mode: this node runs a full night pipeline —
+    real plan generation, real slews/exposures — regardless of actual sun
+    position, for a bounded window.
+
+    Body: {"minutes": 240}  (default 240 = 4h; clamped to [1, 720])
+    """
+    node = db.query_one("SELECT node_id FROM nodes WHERE node_id = %s", (node_id,))
+    if node is None:
+        return jsonify({"error": "node not found"}), 404
+    body = _json_body()
+    try:
+        minutes = float(body.get("minutes", 240))
+    except (TypeError, ValueError):
+        return jsonify({"error": "minutes must be a number"}), 400
+    minutes = max(1.0, min(720.0, minutes))
+    until = registry.set_dry_run(node_id, minutes)
+    logger.warning("Admin %s enabled dry-run mode on node %s until %s",
+                   admin_user["email"], node_id, until)
+    return jsonify({"ok": True, "dry_run_until": until})
+
+
+@app.route("/api/v1/admin/nodes/<node_id>/dry-run", methods=["DELETE"])
+@auth.require_admin_member
+def api_admin_clear_dry_run(admin_user, node_id):
+    node = db.query_one("SELECT node_id FROM nodes WHERE node_id = %s", (node_id,))
+    if node is None:
+        return jsonify({"error": "node not found"}), 404
+    registry.clear_dry_run(node_id)
+    logger.warning("Admin %s cleared dry-run mode on node %s", admin_user["email"], node_id)
     return jsonify({"ok": True})
 
 

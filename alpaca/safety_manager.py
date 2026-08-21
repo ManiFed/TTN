@@ -145,6 +145,13 @@ class SafetyManager:
         self._orig_sigint  = None
         self._orig_sigterm = None
 
+        # Admin dry-run testing mode: ignore actual sun position so a full
+        # night run (real slews, real exposures) can be exercised in
+        # daylight. Set remotely by CloudCommunicator from the cloud's
+        # nodes.dry_run_until (see cloud/registry.py::dry_run_active) —
+        # never enabled locally by default.
+        self._dry_run           : bool            = False
+
         # Mutable safety state — always access under self._lock
         self._safe             : bool            = True
         self._parked           : bool            = False
@@ -165,6 +172,24 @@ class SafetyManager:
         with self._lock:
             self._lat = float(lat)
             self._lon = float(lon)
+
+    def set_dry_run(self, enabled: bool) -> None:
+        """Enable/disable admin dry-run testing mode.
+
+        While enabled, the dawn/twilight watchdog (_run_dawn_check) is
+        skipped entirely — the system is treated as fully dark regardless of
+        actual sun position, so a full night run can be exercised in
+        daylight. This does NOT touch is_pointing_safe() (the horizon mask)
+        or the disconnect watchdog — those still apply.
+        """
+        with self._lock:
+            was_enabled = self._dry_run
+            self._dry_run = bool(enabled)
+            if enabled and not was_enabled:
+                self._twilight = False
+        if enabled != was_enabled:
+            logger.warning("SafetyManager: dry-run testing mode %s",
+                           "ENABLED — ignoring sun position" if enabled else "disabled")
 
     def set_horizon_mask(self, mask: list) -> None:
         """Update the running manager's horizon mask -- e.g. after an
@@ -246,7 +271,7 @@ class SafetyManager:
         with self._lock:
             if not self._safe:
                 return False
-            twilight = self._twilight
+            twilight = self._twilight and not self._dry_run
             limit    = self._twilight_bright_mag_limit
         if not twilight:
             return True
@@ -352,6 +377,7 @@ class SafetyManager:
                 "twilight_park_threshold":    self._twilight_park_elevation,
                 "twilight_bright_mag_limit":  self._twilight_bright_mag_limit,
                 "horizon_mask_knots": len(self._horizon_mask),
+                "dry_run":           self._dry_run,
             }
 
     # ── Signal handling ────────────────────────────────────────────────────────
@@ -467,6 +493,8 @@ class SafetyManager:
             )
 
     def _run_dawn_check(self) -> None:
+        if self._dry_run:
+            return
         if self._lat == 0.0 and self._lon == 0.0:
             return
         try:
@@ -496,6 +524,15 @@ class SafetyManager:
         without waiting up to heartbeat_interval seconds — this matters for
         automated overnight multi-dusk sessions.
         """
+        if self._dry_run:
+            with self._lock:
+                if not self._safe and self._reason.startswith("dawn"):
+                    self._safe             = True
+                    self._parked           = False
+                    self._reason           = ""
+                    self._disconnect_since = None
+                    self._twilight          = False
+            return
         if self._lat == 0.0 and self._lon == 0.0:
             return
         try:

@@ -499,6 +499,12 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("aavso_batches", "file_text",             "TEXT DEFAULT ''"),
     ("aavso_batches", "manually_submitted",    "INTEGER DEFAULT 0"),
     ("aavso_batches", "manually_submitted_at", "TEXT DEFAULT ''"),
+    # Admin-only dry-run testing mode: lets a node run the full night pipeline
+    # (plan generation + real hardware slew/expose) regardless of actual sun
+    # position, for a bounded window. An expiring timestamp rather than a bare
+    # boolean so an admin can't leave a telescope's daylight safety latch
+    # disabled indefinitely by forgetting to turn it back off.
+    ("nodes", "dry_run_until", "TEXT DEFAULT ''"),
 ]
 
 # Tables added after initial schema — created idempotently in init().

@@ -484,6 +484,45 @@ class _NodeCard extends StatelessWidget {
                   style: TextStyle(fontSize: 13)),
             ),
           ],
+          // Admin-only: dry-run testing mode (real slew/expose regardless of
+          // actual sun position). Never shown to a non-admin member.
+          if (context.select<AppState, bool>(
+              (s) => s.member?.isAdmin ?? false)) ...[
+            const SizedBox(height: 8),
+            if (node.isDryRunActive) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Dry run active until ${_fmtTime(node.dryRunUntil)}',
+                      style: const TextStyle(
+                          fontFamily: 'Geist',
+                          fontSize: 12,
+                          color: BSTheme.warm),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _stopDryRun(context),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      foregroundColor: BSTheme.warm,
+                    ),
+                    child: const Text('Stop', style: TextStyle(fontSize: 13)),
+                  ),
+                ],
+              ),
+            ] else
+              OutlinedButton.icon(
+                onPressed: () => _startDryRun(context),
+                icon: const Icon(Icons.science_outlined, size: 16),
+                label: const Text('Dry run (admin test)'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(40),
+                  side: const BorderSide(color: BSTheme.glassBorder),
+                  foregroundColor: BSTheme.ink2,
+                ),
+              ),
+          ],
         ],
       ),
     ),
@@ -576,6 +615,69 @@ class _NodeCard extends StatelessWidget {
       }
     }
   }
+
+  String _fmtTime(String iso) {
+    try {
+      final d = DateTime.parse(iso).toLocal();
+      final h = d.hour.toString().padLeft(2, '0');
+      final m = d.minute.toString().padLeft(2, '0');
+      return '$h:$m';
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  Future<void> _startDryRun(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Start dry run?'),
+        content: Text(
+          'This tells ${_ellipsize(node.displayName.isNotEmpty ? node.displayName : node.nodeId)} '
+          'to run a full night — real plan, real slews, real exposures — '
+          'ignoring actual sun position for 4 hours. Only use this for '
+          'testing, and make sure the telescope is safe to point wherever '
+          'the plan sends it in daylight (e.g. dome closed or camera capped).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Start dry run'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await context.read<AppState>().api.setNodeDryRun(node.nodeId);
+      onRefresh();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start dry run: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _stopDryRun(BuildContext context) async {
+    try {
+      await context.read<AppState>().api.clearNodeDryRun(node.nodeId);
+      onRefresh();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to stop dry run: $e')),
+        );
+      }
+    }
+  }
+
+  String _ellipsize(String s) => s.length > 40 ? '${s.substring(0, 40)}…' : s;
 }
 
 // ── Telescope detail screen ───────────────────────────────────────────────────

@@ -188,6 +188,26 @@ def require_member(fn):
     return wrapper
 
 
+def require_admin_member(fn):
+    """Like require_member, but the authenticated user must have role='admin'.
+
+    Distinct from server.py's require_admin (a static X-Admin-Key shared
+    secret with no user identity) — this ties admin actions to a specific
+    signed-in account, e.g. so dry-run testing mode can be scoped to named
+    admins rather than anyone holding the ops key.
+    """
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = _extract_token()
+        user = verify_token(token) if token else None
+        if user is None:
+            return jsonify({"error": "authentication required"}), 401
+        if user.get("role") != "admin":
+            return jsonify({"error": "admin role required"}), 403
+        return fn(user, *args, **kwargs)
+    return wrapper
+
+
 def _extract_token() -> Optional[str]:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):

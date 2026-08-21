@@ -142,12 +142,22 @@ def build_node_context(node: dict, config: dict) -> Optional[NodeContext]:
         lat = float(node.get("session_lat") or lat)
         lon = float(node.get("session_lon") or lon)
 
-    sun_limit = float(config.get("scheduler", {}).get("sun_altitude_limit", -12.0))
-    night = night_window(lat, lon, sun_limit_deg=sun_limit)
-    if night is None:
-        logger.info("No darkness for %s within 24 h — no plan", node["node_id"])
-        return None
-    t0, t1 = night
+    if registry.dry_run_active(node):
+        # Admin testing mode: build a plan for a fixed forward window instead
+        # of the actual dark stretch, so the full pipeline (this node's
+        # scheduling *and* its hardware safety latch, see
+        # alpaca/safety_manager.py) can be exercised in daylight.
+        logger.warning("DRY RUN: node %s — treating now as night for testing",
+                        node["node_id"])
+        t0 = datetime.now(timezone.utc)
+        t1 = t0 + timedelta(hours=4)
+    else:
+        sun_limit = float(config.get("scheduler", {}).get("sun_altitude_limit", -12.0))
+        night = night_window(lat, lon, sun_limit_deg=sun_limit)
+        if night is None:
+            logger.info("No darkness for %s within 24 h — no plan", node["node_id"])
+            return None
+        t0, t1 = night
 
     n_slots = max(1, int((t1 - t0).total_seconds() / 60 / STEP_MIN))
     coord = tuning.active_params(config).get("coordination", objective.DEFAULT_COORD_PARAMS)

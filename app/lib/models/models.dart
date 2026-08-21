@@ -32,6 +32,8 @@ class Member {
         displayName: _asStr(j['display_name']),
         country: _asStr(j['country']),
       );
+
+  bool get isAdmin => role == 'admin';
 }
 
 /// A previous observing location stored on a portable node.
@@ -180,6 +182,9 @@ class Node {
   final String sessionSiteName;
   final List<PreviousLocation> previousLocations;
   final NodeConditions conditions;
+  /// Admin dry-run testing mode expiry (only ever populated for an admin's
+  /// own /me/nodes response — see cloud/server.py::api_me_nodes).
+  final String dryRunUntil;
 
   const Node({
     required this.nodeId,
@@ -198,6 +203,7 @@ class Node {
     required this.sessionSiteName,
     required this.previousLocations,
     this.conditions = const NodeConditions(),
+    this.dryRunUntil = '',
   });
 
   factory Node.fromJson(Map<String, dynamic> j) {
@@ -225,6 +231,7 @@ class Node {
             ? Map<String, dynamic>.from(j['conditions'] as Map)
             : null,
       ),
+      dryRunUntil: _asStr(j['dry_run_until']),
     );
   }
 
@@ -232,6 +239,12 @@ class Node {
   bool get isOnVacation => status == 'vacation';
   /// A vacation is scheduled for a future start date but hasn't begun yet.
   bool get isVacationScheduled => !isOnVacation && vacationUntil.isNotEmpty;
+
+  bool get isDryRunActive {
+    if (dryRunUntil.isEmpty) return false;
+    final until = DateTime.tryParse(dryRunUntil);
+    return until != null && until.isAfter(DateTime.now().toUtc());
+  }
 
   String get location {
     final parts = [city, country].where((p) => p.isNotEmpty).toList();

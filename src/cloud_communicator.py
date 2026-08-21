@@ -95,6 +95,7 @@ class CloudCommunicator:
         get_telescope_specs: Optional[Callable[[], dict]] = None,
         get_state: Optional[Callable[[], dict]] = None,
         on_location: Optional[Callable[[float, float], None]] = None,
+        on_dry_run: Optional[Callable[[bool], None]] = None,
     ) -> None:
         cloud_cfg = config.get("cloud", {})
         self._url = str(cloud_cfg.get("url", "")).rstrip("/")
@@ -119,6 +120,8 @@ class CloudCommunicator:
         self._on_task_cancel = on_task_cancel
         self._on_location = on_location
         self._last_observer: Optional[tuple] = None
+        self._on_dry_run = on_dry_run
+        self._last_dry_run: Optional[bool] = None
 
         self._node_id = str(cloud_cfg.get("node_id", "") or "")
         # api_key is a secret: config carries a ${CLOUD_NODE_API_KEY} placeholder
@@ -421,6 +424,21 @@ class CloudCommunicator:
         except Exception as exc:
             logger.debug("on_location callback failed: %s", exc)
 
+    def _maybe_report_dry_run(self, dry_run) -> None:
+        """Invoke on_dry_run whenever the cloud's admin dry-run flag for this
+        node changes, so the local safety watchdog can start/stop ignoring
+        actual sun position (see alpaca/safety_manager.py::set_dry_run)."""
+        if not self._on_dry_run or dry_run is None:
+            return
+        enabled = bool(dry_run)
+        if enabled == self._last_dry_run:
+            return
+        self._last_dry_run = enabled
+        try:
+            self._on_dry_run(enabled)
+        except Exception as exc:
+            logger.debug("on_dry_run callback failed: %s", exc)
+
     def _post(self, path: str, payload: dict, auth: bool = True) -> dict:
         import requests
         resp = requests.post(self._url + path, json=payload,
@@ -551,6 +569,7 @@ class CloudCommunicator:
                     self.status["last_heartbeat_ok"] = True
                     self.status["error"] = None
                     self._maybe_report_location(resp.get("observer"))
+                    self._maybe_report_dry_run(resp.get("dry_run"))
                 except Exception as exc:
                     self.status["last_heartbeat_ok"] = False
                     self.status["error"] = str(exc)
