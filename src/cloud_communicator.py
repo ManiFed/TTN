@@ -459,42 +459,50 @@ class CloudCommunicator:
 
     def _post(self, path: str, payload: dict, auth: bool = True) -> dict:
         import requests
+        attempted_key = self._api_key
         resp = requests.post(self._url + path, json=payload,
                              headers=self._headers() if auth else {}, timeout=30)
         if auth and resp.status_code == 401:
-            self._handle_unauthorized(resp)
+            self._handle_unauthorized(resp, attempted_key)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
     def _get(self, path: str) -> dict:
         import requests
+        attempted_key = self._api_key
         resp = requests.get(self._url + path, headers=self._headers(), timeout=30)
         if resp.status_code == 401:
-            self._handle_unauthorized(resp)
+            self._handle_unauthorized(resp, attempted_key)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
-    def _handle_unauthorized(self, resp) -> None:
+    def _handle_unauthorized(self, resp, attempted_key: str) -> None:
         """The cloud rejects our node_id/api_key outright (as opposed to a
         transient/5xx/429 failure) — the stale credential will never start
         working again on retry. Try to recover silently first: if we hold a
         recovery_token for this exact node_id, trade it for a fresh api_key
         and keep going under the same identity (same history, no re-linking).
         Only if that's unavailable or also rejected do we fall back to
-        wiping credentials and registering as a brand new, unlinked node."""
+        wiping credentials and registering as a brand new, unlinked node.
+
+        attempted_key is the api_key the failing request actually used
+        (captured by the caller before sending it), not read fresh here —
+        by the time a 401 comes back another thread may have already
+        installed a newer, perfectly valid key, and re-checking self._api_key
+        at this point would wrongly treat that fresh key as still-bad and
+        tear it down."""
         try:
             body = resp.json()
         except ValueError:
             body = {}
         if body.get("error") != "invalid node credentials":
             return
-        attempted_key = self._api_key
         with self._creds_lock:
             if self._api_key != attempted_key:
-                # Another thread already repaired credentials while we were
-                # waiting for the lock (this failure was for the stale key).
+                # Another thread already repaired credentials since this
+                # request was sent -- the failure was for the stale key.
                 return
             if self._recovery_token and self._rekey():
                 return
