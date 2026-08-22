@@ -259,3 +259,59 @@ class ImageTest(unittest.TestCase):
         _, text, _ = call(self.server, "tonight_results", {})
         self.assertIn("42 measurement", text)
         self.assertIn("exporter not ready", text)
+
+
+class ImagingProgramTest(unittest.TestCase):
+    """The imaging half of a night — and it must not run on a real telescope."""
+
+    def setUp(self):
+        self.agent = MagicMock(spec=AgentClient)
+        self.client = MagicMock(spec=CloudClient)
+        self.client.base = "https://example.invalid"
+        self.client.authenticated = False
+        self.agent.post.return_value = {}
+        self.server = build_server(self.agent, self.client)
+        self.args = {"target_name": "M51", "ra_hours": 13.5, "dec_deg": 47.2}
+
+    def test_it_slews_centres_and_stacks(self):
+        with patch.dict("os.environ", {"TELESCOPE_MCP_ENV": "sim"}, clear=True):
+            ok, text, _ = call(self.server, "run_imaging_program", self.args)
+        self.assertTrue(ok, text)
+        paths = [c[0][0] for c in self.agent.post.call_args_list]
+        self.assertEqual(paths, ["/api/slew", "/api/center/run", "/api/stack/start"])
+        self.assertIn("M51", text)
+
+    def test_it_refuses_to_move_a_production_telescope(self):
+        with patch.dict("os.environ", {"TELESCOPE_MCP_ENV": "production"}, clear=True):
+            ok, text, _ = call(self.server, "run_imaging_program", self.args)
+        self.assertFalse(ok)
+        self.agent.post.assert_not_called()
+
+    def test_a_refused_slew_explains_the_likely_cause(self):
+        self.agent.post.side_effect = ApiError(400, "below horizon mask")
+        with patch.dict("os.environ", {"TELESCOPE_MCP_ENV": "sim"}, clear=True):
+            ok, text, _ = call(self.server, "run_imaging_program", self.args)
+        self.assertIn("horizon mask", text)
+        self.assertIn('"started": false', text.lower())
+
+    def test_a_failed_centring_does_not_abandon_the_imaging(self):
+        """An uncentred frame is still a frame."""
+        def post(path, body=None, timeout=15.0):
+            if path == "/api/center/run":
+                raise ApiError(500, "plate solve failed")
+            return {}
+        self.agent.post.side_effect = post
+        with patch.dict("os.environ", {"TELESCOPE_MCP_ENV": "sim"}, clear=True):
+            ok, text, _ = call(self.server, "run_imaging_program", self.args)
+        self.assertTrue(ok, text)
+        self.assertIn("plate solve failed", text)
+        self.assertIn('"started": true', text.lower())
+
+    def test_targets_can_be_searched_by_name(self):
+        self.agent.get.return_value = [
+            {"name": "M51", "common_name": "Whirlpool Galaxy"},
+            {"name": "M42", "common_name": "Orion Nebula"},
+        ]
+        _, text, _ = call(self.server, "imaging_targets", {"search": "orion"})
+        self.assertIn("M42", text)
+        self.assertNotIn("M51", text)

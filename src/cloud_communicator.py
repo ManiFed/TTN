@@ -96,6 +96,7 @@ class CloudCommunicator:
         get_state: Optional[Callable[[], dict]] = None,
         on_location: Optional[Callable[[float, float], None]] = None,
         on_dry_run: Optional[Callable[[bool], None]] = None,
+        on_tonight: Optional[Callable[[dict], None]] = None,
     ) -> None:
         cloud_cfg = config.get("cloud", {})
         self._url = str(cloud_cfg.get("url", "")).rstrip("/")
@@ -121,6 +122,9 @@ class CloudCommunicator:
         self._on_location = on_location
         self._last_observer: Optional[tuple] = None
         self._on_dry_run = on_dry_run
+        self._on_tonight = on_tonight
+        self._tonight: dict = {}
+        self._tonight_lock = threading.Lock()
         self._last_dry_run: Optional[bool] = None
 
         self._node_id = str(cloud_cfg.get("node_id", "") or "")
@@ -698,6 +702,9 @@ class CloudCommunicator:
         """React to a push signal by fetching over the authenticated main API."""
         try:
             if kind in ("plan", "retask"):
+                # Tonight first: if the member has stood the node down, there
+                # is no point fetching a plan it must not run.
+                self._poll_tonight()
                 self._poll_plan()
                 self._poll_interrupts()
                 self._poll_tasks()
@@ -747,6 +754,12 @@ class CloudCommunicator:
     def _plan_loop(self) -> None:
         while not self._stop.is_set():
             if self._node_id and self._api_key:
+                # Tonight leads: everything below is about what to observe,
+                # and this decides whether to observe at all.
+                try:
+                    self._poll_tonight()
+                except Exception as exc:
+                    logger.debug("Tonight poll failed: %s", exc)
                 try:
                     self._poll_autonomy_bundle()
                 except Exception as exc:
@@ -950,6 +963,60 @@ class CloudCommunicator:
                 self._post(f"/api/v1/interrupts/{item['id']}/ack", {})
             except Exception as exc:
                 logger.debug("Interrupt ack failed: %s", exc)
+
+    def _poll_tonight(self) -> None:
+        """Fetch tonight's intent: whether to observe, and what shape the run has.
+
+        Polled on the heartbeat and on any 'retask' push, so a member standing
+        their telescope down is acted on in about a second rather than at the
+        next plan poll. The callback fires only on a change, and specifically
+        on the observing/not-observing transition -- re-cancelling an already
+        cancelled night on every poll would fight the scheduler.
+        """
+        try:
+            data = self._get("/api/v1/nodes/tonight")
+        except Exception as exc:
+            # A node that cannot reach the cloud keeps observing on its last
+            # known intent. Going dark on a network blip would cost a night.
+            logger.debug("Tonight poll failed: %s", exc)
+            return
+        if not isinstance(data, dict) or not data.get("night"):
+            return
+
+        with self._tonight_lock:
+            previous = dict(self._tonight)
+            self._tonight = data
+
+        was_observing = previous.get("observing")
+        now_observing = bool(data.get("observing"))
+        changed = (was_observing != now_observing
+                   or previous.get("status") != data.get("status"))
+        if not changed or not self._on_tonight:
+            return
+
+        logger.info("Tonight (%s): observing=%s — %s",
+                    data.get("status"), now_observing, data.get("reason", ""))
+        try:
+            self._on_tonight(data)
+        except Exception as exc:
+            logger.error("on_tonight callback raised: %s", exc)
+
+    def active_tonight(self) -> dict:
+        """Tonight's intent as last fetched. Empty before the first poll."""
+        with self._tonight_lock:
+            return dict(self._tonight)
+
+    def observing_tonight(self) -> bool:
+        """Whether this node should be observing right now.
+
+        Defaults to True before the first successful poll: a node that has not
+        yet heard from the cloud should behave as it always has, and its own
+        SafetyManager still governs whether it is safe to open.
+        """
+        with self._tonight_lock:
+            if not self._tonight:
+                return True
+            return bool(self._tonight.get("observing"))
 
     def _poll_tasks(self) -> None:
         data = self._get("/api/v1/tasks")

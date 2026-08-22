@@ -5,7 +5,7 @@ because the product has two backends:
 
 | Server | Wraps | Tools | Who runs it |
 |---|---|---|---|
-| `local_server` | both backends | 128 | the computer attached to a telescope |
+| `local_server` | both backends | 130 | the computer attached to a telescope |
 | `cloud_server` | `api.thetelescope.net` (cloud/server.py) | 79 | anyone, from anywhere |
 
 The node server is a **superset**, not a sibling. Linking a telescope spans both
@@ -108,6 +108,29 @@ Tool results carry a `nudge`: one honest line about what the research programme
 gets out of tonight. It is a nudge, not a gate. Declining is always one call
 away and is never argued with.
 
+### What the node does with it
+
+`src/cloud_communicator.py` polls `/api/v1/nodes/tonight` on the plan loop and
+on any `retask` push, so a stand-down lands in about a second. The callback
+fires only on a *change* — re-cancelling an already-cancelled night on every
+poll would fight the scheduler.
+
+`src/dashboard.py` acts on it. A stand-down cancels the running schedule,
+aborts the exposure in flight (waiting out a 300-second exposure is not "stop
+now"), and parks the mount. The schedule loop re-checks the intent per item, so
+the weather closing in mid-night stops the run rather than being noticed at
+dawn.
+
+Both sides **fail open**: an unreachable cloud means the node carries on with
+its last known intent, and a node that has never heard from the cloud behaves as
+it always has. Going dark on a network blip would cost a clear night, and the
+SafetyManager still decides whether it is actually safe to open.
+
+A bounded research block (`tonight_accept(research_hours=2, imaging_after=True)`)
+ends when its hours are up and hands the rest of the night to
+`run_imaging_program`. Zero hours is treated as *unbounded*, not as instantly
+over — otherwise a malformed proposal would silently skip all the science.
+
 ## Doing whole jobs
 
 Most tools map 1:1 onto an endpoint, which is what keeps parity honest. These
@@ -121,6 +144,8 @@ compose them into things someone would actually say:
   with a plain-English summary of what is wrong before any JSON.
 - `tonight_results()` — what the night produced.
 - `last_image()` / `stacked_preview()` — actual images, rendered inline.
+- `imaging_targets()` / `run_imaging_program()` — slew, centre and
+  live-stack a target for the imaging half of the night.
 
 ## Fleet integrity
 
