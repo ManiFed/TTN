@@ -2011,8 +2011,9 @@ def api_me_node_tonight_respond(user, node_id):
             imaging_after=body.get("imaging_after"),
             note=str(body.get("note") or ""),
         )
-    except (TypeError, ValueError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    except (TypeError, ValueError):
+        logger.warning("Invalid tonight response payload for node %s", node_id, exc_info=True)
+        return jsonify({"error": "Invalid request payload."}), 400
     # Wake the node so an acceptance takes effect tonight, not next poll.
     live.publish(node_id, "retask", {"reason": "tonight"})
     return jsonify(nightly.resolve(node))
