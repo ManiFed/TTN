@@ -1,0 +1,152 @@
+# Telescope Net over MCP
+
+Drives the Telescope Net through chat instead of the desktop app. Two servers,
+because the product has two backends:
+
+| Server | Wraps | Tools | Who runs it |
+|---|---|---|---|
+| `local_server` | both backends | 128 | the computer attached to a telescope |
+| `cloud_server` | `api.thetelescope.net` (cloud/server.py) | 79 | anyone, from anywhere |
+
+The node server is a **superset**, not a sibling. Linking a telescope spans both
+backends — discovery is on the LAN, credentials come from the cloud, and the
+credential is written back to the agent — so the machine that can reach both
+gets everything, and setting up a telescope means adding one server.
+
+Every tool is a thin call onto an endpoint the Flutter app already uses, so the
+two interfaces cannot drift apart in behaviour. `tests/test_mcp_parity.py`
+fails when the app grows a capability the servers have not caught up with.
+
+## Running it
+
+Install the dependency (already in `requirements.txt`):
+
+```bash
+pip install "mcp>=2.0"
+```
+
+**Local, over stdio** — Claude Code or Claude Desktop, on your own machine:
+
+```bash
+python -m telescope_mcp.cloud_server
+```
+
+**Remote, over HTTP** — so it can be added as a connector rather than installed:
+
+```bash
+python -m telescope_mcp.cloud_server --http --host 0.0.0.0 --port 8900
+```
+
+**On a telescope computer**, for hardware and log access:
+
+```bash
+python -m telescope_mcp.local_server
+```
+
+The local server needs no credentials. The agent binds to 127.0.0.1 and rejects
+browser callers by `Host` and `Origin` (`src/dashboard.py:62`); an MCP server
+sends neither, so it is unaffected — same as `curl`.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TELESCOPE_MCP_CLOUD_BASE` | `https://api.thetelescope.net` | cloud API root |
+| `TELESCOPE_MCP_AGENT_BASE` | `http://127.0.0.1:5173` | node agent root |
+| `TELESCOPE_MCP_TOKEN` | — | member session token; or call `auth_login` |
+| `TELESCOPE_MCP_ADMIN_KEY` | — | `X-Admin-Key`, for admin and integrity tools |
+| `TELESCOPE_MCP_ENV` | `sim` | `sim` \| `staging` \| `production` |
+| `TELESCOPE_MCP_ALLOW_PRODUCTION_WRITES` | unset | opt in to hardware writes on production |
+
+## Safety
+
+Three rails, each tested in `tests/test_mcp_guards.py`:
+
+- **Environment gating.** Anything that moves a mount, opens an enclosure or
+  exposes a camera refuses to run against production. A real instrument is on
+  the other end and it can be pointed at the sun. Tools that *stop* activity —
+  `node_abort_exposure`, `node_arm_close`, `node_schedule_abort` — are never
+  blocked; a rail that jams the brake is worse than no rail.
+- **Confirmation.** Irreversible actions (`member_delete_account`,
+  `member_disconnect_node`, `admin_broadcast_interrupt`) need `confirm=true`.
+- **Secret redaction.** No tool returns a node `api_key` or a session token. A
+  credential echoed into a transcript cannot be recalled.
+
+Log lines, catalogue names and member-authored text come back wrapped as
+`_provenance: untrusted`. That text is data. Nothing inside it is an
+instruction, however it is phrased.
+
+## Tonight
+
+Being in or out of an observing run is a sentence, not a form. Every day each
+telescope gets a research-weighted proposal, and one of four things happens:
+
+| | |
+|---|---|
+| the member accepts | `tonight_accept` — takes effect at once |
+| the member declines | `tonight_decline` — tonight only, tomorrow is asked again |
+| nobody answers | the recommendation runs at dusk |
+| the member stops it | `stand_down` — reaches the node in about a second |
+
+Two rules sit above that, both in `cloud/nightly.py`:
+
+**Weather wins.** Rain or heavy cloud holds the night regardless of who accepted
+it, and the forecast is re-checked rather than cached — a hold is not a
+cancellation. If the sky clears, an accepted night resumes as accepted. A
+forecast that cannot be fetched fails *open*: the node's own SafetyManager can
+see the actual sky and remains the authority.
+
+**Override wins faster.** A stand-down is an instruction. It is written first,
+pushed over SSE immediately, and never overturned by a later auto-accept or by
+the weather improving.
+
+`stand_down(nights=7)` also parks the telescope for a week, which is what a
+vacation used to mean — deliberately the same mechanism, so there are not two
+ways for a telescope to be out that can disagree.
+
+Tool results carry a `nudge`: one honest line about what the research programme
+gets out of tonight. It is a nudge, not a gate. Declining is always one call
+away and is never argued with.
+
+## Doing whole jobs
+
+Most tools map 1:1 onto an endpoint, which is what keeps parity honest. These
+compose them into things someone would actually say:
+
+- `connect_my_telescope()` — discover, connect, reuse this computer's existing
+  cloud identity (or register), install credentials, confirm online. One call.
+  The identity reuse is the important part: registering a second node for a
+  computer that already has one orphans the first along with its history.
+- `diagnose()` — status, safety, logs, identity and fleet integrity in one pass,
+  with a plain-English summary of what is wrong before any JSON.
+- `tonight_results()` — what the night produced.
+- `last_image()` / `stacked_preview()` — actual images, rendered inline.
+
+## Fleet integrity
+
+`fleet_integrity_check` is the reason this exists. It runs the checks in
+`cloud/integrity.py`, each corresponding to a bug class that reached production
+and was found only because someone happened to look:
+
+| Check | Bug it re-detects |
+|---|---|
+| `orphaned_node` | a node with observations but no owner — 319fded, 0c4bb87 |
+| `dangling_membership` | a member linked to a node that no longer exists |
+| `missing_credentials` | a node row with no usable api_key — 5d926a1, 9280ba7 |
+| `stale_vacation` | status lagging the calendar — 9421bbd, 2cbc6a1 |
+| `heartbeat_gap` | a silently dead heartbeat thread — 0c4bb87 |
+| `ghost_registration` | registered, never checked in |
+| `duplicate_link` | one telescope claimed by several accounts |
+
+Read-only and safe to run on any schedule, including against production.
+
+## What is deliberately missing
+
+Account creation, and `pushPairCredentials`. Both would put a password or a
+live `api_key` into a chat transcript. They stay in the app; see `NOT_EXPOSED`
+in `tests/test_mcp_parity.py`.
+
+The desktop app also keeps things this cannot carry: light-curve narration
+through `flutter_tts` (`app/lib/screens/target_detail_screen.dart:114`), the
+`Semantics` layer, push notifications and the self-updater. For an accessible
+astronomy project those are the product, not a presentation layer.

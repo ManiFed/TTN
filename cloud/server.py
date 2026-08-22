@@ -55,7 +55,7 @@ from werkzeug.routing import IntegerConverter as _IntegerConverter
 from werkzeug.routing import ValidationError as _ValidationError
 from werkzeug.utils import safe_join
 
-from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, live, nights, registry, scheduler, scoring, survey, tuning
+from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -1707,6 +1707,19 @@ def api_admin_incident_update(incident_id: int):
     return jsonify({"incident": row})
 
 
+@app.route("/api/v1/admin/fleet-integrity", methods=["GET"])
+@require_admin
+def api_admin_fleet_integrity():
+    """Run every fleet-integrity check and return the findings.
+
+    Read-only and safe on any schedule. Each check corresponds to a class of
+    bug that previously reached production silently -- orphaned nodes, stale
+    vacation status, dead heartbeat threads -- so a clean result here is the
+    standing assertion that none of them have come back.
+    """
+    return jsonify(integrity.run_all())
+
+
 @app.route("/api/v1/health", methods=["GET"])
 def api_health():
     try:
@@ -1924,6 +1937,89 @@ def api_me_node_live(user, node_id):
     if state is None:
         return jsonify({"live": None, "message": "node has not reported live state"}), 200
     return jsonify({"live": state})
+
+
+def _member_node_or_403(user, node_id: str):
+    """The node row, if this member owns it. Returns (row, error_response)."""
+    owns = db.query_one(
+        "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+        (node_id, user["user_id"]),
+    )
+    if owns is None:
+        return None, (jsonify({"error": "not your node"}), 403)
+    node = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
+    if node is None:
+        return None, (jsonify({"error": "unknown node"}), 404)
+    return node, None
+
+
+@app.route("/api/v1/me/nodes/<node_id>/tonight", methods=["GET"])
+@auth.require_member
+def api_me_node_tonight(user, node_id):
+    """Tonight's plan for one telescope, and who decided it.
+
+    Proposes one if none exists yet, so a member who has never answered still
+    sees what would happen. Weather is re-checked on every read rather than
+    cached -- a forecast taken hours before dusk is not a forecast at dusk.
+    """
+    node, error = _member_node_or_403(user, node_id)
+    if error:
+        return error
+    return jsonify(nightly.resolve(node))
+
+
+@app.route("/api/v1/me/nodes/<node_id>/tonight", methods=["POST"])
+@auth.require_member
+def api_me_node_tonight_respond(user, node_id):
+    """Answer tonight's proposal. Body: {decision: accept|decline, ...}."""
+    node, error = _member_node_or_403(user, node_id)
+    if error:
+        return error
+    body = _json_body()
+    try:
+        hours = body.get("research_hours")
+        nightly.respond(
+            node,
+            str(body.get("decision") or ""),
+            research_hours=float(hours) if hours is not None else None,
+            imaging_after=body.get("imaging_after"),
+            note=str(body.get("note") or ""),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    # Wake the node so an acceptance takes effect tonight, not next poll.
+    live.publish(node_id, "retask", {"reason": "tonight"})
+    return jsonify(nightly.resolve(node))
+
+
+@app.route("/api/v1/me/nodes/<node_id>/stand-down", methods=["POST"])
+@auth.require_member
+def api_me_node_stand_down(user, node_id):
+    """Stop observing now. Body: {reason, nights}.
+
+    The instant-override path: the intent is written first and the node is
+    signalled immediately, so a member saying stop is acted on in about a
+    second rather than at the next poll.
+    """
+    node, error = _member_node_or_403(user, node_id)
+    if error:
+        return error
+    body = _json_body()
+    try:
+        nights = int(body.get("nights") or 0)
+    except (TypeError, ValueError):
+        nights = 0
+    result = nightly.stand_down(node, reason=str(body.get("reason") or ""),
+                                nights=nights)
+    live.publish(node_id, "retask", {"reason": "stand_down"})
+    return jsonify(result)
+
+
+@app.route("/api/v1/nodes/tonight", methods=["GET"])
+@require_node
+def api_node_tonight(node):
+    """What this node should be doing tonight. Polled by the agent."""
+    return jsonify(nightly.resolve(node))
 
 
 @app.route("/api/v1/me/highlights", methods=["GET"])

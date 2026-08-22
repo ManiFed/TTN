@@ -226,6 +226,25 @@ _SCHEMA: list[str] = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS night_intents (
+        id            SERIAL PRIMARY KEY,
+        node_id       TEXT NOT NULL,
+        night         TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'proposed',
+        proposal_json TEXT DEFAULT '{}',
+        respond_by    TEXT DEFAULT '',
+        decided_at    TEXT DEFAULT '',
+        decided_via   TEXT DEFAULT '',
+        note          TEXT DEFAULT '',
+        created_at    TEXT NOT NULL,
+        UNIQUE (node_id, night)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_night_intents_node
+        ON night_intents (node_id, night)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS night_summaries (
         id             SERIAL PRIMARY KEY,
         node_id        TEXT NOT NULL,

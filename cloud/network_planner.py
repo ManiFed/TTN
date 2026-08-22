@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from cloud import db, incidents, objective, registry, tuning
+from cloud import db, incidents, nightly, objective, registry, tuning
 from cloud.conditions import (
     airmass_from_alt, altaz_curve, angular_separation_deg,
     astro_cloud_cover_at, cloud_cover_at, fetch_astronomy_weather, fetch_weather,
@@ -133,6 +133,14 @@ def build_node_context(node: dict, config: dict) -> Optional[NodeContext]:
         except ValueError:
             pass
     if node.get("status") in ("disabled", "vacation"):
+        return None
+
+    # Tonight's intent: a member who declined, stood the node down, or is
+    # weathered out is not scheduled. Silence is consent once the deadline
+    # passes, so the usual case still reaches here (see cloud/nightly.py).
+    if not nightly.observing_tonight(node):
+        logger.info("Node %s not observing tonight (nightly intent) — skipping",
+                    node["node_id"])
         return None
 
     # Portable nodes use tonight's session location when set.
