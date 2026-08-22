@@ -256,3 +256,91 @@ class DiscoverabilityTest(_Tmp):
         with patch.object(reg, "client_installed", return_value=True):
             _, msg = reg.register("agent", DATA_DIR, self.path)
         self.assertNotIn("not installed yet", msg)
+
+
+class MultiClientTest(_Tmp):
+    """The telescope should be there whatever assistant someone uses.
+
+    Registering only Claude quietly made this a Claude feature. Every client
+    here reads the same {"mcpServers": {...}} shape, so one entry serves all of
+    them -- the only real difference is where the file lives, and that editors
+    keep a great deal of unrelated settings in it, which is why register()
+    merges rather than writes.
+    """
+
+    def test_the_supported_clients_are_the_ones_people_use(self):
+        for name in ("Claude Desktop", "ChatGPT Desktop", "Cursor",
+                     "Windsurf", "Claude Code"):
+            self.assertIn(name, reg.CLIENTS)
+
+    def test_every_client_resolves_a_path_on_every_platform(self):
+        from unittest.mock import patch
+        for system in ("Darwin", "Windows", "Linux"):
+            with patch("platform.system", return_value=system):
+                for name in reg.CLIENTS:
+                    self.assertTrue(str(reg.config_path(name)),
+                                    f"{name} has no path on {system}")
+
+    def test_clients_do_not_share_a_config_path(self):
+        """Two clients pointed at one file would fight over it."""
+        paths = [str(reg.config_path(n)) for n in reg.CLIENTS]
+        self.assertEqual(len(paths), len(set(paths)))
+
+    def test_an_unknown_client_falls_back_rather_than_raising(self):
+        self.assertTrue(str(reg.config_path("Some Future Assistant")))
+
+    def test_register_all_writes_every_config(self):
+        from unittest.mock import patch
+        written = {}
+
+        def fake_register(command, data_dir, path, prefix_args=None):
+            written[str(path)] = True
+            return True, f"Registered in {path}."
+
+        with patch.object(reg, "register", side_effect=fake_register):
+            ok, msg = reg.register_all("agent", DATA_DIR)
+        self.assertTrue(ok)
+        self.assertEqual(len(written), len(reg.CLIENTS))
+
+    def test_one_unwritable_config_does_not_sink_the_rest(self):
+        """A locked-down editor install must not stop the assistant someone
+        actually uses from being set up."""
+        from unittest.mock import patch
+        calls = {"n": 0}
+
+        def flaky(command, data_dir, path, prefix_args=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return False, "is not valid JSON. Refusing to touch it."
+            return True, "Registered."
+
+        with patch.object(reg, "register", side_effect=flaky):
+            ok, msg = reg.register_all("agent", DATA_DIR)
+        self.assertTrue(ok, "one failure should not fail the whole thing")
+        self.assertIn("Could not write", msg)
+
+    def test_it_registers_clients_that_are_not_installed_yet(self):
+        """An entry costs nothing, and someone who installs an assistant next
+        week should not have to re-run an installer they have thrown away."""
+        from unittest.mock import patch
+        with patch.object(reg, "installed_clients", return_value=[]), \
+             patch.object(reg, "register", return_value=(True, "Registered.")):
+            ok, msg = reg.register_all("agent", DATA_DIR)
+        self.assertTrue(ok)
+        self.assertIn("No assistant found yet", msg)
+
+    def test_it_names_what_is_actually_installed(self):
+        from unittest.mock import patch
+        with patch.object(reg, "installed_clients", return_value=["Cursor"]), \
+             patch.object(reg, "register", return_value=(True, "Registered.")):
+            _, msg = reg.register_all("agent", DATA_DIR)
+        self.assertIn("Cursor", msg)
+
+    def test_removal_covers_every_client(self):
+        from unittest.mock import patch
+        removed = []
+        with patch.object(reg, "remove",
+                          side_effect=lambda p: (removed.append(str(p)), (True, "gone"))[1]):
+            ok, msg = reg.remove_all()
+        self.assertTrue(ok)
+        self.assertEqual(len(removed), len(reg.CLIENTS))

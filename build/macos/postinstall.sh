@@ -192,14 +192,17 @@ echo ""
 # Nothing else in the product mentions this, so if it is not said here a member
 # has no way of discovering that their telescope can be driven by asking.
 if [ "${MCP_REGISTERED:-0}" = "1" ]; then
-    if [ -d "/Applications/Claude.app" ]; then
+    if [ -d "/Applications/Claude.app" ] || [ -d "/Applications/ChatGPT.app" ] \
+       || [ -d "/Applications/Cursor.app" ]; then
         echo "You can now run this telescope by asking."
-        echo "  Quit and reopen Claude, then say: \"connect my telescope\""
-        echo "  (Claude needs a restart to notice the new tools.)"
+        echo "  Quit and reopen your AI assistant, then say:"
+        echo "      connect my telescope"
+        echo "  (It needs a restart to notice the new tools.)"
     else
         echo "This telescope can be run by asking, if you use an AI assistant."
-        echo "  Install Claude Desktop from https://claude.ai/download and the"
-        echo "  telescope will already be there — then say \"connect my telescope\"."
+        echo "  Install Claude Desktop (https://claude.ai/download), ChatGPT or"
+        echo "  Cursor — the telescope will already be set up in it — then say:"
+        echo "      connect my telescope"
     fi
     echo ""
 fi
