@@ -269,9 +269,20 @@ class MultiClientTest(_Tmp):
     """
 
     def test_the_supported_clients_are_the_ones_people_use(self):
-        for name in ("Claude Desktop", "ChatGPT Desktop", "Cursor",
-                     "Windsurf", "Claude Code"):
+        for name in ("Claude Desktop", "Cursor", "Windsurf", "Claude Code"):
             self.assertIn(name, reg.CLIENTS)
+
+    def test_chatgpt_is_not_registered_locally(self):
+        """ChatGPT reaches MCP servers only as remote connectors over HTTPS, so
+        it never launches anything locally and cannot see a telescope on a home
+        network. Writing it a config would create a file nothing reads -- and
+        would let the installer claim it was set up when it was not."""
+        self.assertNotIn("ChatGPT Desktop", reg.CLIENTS)
+        self.assertNotIn("ChatGPT", reg.CLIENTS)
+
+    def test_there_is_something_to_tell_a_chatgpt_user(self):
+        self.assertIn("remote", reg.REMOTE_ONLY_NOTE.lower())
+        self.assertIn("Claude Desktop", reg.REMOTE_ONLY_NOTE)
 
     def test_every_client_resolves_a_path_on_every_platform(self):
         from unittest.mock import patch
