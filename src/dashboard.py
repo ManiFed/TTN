@@ -2032,6 +2032,106 @@ def _on_cloud_dry_run(enabled: bool) -> None:
         _safety_mgr.set_dry_run(enabled)
 
 
+# ── Tonight's intent ───────────────────────────────────────────────────────────
+#
+# The cloud decides each night whether this telescope observes: the member
+# accepted, declined, said nothing (and the recommendation runs), stood the node
+# down, or the weather closed it. See cloud/nightly.py. The node holds the last
+# answer so it keeps behaving sensibly when the cloud is unreachable.
+
+_tonight_lock = threading.Lock()
+_tonight: dict = {}
+
+
+def _on_cloud_tonight(intent: dict) -> None:
+    """Tonight's intent changed. Act on it immediately.
+
+    Called only on a change, so cancelling here does not fight the scheduler on
+    every poll. A member standing their telescope down is an instruction: the
+    running schedule is cancelled and the mount parked, rather than allowed to
+    finish the current target first.
+    """
+    with _tonight_lock:
+        _tonight.clear()
+        _tonight.update(intent or {})
+
+    if intent.get("observing"):
+        logger.info("Tonight: observing (%s)", intent.get("status", ""))
+        return
+
+    reason = intent.get("reason") or intent.get("status") or "no reason given"
+    logger.warning("Tonight: not observing — %s", reason)
+
+    with _sched_lock:
+        was_running = _sched_state["running"]
+        if was_running:
+            _sched_state["cancelled"] = True
+
+    _telemetry.event("tonight_stand_down",
+                     severity="info",
+                     detail={"status": intent.get("status", ""),
+                             "reason": str(reason)[:200],
+                             "schedule_was_running": was_running})
+
+    if was_running:
+        # Stop the exposure in progress rather than waiting for it to finish;
+        # a stand-down usually means something is wrong with the telescope.
+        try:
+            if _cam is not None:
+                _cam.abort_exposure()
+        except Exception as exc:
+            logger.debug("Abort on stand-down failed: %s", exc)
+        try:
+            if _tel is not None:
+                with _device_lock:
+                    _tel.park()
+                logger.info("Parked on stand-down")
+        except Exception as exc:
+            logger.debug("Park on stand-down failed: %s", exc)
+
+
+def _tonight_intent() -> dict:
+    with _tonight_lock:
+        return dict(_tonight)
+
+
+def _tonight_allows_observing() -> bool:
+    """Whether tonight's intent permits observing right now.
+
+    Defaults to True before the cloud has answered: a node that has never heard
+    otherwise behaves as it always has, and the SafetyManager still decides
+    whether it is actually safe to open.
+    """
+    intent = _tonight_intent()
+    if not intent:
+        return True
+    return bool(intent.get("observing"))
+
+
+def _research_window_expired() -> bool:
+    """True once tonight's research block has run its allotted hours.
+
+    Only meaningful when the member asked for a bounded research block with
+    imaging afterwards. An unbounded night never expires.
+    """
+    intent = _tonight_intent()
+    proposal = intent.get("proposal") or {}
+    if not proposal.get("imaging_after"):
+        return False
+    try:
+        hours = float(proposal.get("research_hours") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if hours <= 0:
+        return False
+
+    with _sched_lock:
+        started = _sched_state.get("started_at")
+    if not started:
+        return False
+    return (time.time() - float(started)) >= hours * 3600.0
+
+
 def _auto_horizon_scan() -> None:
     """Default-parameter horizon scan, applied automatically on completion.
 
@@ -2556,6 +2656,25 @@ def api_logs():
         content_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/logs/recent")
+def api_logs_recent():
+    """Recent log lines as JSON, newest last. ?lines=N (default 200, max 300).
+
+    /api/logs is a Server-Sent Events stream that never ends -- right for a
+    live-tailing dashboard, useless to anything that wants to read the log and
+    move on. A non-streaming caller there just blocks until it times out, which
+    is exactly what the MCP diagnose tool was doing.
+    """
+    try:
+        lines = int(request.args.get("lines", 200))
+    except (TypeError, ValueError):
+        lines = 200
+    lines = max(1, min(lines, 300))
+    with _subscribers_lock:
+        entries = list(_log_history)[-lines:]
+    return jsonify({"lines": entries, "count": len(entries)})
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -4220,6 +4339,7 @@ def _run_schedule_bg(items: list, source: str = "manual",
             "current_frame": 0, "total_frames": 0,
             "completed": 0, "total": len(items), "error": None,
             "source": source,
+            "started_at": time.time(),
             "items": [
                 {
                     "target":    it.get("target", "Unknown"),
@@ -4277,6 +4397,22 @@ def _run_schedule_bg(items: list, source: str = "manual",
         queued_item_ids = {str(i.get("item_id") or "") for i in items}
         for idx, item in enumerate(items):
             if _sched_cancelled():
+                break
+            # Tonight's intent is re-checked per item, not just at the start:
+            # a member can stand the telescope down mid-night, and the weather
+            # can close in after the run began.
+            if not _tonight_allows_observing():
+                logger.info("Schedule: stopping — tonight's intent says stop (%s)",
+                            _tonight_intent().get("reason", ""))
+                break
+            # A bounded research block hands the rest of the night to imaging.
+            if _research_window_expired():
+                logger.info("Schedule: research block complete after %.1f h — "
+                            "remaining items released for imaging",
+                            float((_tonight_intent().get("proposal") or {})
+                                  .get("research_hours") or 0.0))
+                _telemetry.event("research_window_complete", severity="info",
+                                 detail={"completed": idx, "total": len(items)})
                 break
             # ── Gap fill: a dead wait before this item's start time is spent
             # on an alternate that fits, instead of sleeping (cloud plans only;
@@ -4711,6 +4847,7 @@ def launch(port: int = 5173) -> None:
             get_state=_cloud_state,
             on_location=_on_cloud_location,
             on_dry_run=_on_cloud_dry_run,
+            on_tonight=_on_cloud_tonight,
         )
         _cloud.start()
         threading.Thread(

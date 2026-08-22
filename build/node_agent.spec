@@ -29,6 +29,26 @@ block_cipher = None
 # that static analysis misses.
 
 hidden_imports = [
+    # ── MCP tool interface (imported lazily behind --mcp, so static analysis
+    #    never reaches it) ───────────────────────────────────────────────────
+    "telescope_mcp",
+    "telescope_mcp.local_server",
+    "telescope_mcp.client",
+    "telescope_mcp.guard",
+    "telescope_mcp.tools",
+    "telescope_mcp.tools.hardware",
+    "telescope_mcp.tools.images",
+    "telescope_mcp.tools.member",
+    "telescope_mcp.tools.network",
+    "telescope_mcp.tools.integrity",
+    "telescope_mcp.tools.tonight",
+    "telescope_mcp.tools.admin",
+    "telescope_mcp.tools.setup",
+    "mcp",
+    "mcp.server",
+    "mcp.server.mcpserver",
+    "mcp.server.stdio",
+
     # ── astropy ────────────────────────────────────────────────────────────────
     "astropy",
     "astropy.io.fits",
@@ -245,6 +265,10 @@ except Exception:
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
+    # postinstall.sh runs this to register the MCP server with Claude Desktop,
+    # so members never hand-edit claude_desktop_config.json. It has to travel
+    # inside the bundle because the installer has no checkout to read from.
+    + [(str(ROOT / "scripts" / "register_mcp_client.py"), ".")]
     + _pyongc_datas
     + _iers_datas
     + _certifi_datas

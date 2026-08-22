@@ -1,0 +1,62 @@
+# Decides whether a pull request may merge without a person reading it.
+#
+# The agent patrol (telescope_mcp/patrol.py) can find a bug, fix it and open a
+# PR unattended. This is what stops that loop merging something it should not.
+# The rules live in scripts/merge_policy.py; this workflow only enforces them.
+#
+# The gate blocks a merge exactly when a PR asks to skip review -- by carrying
+# the `agent-auto-merge` label -- and touches mount control, photometry, timing,
+# AAVSO output, credentials, schema or CI. Everything else is reported and
+# allowed. A PR without the label is never blocked here: a human is already
+# reading it, which is the whole point.
+#
+# scripts/merge_policy.py and .github/workflows/* are themselves protected, so
+# this gate cannot be rewritten by the loop it governs.
+
+name: Merge policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The policy diffs against the base branch, so it needs the history
+          # to find a merge base rather than just the tip commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Classify the change
+        id: classify
+        run: |
+          python scripts/merge_policy.py \
+            --base "origin/${{ github.base_ref }}" --json > policy.json
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("policy.json"))
+          print(f"## Merge policy: `{r['verdict']}`\n")
+          print(r["summary"])
+          PY
+          echo "verdict=$(python -c "import json;print(json.load(open('policy.json'))['verdict'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Block unattended merge of a protected change
+        if: contains(github.event.pull_request.labels.*.name, 'agent-auto-merge')
+        run: |
+          python scripts/merge_policy.py \
+            --base "origin/${{ github.base_ref }}" --require-auto || {
+              echo "::error::This PR is labelled agent-auto-merge but changes a"
+              echo "::error::protected area. Remove the label and have someone"
+              echo "::error::read it, or drop the protected files from the change."
+              exit 1
+            }

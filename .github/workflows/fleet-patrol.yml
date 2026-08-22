@@ -1,0 +1,91 @@
+# Runs the fleet integrity sweep on a schedule and files what it finds.
+#
+# This is the detection half of the loop. It does not write fixes: it opens (or
+# updates) one issue carrying the finding, what it means, where the cause lives
+# and how to reproduce it, so whoever picks it up -- a person or an agent --
+# starts from evidence rather than from a guess.
+#
+# One issue is reused rather than a new one per run, because a fleet problem
+# that persists for a week is one problem, not seven.
+#
+# Requires:
+#   secrets.TELESCOPE_MCP_ADMIN_KEY   should hold CLOUD_ADMIN_READONLY_KEY, not
+#                                     the full admin key. The read-only key is
+#                                     accepted by the integrity endpoint and
+#                                     rejected by everything that changes state,
+#                                     so a workflow in this repository cannot
+#                                     replan the network or touch AAVSO batches.
+#   vars.TELESCOPE_MCP_CLOUD_BASE     defaults to production if unset
+
+name: Fleet patrol
+
+on:
+  schedule:
+    # 09:00 UTC — after every longitude has finished its night, so a finding
+    # reflects a completed night rather than one still in progress.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Sweep the fleet
+        id: sweep
+        env:
+          TELESCOPE_MCP_ADMIN_KEY: ${{ secrets.TELESCOPE_MCP_ADMIN_KEY }}
+          TELESCOPE_MCP_CLOUD_BASE: ${{ vars.TELESCOPE_MCP_CLOUD_BASE }}
+        run: |
+          set +e
+          python -m telescope_mcp.patrol --json > patrol.json
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          r = json.load(open("patrol.json"))
+          print(f"ok={str(r['ok']).lower()}")
+          print(f"actionable={r.get('actionable', 0)}")
+          PY
+          python -c "import json;print(json.load(open('patrol.json')).get('report') or json.load(open('patrol.json')).get('error',''))" > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: File or update the finding
+        if: steps.sweep.outputs.ok == 'false' || steps.sweep.outputs.actionable != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="Fleet integrity: findings need attention"
+          BODY_FILE=report.md
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+            echo "Updated issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE" \
+              --label "fleet-integrity"
+          fi
+
+      - name: Close the issue when the fleet comes back clean
+        if: steps.sweep.outputs.ok == 'true' && steps.sweep.outputs.actionable == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING=$(gh issue list --state open \
+                       --search "Fleet integrity: findings need attention in:title" \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Fleet integrity is clean as of this run — closing."
+            gh issue close "$EXISTING"
+          fi
