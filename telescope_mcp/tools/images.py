@@ -61,21 +61,24 @@ def register(server, agent: AgentClient) -> None:
         return agent.delete("/api/stack/start")
 
     @server.tool()
-    def imaging_targets(search: str = "", limit: int = 20) -> dict:
-        """Deep-sky objects this telescope could image, from its own catalogue.
+    def imaging_targets(search: str = "", limit: int = 20,
+                        reachable_now: bool = False) -> dict:
+        """Objects worth imaging, best first, from the node's own catalogue.
 
-        Use after the research block to pick something worth looking at. The
-        catalogue lives on the node, so this works without the cloud.
+        Ranked the same way the automatic handover picks: recognisable Messier
+        objects and nebulae ahead of the thousands of anonymous galaxies, so a
+        suggestion here is something the telescope would actually choose.
+
+        `reachable_now` filters to what is above the horizon mask and safe to
+        slew to at this moment, which is slower but answers "what can I image
+        tonight" rather than "what exists".
         """
-        catalog = agent.get("/api/catalog", timeout=15.0)
-        items = catalog if isinstance(catalog, list) else (
-            catalog.get("objects") or catalog.get("catalog") or [])
+        params = {"limit": max(1, int(limit))}
         if search:
-            needle = search.lower()
-            items = [o for o in items
-                     if needle in str(o.get("name", "")).lower()
-                     or needle in str(o.get("common_name", "")).lower()]
-        return {"targets": items[:max(1, int(limit))], "total": len(items)}
+            params["search"] = search
+        if reachable_now:
+            params["reachable"] = "1"
+        return agent.get("/api/imaging/targets", params, timeout=30.0)
 
     @server.tool()
     def run_imaging_program(target_name: str, ra_hours: float, dec_deg: float,

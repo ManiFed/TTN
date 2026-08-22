@@ -207,3 +207,53 @@ class HandoffConditionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowseTargetsTest(unittest.TestCase):
+    """What the browse tool offers must match what the handover would pick.
+
+    They were separate: _pick_imaging_target filtered by type, while the browse
+    tool returned the raw catalogue. Under fault testing it duly suggested
+    B033 -- a dark nebula, which is by definition the absence of anything to
+    photograph.
+    """
+
+    def setUp(self):
+        self.client = dash.app.test_client()
+
+    def test_only_imaging_worthy_types_are_offered(self):
+        body = self.client.get("/api/imaging/targets?limit=50").get_json()
+        self.assertTrue(body["targets"])
+        for obj in body["targets"]:
+            self.assertIn(obj["type"], dash._IMAGING_TYPES)
+
+    def test_dark_nebulae_are_not_offered(self):
+        body = self.client.get("/api/imaging/targets?limit=200").get_json()
+        self.assertNotIn("Dark Nebula", {o["type"] for o in body["targets"]})
+
+    def test_the_best_suggestions_come_first(self):
+        body = self.client.get("/api/imaging/targets?limit=5").get_json()
+        ids = [o["id"] for o in body["targets"]]
+        self.assertTrue(all(i.startswith("M") and i[1:].isdigit() for i in ids), ids)
+
+    def test_search_still_works(self):
+        body = self.client.get("/api/imaging/targets?search=orion").get_json()
+        self.assertTrue(body["targets"])
+        self.assertTrue(any("orion" in str(o.get("name", "")).lower()
+                            for o in body["targets"]))
+
+    def test_reachable_only_uses_the_same_safety_gate_as_the_handover(self):
+        with patch.object(dash, "_slew_rejection", return_value="below horizon"):
+            body = self.client.get(
+                "/api/imaging/targets?reachable=1&limit=5").get_json()
+        self.assertEqual(body["targets"], [],
+                         "nothing is reachable, so nothing should be offered")
+        self.assertTrue(body["reachable_only"])
+
+    def test_a_silly_limit_does_not_dump_the_whole_catalogue(self):
+        body = self.client.get("/api/imaging/targets?limit=99999").get_json()
+        self.assertLessEqual(len(body["targets"]), 200)
+
+    def test_a_malformed_limit_falls_back_to_a_default(self):
+        body = self.client.get("/api/imaging/targets?limit=soon").get_json()
+        self.assertEqual(len(body["targets"]), 20)

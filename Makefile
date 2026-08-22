@@ -27,6 +27,12 @@ gauntlet:
 e2e:
 	$(PYTHON) -m pytest tests/test_e2e_mcp.py tests/test_e2e_node_mcp.py -v
 
+# What the chat interface does when the telescope misbehaves: the real MCP
+# surface against a real agent talking to a deliberately faulty ALPACA server.
+.PHONY: faults
+faults:
+	$(PYTHON) -m pytest tests/test_fault_tolerance_mcp.py -v
+
 # Fleet integrity sweep: what an unattended patrol would find right now.
 # Needs TELESCOPE_MCP_ADMIN_KEY. Read-only and safe against production.
 .PHONY: patrol

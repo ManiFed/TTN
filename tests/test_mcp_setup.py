@@ -342,11 +342,16 @@ class ImagingProgramTest(unittest.TestCase):
         self.assertIn("plate solve failed", text)
         self.assertIn('"started": true', text.lower())
 
-    def test_targets_can_be_searched_by_name(self):
-        self.agent.get.return_value = [
-            {"name": "M51", "common_name": "Whirlpool Galaxy"},
-            {"name": "M42", "common_name": "Orion Nebula"},
-        ]
-        _, text, _ = call(self.server, "imaging_targets", {"search": "orion"})
+    def test_targets_are_ranked_by_the_node_not_filtered_here(self):
+        """Selection moved server-side so the browse list and the automatic
+        handover share one definition of what is worth imaging. Filtering here
+        drifted: it offered dark nebulae the telescope would never choose."""
+        self.agent.get.return_value = {"targets": [{"id": "M42"}], "total": 1}
+        _, text, _ = call(self.server, "imaging_targets",
+                          {"search": "orion", "reachable_now": True})
+        self.agent.get.assert_called_once()
+        path, params = self.agent.get.call_args[0][0], self.agent.get.call_args[0][1]
+        self.assertEqual(path, "/api/imaging/targets")
+        self.assertEqual(params.get("search"), "orion")
+        self.assertEqual(params.get("reachable"), "1")
         self.assertIn("M42", text)
-        self.assertNotIn("M51", text)
