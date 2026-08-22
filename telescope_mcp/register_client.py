@@ -44,7 +44,15 @@ def _home(*parts: str) -> Path:
     return Path.home().joinpath(*parts)
 
 
-#: Every MCP client we know how to set up, and where each keeps its config.
+#: Clients that launch a local MCP server themselves, and where each keeps its
+#: config. Membership here means "this program will start our process and talk
+#: to it over stdin/stdout".
+#:
+#: ChatGPT is deliberately absent. Its MCP support is *remote connectors* --
+#: an HTTPS URL configured server-side -- so it never launches anything locally
+#: and cannot reach a telescope on a home network at all. Writing it a config
+#: file would create something nothing reads, and worse, would let the
+#: installer claim ChatGPT was set up when it was not. See REMOTE_ONLY_NOTE.
 #: A client is registered whether or not it is installed -- someone who adds
 #: one later should find the telescope already there -- so this is a map of
 #: where to write, not a list of what is present.
@@ -58,11 +66,6 @@ CLIENTS: dict[str, dict[str, Path]] = {
         "Darwin": _home("Library/Application Support/Claude/claude_desktop_config.json"),
         "Windows": _appdata() / "Claude/claude_desktop_config.json",
         "Linux": _home(".config/Claude/claude_desktop_config.json"),
-    },
-    "ChatGPT Desktop": {
-        "Darwin": _home("Library/Application Support/ChatGPT/mcp_config.json"),
-        "Windows": _appdata() / "OpenAI/ChatGPT/mcp_config.json",
-        "Linux": _home(".config/ChatGPT/mcp_config.json"),
     },
     "Cursor": {
         "Darwin": _home(".cursor/mcp.json"),
@@ -89,11 +92,6 @@ _PRESENCE: dict[str, dict[str, Path]] = {
         "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "AnthropicClaude",
         "Linux": _home(".local/share/applications/claude.desktop"),
     },
-    "ChatGPT Desktop": {
-        "Darwin": Path("/Applications/ChatGPT.app"),
-        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "OpenAI/ChatGPT",
-        "Linux": _home(".local/share/applications/chatgpt.desktop"),
-    },
     "Cursor": {
         "Darwin": Path("/Applications/Cursor.app"),
         "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "Programs/Cursor",
@@ -110,6 +108,16 @@ _PRESENCE: dict[str, dict[str, Path]] = {
         "Linux": _home(".claude.json"),
     },
 }
+
+
+#: What to tell someone whose assistant cannot do this.
+REMOTE_ONLY_NOTE = (
+    "ChatGPT connects to MCP servers only as remote connectors -- an HTTPS URL "
+    "it reaches over the internet -- so it cannot start the node software on "
+    "your computer, and cannot see a telescope on your home network. Driving "
+    "the telescope needs an assistant that runs the server locally: Claude "
+    "Desktop, Claude Code, Cursor or Windsurf."
+)
 
 
 def config_path(client: str = "Claude Desktop") -> Path:

@@ -192,17 +192,23 @@ echo ""
 # Nothing else in the product mentions this, so if it is not said here a member
 # has no way of discovering that their telescope can be driven by asking.
 if [ "${MCP_REGISTERED:-0}" = "1" ]; then
-    if [ -d "/Applications/Claude.app" ] || [ -d "/Applications/ChatGPT.app" ] \
-       || [ -d "/Applications/Cursor.app" ]; then
+    # ChatGPT is deliberately not counted: it reaches MCP servers only as
+    # remote connectors, so it cannot start this one or see the telescope.
+    if [ -d "/Applications/Claude.app" ] || [ -d "/Applications/Cursor.app" ] \
+       || [ -d "/Applications/Windsurf.app" ]; then
         echo "You can now run this telescope by asking."
         echo "  Quit and reopen your AI assistant, then say:"
         echo "      connect my telescope"
         echo "  (It needs a restart to notice the new tools.)"
     else
         echo "This telescope can be run by asking, if you use an AI assistant."
-        echo "  Install Claude Desktop (https://claude.ai/download), ChatGPT or"
-        echo "  Cursor — the telescope will already be set up in it — then say:"
+        echo "  Install Claude Desktop (https://claude.ai/download), Cursor or"
+        echo "  Windsurf — the telescope is already set up in it — then say:"
         echo "      connect my telescope"
+        echo ""
+        echo "  ChatGPT will not work for this: it can only reach assistants'"
+        echo "  tools over the internet, and your telescope is on your own"
+        echo "  network where it cannot see it."
     fi
     echo ""
 fi
