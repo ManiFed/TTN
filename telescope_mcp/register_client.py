@@ -36,32 +36,142 @@ from pathlib import Path
 SERVER_KEY = "telescope-net"
 
 
-def config_path() -> Path:
-    """Claude Desktop's config file for this platform."""
+def _appdata() -> Path:
+    return Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming")
+
+
+def _home(*parts: str) -> Path:
+    return Path.home().joinpath(*parts)
+
+
+#: Every MCP client we know how to set up, and where each keeps its config.
+#: A client is registered whether or not it is installed -- someone who adds
+#: one later should find the telescope already there -- so this is a map of
+#: where to write, not a list of what is present.
+#:
+#: They all read the same {"mcpServers": {...}} shape, which is why one entry
+#: serves all of them. The only real differences are the path and, for the
+#: editors, that the file is shared with a great deal of unrelated settings --
+#: which is exactly why register() merges rather than writes.
+CLIENTS: dict[str, dict[str, Path]] = {
+    "Claude Desktop": {
+        "Darwin": _home("Library/Application Support/Claude/claude_desktop_config.json"),
+        "Windows": _appdata() / "Claude/claude_desktop_config.json",
+        "Linux": _home(".config/Claude/claude_desktop_config.json"),
+    },
+    "ChatGPT Desktop": {
+        "Darwin": _home("Library/Application Support/ChatGPT/mcp_config.json"),
+        "Windows": _appdata() / "OpenAI/ChatGPT/mcp_config.json",
+        "Linux": _home(".config/ChatGPT/mcp_config.json"),
+    },
+    "Cursor": {
+        "Darwin": _home(".cursor/mcp.json"),
+        "Windows": _home(".cursor/mcp.json"),
+        "Linux": _home(".cursor/mcp.json"),
+    },
+    "Windsurf": {
+        "Darwin": _home(".codeium/windsurf/mcp_config.json"),
+        "Windows": _home(".codeium/windsurf/mcp_config.json"),
+        "Linux": _home(".codeium/windsurf/mcp_config.json"),
+    },
+    "Claude Code": {
+        "Darwin": _home(".claude.json"),
+        "Windows": _home(".claude.json"),
+        "Linux": _home(".claude.json"),
+    },
+}
+
+#: How to tell whether a client is actually installed, so the installer can say
+#: something true rather than announcing a tool nobody has.
+_PRESENCE: dict[str, dict[str, Path]] = {
+    "Claude Desktop": {
+        "Darwin": Path("/Applications/Claude.app"),
+        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "AnthropicClaude",
+        "Linux": _home(".local/share/applications/claude.desktop"),
+    },
+    "ChatGPT Desktop": {
+        "Darwin": Path("/Applications/ChatGPT.app"),
+        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "OpenAI/ChatGPT",
+        "Linux": _home(".local/share/applications/chatgpt.desktop"),
+    },
+    "Cursor": {
+        "Darwin": Path("/Applications/Cursor.app"),
+        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "Programs/Cursor",
+        "Linux": _home(".local/share/applications/cursor.desktop"),
+    },
+    "Windsurf": {
+        "Darwin": Path("/Applications/Windsurf.app"),
+        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "Programs/Windsurf",
+        "Linux": _home(".local/share/applications/windsurf.desktop"),
+    },
+    "Claude Code": {
+        "Darwin": _home(".claude.json"),
+        "Windows": _home(".claude.json"),
+        "Linux": _home(".claude.json"),
+    },
+}
+
+
+def config_path(client: str = "Claude Desktop") -> Path:
+    """Where `client` keeps its MCP configuration on this platform."""
     system = platform.system()
-    if system == "Darwin":
-        return Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
-    if system == "Windows":
-        base = os.environ.get("APPDATA") or str(Path.home() / "AppData/Roaming")
-        return Path(base) / "Claude/claude_desktop_config.json"
-    return Path.home() / ".config/Claude/claude_desktop_config.json"
+    paths = CLIENTS.get(client) or CLIENTS["Claude Desktop"]
+    return paths.get(system) or paths["Linux"]
+
+
+def installed_clients() -> list[str]:
+    """Which supported assistants are actually on this machine."""
+    system = platform.system()
+    found = []
+    for name, paths in _PRESENCE.items():
+        probe = paths.get(system) or paths.get("Linux")
+        try:
+            if probe and str(probe) != "" and probe.exists():
+                found.append(name)
+        except OSError:
+            continue
+    return found
 
 
 def client_installed() -> bool:
-    """Whether Claude Desktop appears to be installed on this machine.
+    """Whether any supported assistant is installed."""
+    return bool(installed_clients())
 
-    Registration writes the config either way -- a member who installs Claude
-    afterwards should find the telescope already there. But the installer
-    should not announce "Claude Desktop can now control this telescope" to
-    somebody who has never heard of it, so the message is chosen from this.
+
+def register_all(command: str, data_dir: str,
+                 prefix_args: list[str] | None = None) -> tuple[bool, str]:
+    """Register with every supported assistant.
+
+    Writes to all of them rather than only the ones present: an entry costs
+    nothing, and someone who installs an assistant next week should find their
+    telescope already there rather than having to re-run an installer they have
+    long since thrown away.
+
+    Succeeds if any client took it. One unwritable config -- a locked-down
+    editor install, an unparseable file we must not touch -- is reported but
+    does not fail the whole thing.
     """
-    system = platform.system()
-    if system == "Darwin":
-        return Path("/Applications/Claude.app").exists()
-    if system == "Windows":
-        local = os.environ.get("LOCALAPPDATA") or ""
-        return bool(local) and (Path(local) / "AnthropicClaude").exists()
-    return (Path.home() / ".local/share/applications/claude.desktop").exists()
+    done, failed = [], []
+    for name in CLIENTS:
+        ok, message = register(command, data_dir, config_path(name), prefix_args)
+        (done if ok else failed).append(f"{name}: {message}")
+
+    present = installed_clients()
+    lines = [f"Registered with {len(done)} assistant config(s)."]
+    if present:
+        lines.append("Installed here: " + ", ".join(present) + ".")
+    else:
+        lines.append("No assistant found yet; whichever you install will "
+                     "already have the telescope.")
+    if failed:
+        lines.append("Could not write: " + "; ".join(failed))
+    return bool(done), "\n".join(lines)
+
+
+def remove_all() -> tuple[bool, str]:
+    """Deregister from every supported assistant."""
+    results = [remove(config_path(name))[1] for name in CLIENTS]
+    return True, f"Removed from {len(results)} assistant config(s)."
 
 
 def load(path: Path) -> tuple[dict, str | None]:

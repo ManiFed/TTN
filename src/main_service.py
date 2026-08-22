@@ -216,17 +216,26 @@ def main() -> None:
         # Runs from the installer, where there is no interpreter to call a
         # script with. Never fatal: Claude Desktop not being present is a
         # normal outcome, and the telescope works either way.
-        from telescope_mcp.register_client import config_path, register, remove
-        path = pathlib.Path(args.mcp_config) if args.mcp_config else config_path()
+        from telescope_mcp.register_client import (config_path, register,
+                                                     register_all, remove,
+                                                     remove_all)
+        # An explicit path targets one config -- the Windows installer passes
+        # one because it runs elevated. Otherwise set up every assistant we
+        # know about, so whichever the member uses already has the telescope.
+        explicit = pathlib.Path(args.mcp_config) if args.mcp_config else None
         if args.deregister_mcp:
-            ok, message = remove(path)
+            ok, message = (remove(explicit) if explicit else remove_all())
+        elif explicit:
+            prefix = [] if getattr(sys, "frozen", False) else ["-m", "src.main_service"]
+            ok, message = register(sys.executable, str(data_dir), explicit,
+                                   prefix_args=prefix)
         else:
             # Frozen: sys.executable is the agent itself. From a checkout it is
             # a bare interpreter, which needs the module before the flags or
             # the registered command cannot start.
             prefix = [] if getattr(sys, "frozen", False) else ["-m", "src.main_service"]
-            ok, message = register(sys.executable, str(data_dir), path,
-                                   prefix_args=prefix)
+            ok, message = register_all(sys.executable, str(data_dir),
+                                       prefix_args=prefix)
         print(message)
         sys.exit(0 if ok else 1)
 
