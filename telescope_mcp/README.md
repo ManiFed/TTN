@@ -165,6 +165,46 @@ and was found only because someone happened to look:
 
 Read-only and safe to run on any schedule, including against production.
 
+## The loop
+
+Detection runs unattended; merging does not.
+
+**`python -m telescope_mcp.patrol`** runs the integrity sweep and renders a
+report carrying, for each finding, what broke, what it means, where the cause
+lives, and the test that covers it. `.github/workflows/fleet-patrol.yml` runs it
+daily at 09:00 UTC — after every longitude has finished its night — and opens or
+updates a single issue. One issue is reused: a fleet problem that persists for a
+week is one problem, not seven. It closes itself when the fleet comes clean.
+
+The patrol deliberately does not write the fix. Writing it needs judgement; what
+this guarantees is that whoever writes it starts from evidence rather than from
+a guess, which is the entire reason the loop is worth having.
+
+**`scripts/merge_policy.py`** decides what may land without a person reading it.
+It is deliberately dumb — a path policy, not a judgement about the change, since
+a gate that can be argued out of its own rules is not a gate. Three areas always
+need a human:
+
+| Area | What a bad unattended merge does |
+|---|---|
+| mount, camera, enclosure, safety manager | points a telescope somewhere it should not go |
+| photometry, timing, plate solving, calibration | corrupts a scientific record published under one obscode |
+| identity, credentials, schema | silently orphans a node and loses its history |
+
+Everything else — app screens, docs, the MCP surface, tests — lands on green CI.
+`scripts/merge_policy.py` and `.github/workflows/*` are themselves protected, so
+the loop cannot rewrite its own gate.
+
+`.github/workflows/merge-policy.yml` enforces it, and blocks a merge in exactly
+one case: a PR carrying the `agent-auto-merge` label that touches a protected
+path. A PR without that label is only reported on — a human is already reading
+it, which is the point.
+
+```bash
+make patrol
+make merge-policy
+```
+
 ## What is deliberately missing
 
 Account creation, and `pushPairCredentials`. Both would put a password or a
