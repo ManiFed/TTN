@@ -183,6 +183,21 @@ def main() -> None:
                         help="Start headless (service mode; do not open UI)")
     parser.add_argument("--data-dir", default="",
                         help="Working directory for config.yaml and data/ (default: current dir)")
+    parser.add_argument("--register-mcp", action="store_true",
+                        help="register this agent with Claude Desktop and exit "
+                             "(called by the installer)")
+    parser.add_argument("--deregister-mcp", action="store_true",
+                        help="remove this agent from Claude Desktop and exit "
+                             "(called by the uninstaller)")
+    parser.add_argument("--mcp-config", default="",
+                        # argparse expands % in help strings, so APPDATA is
+                        # written without its percent signs rather than escaped
+                        # -- a bare %A raised "badly formed help string" and
+                        # took down the whole agent at startup, not just this.
+                        help="path to claude_desktop_config.json. The Windows "
+                             "installer passes this explicitly: it runs "
+                             "elevated, so an inherited APPDATA can belong to "
+                             "the elevating admin rather than the member")
     parser.add_argument("--mcp", action="store_true",
                         help="Serve the MCP tool interface on stdio instead of "
                              "running the dashboard (used by AI assistants)")
@@ -196,6 +211,24 @@ def main() -> None:
         data_dir = pathlib.Path.cwd()
     _prepare_data_dir(data_dir)
     os.chdir(data_dir)
+
+    if args.register_mcp or args.deregister_mcp:
+        # Runs from the installer, where there is no interpreter to call a
+        # script with. Never fatal: Claude Desktop not being present is a
+        # normal outcome, and the telescope works either way.
+        from telescope_mcp.register_client import config_path, register, remove
+        path = pathlib.Path(args.mcp_config) if args.mcp_config else config_path()
+        if args.deregister_mcp:
+            ok, message = remove(path)
+        else:
+            # Frozen: sys.executable is the agent itself. From a checkout it is
+            # a bare interpreter, which needs the module before the flags or
+            # the registered command cannot start.
+            prefix = [] if getattr(sys, "frozen", False) else ["-m", "src.main_service"]
+            ok, message = register(sys.executable, str(data_dir), path,
+                                   prefix_args=prefix)
+        print(message)
+        sys.exit(0 if ok else 1)
 
     if args.mcp:
         _run_mcp_server()

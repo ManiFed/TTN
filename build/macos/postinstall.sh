@@ -106,18 +106,17 @@ chmod 600 "${CONFIG}"
 # member's other MCP servers are never disturbed. Run as the console user: the
 # config lives in their home, and a root-owned file there would break Claude.
 # Never fatal -- Claude Desktop not being installed is a normal outcome.
-MCP_REGISTER="${APP_DIR}/Contents/Resources/register_mcp_client.py"
 AGENT_BIN="${APP_DIR}/Contents/MacOS/TelescopeNetNode"
-if [ -f "${MCP_REGISTER}" ] && [ -x "${AGENT_BIN}" ]; then
-    if sudo -u "${CONSOLE_USER}" /usr/bin/python3 "${MCP_REGISTER}" \
-            --command "${AGENT_BIN}" --data-dir "${DATA_DIR}"; then
+if [ -x "${AGENT_BIN}" ]; then
+    if sudo -u "${CONSOLE_USER}" "${AGENT_BIN}" --register-mcp \
+            --data-dir "${DATA_DIR}"; then
         echo "Claude Desktop can now control this telescope."
     else
         echo "NOTE: could not register the MCP server automatically."
         echo "      The telescope still works; AI control needs manual setup."
     fi
 else
-    echo "NOTE: MCP registration helper not packaged; skipping."
+    echo "NOTE: node agent binary missing; skipping MCP registration."
 fi
 
 # ── Prevent idle sleep ─────────────────────────────────────────────────────────

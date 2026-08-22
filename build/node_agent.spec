@@ -33,6 +33,7 @@ hidden_imports = [
     #    never reaches it) ───────────────────────────────────────────────────
     "telescope_mcp",
     "telescope_mcp.local_server",
+    "telescope_mcp.register_client",
     "telescope_mcp.client",
     "telescope_mcp.guard",
     "telescope_mcp.tools",
@@ -265,10 +266,7 @@ except Exception:
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
-    # postinstall.sh runs this to register the MCP server with Claude Desktop,
-    # so members never hand-edit claude_desktop_config.json. It has to travel
-    # inside the bundle because the installer has no checkout to read from.
-    + [(str(ROOT / "scripts" / "register_mcp_client.py"), ".")]
+
     + _pyongc_datas
     + _iers_datas
     + _certifi_datas

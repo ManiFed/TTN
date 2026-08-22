@@ -86,6 +86,25 @@ Section "Node Agent (required)" SecMain
   nsExec::ExecToLog 'powercfg /change hibernate-timeout-ac 0'
   nsExec::ExecToLog 'powercfg /change disk-timeout-ac 0'
 
+  ; Register the MCP server with Claude Desktop, so members never hand-edit
+  ; claude_desktop_config.json. That step is invisible in an installer, easy to
+  ; get subtly wrong, and fails silently -- the tools simply never appear.
+  ;
+  ; SetShellVarContext current so $APPDATA resolves to the installing user's
+  ; roaming profile, not All Users: the config is per-user and Claude will not
+  ; look anywhere else. Restored immediately afterwards, since the rest of this
+  ; section is machine-wide.
+  ;
+  ; The agent does the work itself rather than a Python script -- Windows
+  ; members have no interpreter. It merges one key and refuses a config it
+  ; cannot parse, so other MCP servers are never disturbed. Never fatal:
+  ; Claude Desktop not being installed is a normal outcome.
+  SetShellVarContext current
+  nsExec::ExecToLog '"${INSTALL_DIR}\TelescopeNetNode.exe" --register-mcp \
+    --data-dir "${DATA_DIR}" \
+    --mcp-config "$APPDATA\Claude\claude_desktop_config.json"'
+  SetShellVarContext all
+
   ; Install as a Windows Service via NSSM
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" install "${SERVICE_NAME}" \
     "${INSTALL_DIR}\TelescopeNetNode.exe"'
@@ -138,6 +157,14 @@ SectionEnd
 ; Uninstaller
 ;-----------------------------------------------------------------------------
 Section "Uninstall"
+  ; Deregister from Claude Desktop first, while the agent still exists to do
+  ; it -- otherwise the member is left with a tool entry pointing at a binary
+  ; that has been deleted. Removes only our own key.
+  SetShellVarContext current
+  nsExec::ExecToLog '"${INSTALL_DIR}\TelescopeNetNode.exe" --deregister-mcp \
+    --mcp-config "$APPDATA\Claude\claude_desktop_config.json"'
+  SetShellVarContext all
+
   ; Stop and remove the service
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" stop "${SERVICE_NAME}"'
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" remove "${SERVICE_NAME}" confirm'

@@ -30,9 +30,9 @@ if [ -n "${CONSOLE_USER}" ] && [ "${CONSOLE_USER}" != "root" ] && [ "${CONSOLE_U
 
     # Deregister from Claude Desktop, or the member is left with a tool entry
     # pointing at a binary that no longer exists. Removes only our own key.
-    MCP_REGISTER="/Applications/TelescopeNetNode.app/Contents/Resources/register_mcp_client.py"
-    if [ -f "${MCP_REGISTER}" ]; then
-        sudo -u "${CONSOLE_USER}" /usr/bin/python3 "${MCP_REGISTER}" --remove 2>/dev/null || true
+    AGENT_BIN="/Applications/TelescopeNetNode.app/Contents/MacOS/TelescopeNetNode"
+    if [ -x "${AGENT_BIN}" ]; then
+        sudo -u "${CONSOLE_USER}" "${AGENT_BIN}" --deregister-mcp 2>/dev/null || true
     fi
 fi
 
