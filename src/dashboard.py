@@ -4027,6 +4027,46 @@ def api_stack_stop():
     return jsonify({"ok": True})
 
 
+@app.route("/api/imaging/targets", methods=["GET"])
+def api_imaging_targets():
+    """Objects worth imaging, best first. ?search=&limit=&reachable=1
+
+    Shares _IMAGING_TYPES and _imaging_rank with the automatic handover, so a
+    suggested target and a chosen one are drawn from the same set. Filtering
+    client-side instead would drift: the browse list would start offering dark
+    nebulae the telescope itself would never pick.
+    """
+    search = (request.args.get("search") or "").strip().lower()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 20)), 200))
+    except (TypeError, ValueError):
+        limit = 20
+    reachable_only = request.args.get("reachable") in ("1", "true", "yes")
+
+    items = [o for o in _dso_catalog if str(o.get("type") or "") in _IMAGING_TYPES]
+    if search:
+        items = [o for o in items
+                 if search in str(o.get("id", "")).lower()
+                 or search in str(o.get("name", "")).lower()]
+    items = sorted(items, key=_imaging_rank)
+
+    if reachable_only:
+        out = []
+        for obj in items:
+            if len(out) >= limit:
+                break
+            try:
+                if _slew_rejection(float(obj["ra"]), float(obj["dec"])) is None:
+                    out.append(obj)
+            except (TypeError, ValueError, KeyError):
+                continue
+        return jsonify({"targets": out, "total": len(items),
+                        "reachable_only": True})
+
+    return jsonify({"targets": items[:limit], "total": len(items),
+                    "reachable_only": False})
+
+
 @app.route("/api/imaging/status", methods=["GET"])
 def api_imaging_status():
     """Whether the imaging half of the night is running, and on what."""
