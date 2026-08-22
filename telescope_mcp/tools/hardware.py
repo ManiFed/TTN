@@ -28,7 +28,7 @@ def register(server, agent: AgentClient) -> None:
     @server.tool()
     def node_logs(lines: int = 200) -> dict:
         """Recent node agent log lines — the first thing to read when something broke."""
-        return untrusted(agent.get("/api/logs", {"lines": int(lines)}),
+        return untrusted(agent.get("/api/logs/recent", {"lines": int(lines)}),
                          "node agent log file")
 
     @server.tool()

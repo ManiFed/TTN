@@ -2658,6 +2658,25 @@ def api_logs():
     )
 
 
+@app.route("/api/logs/recent")
+def api_logs_recent():
+    """Recent log lines as JSON, newest last. ?lines=N (default 200, max 300).
+
+    /api/logs is a Server-Sent Events stream that never ends -- right for a
+    live-tailing dashboard, useless to anything that wants to read the log and
+    move on. A non-streaming caller there just blocks until it times out, which
+    is exactly what the MCP diagnose tool was doing.
+    """
+    try:
+        lines = int(request.args.get("lines", 200))
+    except (TypeError, ValueError):
+        lines = 200
+    lines = max(1, min(lines, 300))
+    with _subscribers_lock:
+        entries = list(_log_history)[-lines:]
+    return jsonify({"lines": entries, "count": len(entries)})
+
+
 @app.route("/api/discover", methods=["POST"])
 def api_discover():
     cfg = _load_config()

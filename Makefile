@@ -21,6 +21,12 @@ test:
 gauntlet:
 	$(PYTHON) -m pytest tests/gauntlet -q
 
+# End-to-end: real Postgres, real cloud app, real node agent, real MCP
+# transport. Slow (a Postgres boot) and skipped where PG is unavailable.
+.PHONY: e2e
+e2e:
+	$(PYTHON) -m pytest tests/test_e2e_mcp.py tests/test_e2e_node_mcp.py -v
+
 # Fleet integrity sweep: what an unattended patrol would find right now.
 # Needs TELESCOPE_MCP_ADMIN_KEY. Read-only and safe against production.
 .PHONY: patrol

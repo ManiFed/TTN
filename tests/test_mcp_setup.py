@@ -217,6 +217,20 @@ class DiagnoseTest(_Fixture):
         self.assertIn("Sun above horizon", text)
         self.assertIn("not registered", text)
 
+    def test_a_safety_stop_is_not_mistaken_for_an_unreachable_agent(self):
+        """/api/status carries a top-level "error" whenever safety has latched,
+        which is most of any daytime. Reading that as a transport failure sends
+        people to restart software that is working perfectly."""
+        self.identity = {"registered": True, "node_id": "node_ok"}
+        self.status = {"telescope": {"connected": True},
+                       "camera": {"connected": True},
+                       "error": "Safety stop: sun above horizon"}
+        self.client.get.return_value = {}
+        _, text, _ = call(self.server, "diagnose", {})
+        self.assertNotIn("not reachable", text)
+        self.assertIn("sun above horizon", text)
+        self.assertIn("expected in daylight", text)
+
     def test_an_unreachable_agent_is_the_headline(self):
         self.agent.get.side_effect = ApiError(0, "Could not reach the node software")
         self.client.get.return_value = {}

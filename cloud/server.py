@@ -2035,10 +2035,13 @@ def api_me_node_stand_down(user, node_id):
         nights = int(body.get("nights") or 0)
     except (TypeError, ValueError):
         nights = 0
-    result = nightly.stand_down(node, reason=str(body.get("reason") or ""),
-                                nights=nights)
+    nightly.stand_down(node, reason=str(body.get("reason") or ""), nights=nights)
     live.publish(node_id, "retask", {"reason": "stand_down"})
-    return jsonify(result)
+    # Resolve rather than returning the stored row: every other tonight
+    # endpoint answers with the verdict shape (observing, reason), and a
+    # caller must be able to see from the reply whether the telescope
+    # actually stopped. The raw row carries neither field.
+    return jsonify(nightly.resolve(node))
 
 
 @app.route("/api/v1/nodes/tonight", methods=["GET"])
