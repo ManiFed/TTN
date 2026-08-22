@@ -110,7 +110,7 @@ AGENT_BIN="${APP_DIR}/Contents/MacOS/TelescopeNetNode"
 if [ -x "${AGENT_BIN}" ]; then
     if sudo -u "${CONSOLE_USER}" "${AGENT_BIN}" --register-mcp \
             --data-dir "${DATA_DIR}"; then
-        echo "Claude Desktop can now control this telescope."
+        MCP_REGISTERED=1
     else
         echo "NOTE: could not register the MCP server automatically."
         echo "      The telescope still works; AI control needs manual setup."
@@ -188,6 +188,21 @@ fi
 
 echo ""
 echo "Installation complete!"
+echo ""
+# Nothing else in the product mentions this, so if it is not said here a member
+# has no way of discovering that their telescope can be driven by asking.
+if [ "${MCP_REGISTERED:-0}" = "1" ]; then
+    if [ -d "/Applications/Claude.app" ]; then
+        echo "You can now run this telescope by asking."
+        echo "  Quit and reopen Claude, then say: \"connect my telescope\""
+        echo "  (Claude needs a restart to notice the new tools.)"
+    else
+        echo "This telescope can be run by asking, if you use an AI assistant."
+        echo "  Install Claude Desktop from https://claude.ai/download and the"
+        echo "  telescope will already be there — then say \"connect my telescope\"."
+    fi
+    echo ""
+fi
 echo "Desktop app: ${DESKTOP_APP} (if packaged)"
 echo "Dashboard:   ${DASHBOARD_URL}"
 echo "Service:     com.telescopenet.nodeagent (gui/${CONSOLE_UID})"

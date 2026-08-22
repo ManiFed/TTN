@@ -105,6 +105,11 @@ Section "Node Agent (required)" SecMain
     --mcp-config "$APPDATA\Claude\claude_desktop_config.json"'
   SetShellVarContext all
 
+  ; Tell the member this exists. Nothing else in the product mentions it, so
+  ; without this the registration above is invisible and never used.
+  DetailPrint "If you use Claude Desktop, this telescope is now connected to it."
+  DetailPrint "Quit and reopen it, then say: connect my telescope"
+
   ; Install as a Windows Service via NSSM
   nsExec::ExecToLog '"${INSTALL_DIR}\nssm.exe" install "${SERVICE_NAME}" \
     "${INSTALL_DIR}\TelescopeNetNode.exe"'
