@@ -178,7 +178,12 @@ class FleetIntegrityTest(unittest.TestCase):
         self.assertEqual(severities[0], "critical")
 
     def test_one_broken_check_does_not_hide_the_others(self):
-        """A check that raises is reported as an error, not allowed to abort the run."""
+        """A check that raises is reported as an error, not allowed to abort the run.
+
+        The message is deliberately generic. A raw exception string can carry
+        column and table names, and this reaches an API response -- so the
+        detail belongs in the server log, not in the payload.
+        """
         def explode():
             raise RuntimeError("column does not exist")
 
@@ -191,8 +196,11 @@ class FleetIntegrityTest(unittest.TestCase):
                 result = integrity.run_all()
 
         self.assertEqual(len(result["errors"]), 1)
-        self.assertIn("column does not exist", result["errors"][0]["error"])
-        self.assertIn("missing_credentials", _checks_hit(result))
+        self.assertEqual(result["errors"][0]["check"], "orphaned_nodes")
+        self.assertNotIn("column does not exist", result["errors"][0]["error"],
+                         "the raw exception must not reach the API response")
+        self.assertIn("missing_credentials", _checks_hit(result),
+                      "the surviving check still ran")
         self.assertFalse(result["healthy"])
 
     def test_unparseable_timestamps_do_not_crash(self):
