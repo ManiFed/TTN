@@ -54,7 +54,7 @@ sends neither, so it is unaffected — same as `curl`.
 | `TELESCOPE_MCP_CLOUD_BASE` | `https://api.thetelescope.net` | cloud API root |
 | `TELESCOPE_MCP_AGENT_BASE` | `http://127.0.0.1:5173` | node agent root |
 | `TELESCOPE_MCP_TOKEN` | — | member session token; or call `auth_login` |
-| `TELESCOPE_MCP_ADMIN_KEY` | — | `X-Admin-Key`, for admin and integrity tools |
+| `TELESCOPE_MCP_ADMIN_KEY` | — | `X-Admin-Key`. Use `CLOUD_ADMIN_READONLY_KEY` for monitoring; the full key only when admin tools are actually needed |
 | `TELESCOPE_MCP_ENV` | `sim` | `sim` \| `staging` \| `production` |
 | `TELESCOPE_MCP_ALLOW_PRODUCTION_WRITES` | unset | opt in to hardware writes on production |
 
@@ -179,6 +179,14 @@ week is one problem, not seven. It closes itself when the fleet comes clean.
 The patrol deliberately does not write the fix. Writing it needs judgement; what
 this guarantees is that whoever writes it starts from evidence rather than from
 a guess, which is the entire reason the loop is worth having.
+
+The patrol authenticates with a **read-only** admin credential
+(`CLOUD_ADMIN_READONLY_KEY`), not the full one. `require_admin_readonly` in
+`cloud/server.py` accepts it on the integrity endpoint and nowhere else, so the
+credential sitting in a CI secret store cannot replan the network, roll back
+tuning weights, or mark AAVSO batches submitted. An unset key never
+authenticates an empty header — otherwise a mis-piped CI secret would silently
+become admin access.
 
 **`scripts/merge_policy.py`** decides what may land without a person reading it.
 It is deliberately dumb — a path policy, not a judgement about the change, since

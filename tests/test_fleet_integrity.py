@@ -271,3 +271,71 @@ class FleetIntegrityEndpointTest(unittest.TestCase):
         body = resp.get_json()
         self.assertFalse(body["healthy"])
         self.assertEqual(len(body["errors"]), len(integrity.CHECKS))
+
+
+class ReadOnlyAdminKeyTest(unittest.TestCase):
+    """The nightly patrol runs unattended in CI, so its credential must be
+    unable to do anything but look.
+
+    Handing the full admin key to GitHub Actions would give every workflow in
+    the repository the ability to replan the network, roll back tuning weights
+    or mark AAVSO batches submitted. These tests pin the smaller credential --
+    and, more importantly, pin that an *unset* key never authenticates, which
+    is exactly the state a mis-piped CI secret leaves behind.
+    """
+
+    ADMIN = "full-admin-key"
+    READONLY = "readonly-admin-key"
+
+    def setUp(self):
+        import cloud.server as server
+        self.server = server
+        self.client = server.app.test_client()
+        self._saved = dict(server._config.get("server", {}))
+        server._config.setdefault("server", {}).update(
+            {"admin_key": self.ADMIN, "admin_readonly_key": self.READONLY})
+
+    def tearDown(self):
+        self.server._config["server"] = self._saved
+
+    def _integrity(self, key):
+        headers = {"X-Admin-Key": key} if key is not None else {}
+        with patch.object(integrity, "db", _FakeDb()):
+            return self.client.get("/api/v1/admin/fleet-integrity", headers=headers)
+
+    def test_the_readonly_key_can_read_integrity(self):
+        self.assertEqual(self._integrity(self.READONLY).status_code, 200)
+
+    def test_the_full_admin_key_still_works(self):
+        self.assertEqual(self._integrity(self.ADMIN).status_code, 200)
+
+    def test_a_wrong_key_is_rejected(self):
+        self.assertEqual(self._integrity("nope").status_code, 401)
+
+    def test_a_missing_header_is_rejected(self):
+        self.assertEqual(self._integrity(None).status_code, 401)
+
+    def test_an_empty_header_is_rejected(self):
+        self.assertEqual(self._integrity("").status_code, 401)
+
+    def test_an_unset_readonly_key_does_not_authenticate_an_empty_header(self):
+        """The mis-piped-CI-secret case: blank config must not accept blank."""
+        self.server._config["server"]["admin_readonly_key"] = ""
+        self.assertEqual(self._integrity("").status_code, 401)
+        self.assertEqual(self._integrity(None).status_code, 401)
+
+    def test_the_readonly_key_cannot_reach_a_mutating_admin_endpoint(self):
+        """The whole point: it can look at the fleet and nothing else."""
+        for method, path in (
+            ("post", "/api/v1/admin/replan"),
+            ("post", "/api/v1/admin/ingest"),
+            ("post", "/api/v1/admin/tuning/rollback"),
+            ("get", "/api/v1/admin/aavso-batches"),
+            ("get", "/api/v1/admin/incidents"),
+        ):
+            resp = getattr(self.client, method)(
+                path, headers={"X-Admin-Key": self.READONLY})
+            self.assertEqual(
+                resp.status_code, 401,
+                f"{method.upper()} {path} accepted the read-only key; it must "
+                f"stay behind the full admin key")

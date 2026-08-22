@@ -241,6 +241,32 @@ def require_admin(fn):
     return wrapper
 
 
+def require_admin_readonly(fn):
+    """Admin access for things that only look.
+
+    Accepts the full admin key, or a separate read-only one. The nightly fleet
+    patrol runs unattended in CI, and giving that the full key would hand every
+    workflow in the repository the ability to replan the network, roll back
+    tuning weights, or mark AAVSO batches as submitted. A credential that can
+    only read is a much smaller thing to leave lying in a CI secret store.
+
+    Only ever put this on endpoints that cannot change anything.
+    """
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        server_cfg = _config.get("server", {})
+        presented = request.headers.get("X-Admin-Key", "")
+        admin_key = server_cfg.get("admin_key", "")
+        readonly_key = server_cfg.get("admin_readonly_key", "")
+        # An unset key must never match an absent or empty header -- a blank
+        # secret in CI would otherwise silently authenticate as admin.
+        accepted = [k for k in (admin_key, readonly_key) if k]
+        if not presented or presented not in accepted:
+            return jsonify({"error": "invalid admin key"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 # ── Node management ────────────────────────────────────────────────────────────
 
 def _geocode_location(name: str) -> tuple[float | None, float | None]:
@@ -1708,7 +1734,7 @@ def api_admin_incident_update(incident_id: int):
 
 
 @app.route("/api/v1/admin/fleet-integrity", methods=["GET"])
-@require_admin
+@require_admin_readonly
 def api_admin_fleet_integrity():
     """Run every fleet-integrity check and return the findings.
 

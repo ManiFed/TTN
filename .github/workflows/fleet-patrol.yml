@@ -9,7 +9,12 @@
 # that persists for a week is one problem, not seven.
 #
 # Requires:
-#   secrets.TELESCOPE_MCP_ADMIN_KEY   X-Admin-Key for /api/v1/admin/*
+#   secrets.TELESCOPE_MCP_ADMIN_KEY   should hold CLOUD_ADMIN_READONLY_KEY, not
+#                                     the full admin key. The read-only key is
+#                                     accepted by the integrity endpoint and
+#                                     rejected by everything that changes state,
+#                                     so a workflow in this repository cannot
+#                                     replan the network or touch AAVSO batches.
 #   vars.TELESCOPE_MCP_CLOUD_BASE     defaults to production if unset
 
 name: Fleet patrol
