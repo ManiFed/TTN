@@ -65,6 +65,11 @@ jobs:
           sed -i.bak 's/com.example.boundlessSkies/org.telescopenet.app/g' macos/Runner.xcodeproj/project.pbxproj
       - working-directory: app
         run: flutter pub get
+      # Dart tests were unreachable until app/test/ came out of .gitignore.
+      # Runs on every target so a platform-specific failure cannot hide.
+      - name: Flutter tests
+        working-directory: app
+        run: flutter test
       - working-directory: app
         run: flutter build ${{ matrix.target }} --release --dart-define=API_BASE=https://api.thetelescope.net
         env:

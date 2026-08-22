@@ -19,6 +19,24 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Newest published release, as reported by `/api/v1/versions`.
+class VersionInfo {
+  const VersionInfo({
+    required this.latest,
+    required this.downloadPage,
+    this.macosUpdateUrl,
+    this.macosUpdateSha256,
+  });
+
+  final String latest;
+  final String downloadPage;
+  final String? macosUpdateUrl;
+  final String? macosUpdateSha256;
+
+  /// Whether the self-updater has everything it needs to run on this platform.
+  bool get canSelfUpdate => macosUpdateUrl != null && macosUpdateSha256 != null;
+}
+
 /// Typed wrapper over the cloud member API (cloud/server.py, /api/v1/*).
 class ApiClient {
   ApiClient(this._auth, {http.Client? client}) : _http = client ?? http.Client();
@@ -156,12 +174,17 @@ class ApiClient {
   /// Newest published node/app version + where to get it, for the
   /// update-available banner. Public endpoint — no auth required, and
   /// failures should never surface (returns null instead of throwing).
-  Future<(String, String)?> latestVersion() async {
+  Future<VersionInfo?> latestVersion() async {
     try {
       final json = await _get('/versions');
       final version = json['latest'] as String?;
       if (version == null) return null;
-      return (version, json['download_page'] as String? ?? '');
+      return VersionInfo(
+        latest: version,
+        downloadPage: json['download_page'] as String? ?? '',
+        macosUpdateUrl: json['macos_update_url'] as String?,
+        macosUpdateSha256: json['macos_update_sha256'] as String?,
+      );
     } catch (_) {
       return null;
     }

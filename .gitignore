@@ -16,7 +16,6 @@ cloud_data/aavso_files/
 cloud_data/aavso_batches/
 logs/
 app/.metadata
-app/test/
 website/dashboard/
 .venv/
 cloud_data/validation/
