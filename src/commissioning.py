@@ -108,7 +108,13 @@ class CommissioningManager:
         return {"ok": bool(ok), "blocking": blocking, "detail": detail}
 
     def evaluate(self) -> dict:
-        registered = bool(self._is_registered())
+        cfg = self._load_config() or {}
+        # A node running without the cloud is standalone, not half-configured.
+        # Waiting for a signup that is never coming would leave it reporting
+        # "pending" for ever, and commissioning is what tells an owner their
+        # telescope is actually ready to work.
+        standalone = not bool((cfg.get("cloud") or {}).get("enabled", True))
+        registered = standalone or bool(self._is_registered())
         with self._lock:
             if not registered:
                 self._state["status"] = "waiting_for_signup"
@@ -117,7 +123,6 @@ class CommissioningManager:
             if self._state["started_at"] is None:
                 self._state["started_at"] = _utc_now()
 
-        cfg = self._load_config() or {}
         runtime = self._runtime_status() or {}
         observer = cfg.get("safety", {}).get("observer", {}) or {}
         # Prefer the live, auto-mounted watch path the image watcher actually
@@ -140,7 +145,12 @@ class CommissioningManager:
         specs = self._telescope_specs() or {}
 
         checks = {
-            "cloud_registration": self._check(True, "Node linked to member"),
+            "cloud_registration": self._check(
+                True,
+                "Running standalone (no cloud)" if standalone
+                else "Node linked to member",
+                blocking=not standalone,
+            ),
             "observer_location": self._check(
                 not (observer.get("latitude") in (None, 0, 0.0)
                      and observer.get("longitude") in (None, 0, 0.0)),

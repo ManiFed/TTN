@@ -55,6 +55,23 @@ python -m telescope_mcp.cloud_server --http --host 0.0.0.0 --port 8900
 python -m telescope_mcp.local_server
 ```
 
+**Standalone — your own telescope, no account:**
+
+```bash
+python -m telescope_mcp.local_server --local
+```
+
+50 tools: find and connect the telescope, drive the mount and camera, focus,
+plate-solve centre, live-stack, read logs, diagnose, and get images back inline.
+Nothing is uploaded and nothing is shared. The account-facing tools are not
+registered at all, so nothing invites the member to sign in to something they
+deliberately did not join, and `connect_telescope` replaces
+`connect_my_telescope` — same job, minus the two steps that need credentials.
+
+A standalone node also finishes commissioning: the cloud-registration check
+becomes informational rather than blocking, instead of sitting at
+`waiting_for_signup` for ever waiting on an account that is never coming.
+
 The local server needs no credentials. The agent binds to 127.0.0.1 and rejects
 browser callers by `Host` and `Origin` (`src/dashboard.py:62`); an MCP server
 sends neither, so it is unaffected — same as `curl`.

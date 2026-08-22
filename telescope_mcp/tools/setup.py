@@ -317,3 +317,84 @@ def _summarise(report: dict) -> str:
         return (f"Telescope and camera connected. The node is currently held: "
                 f"{latched}. That is expected in daylight.")
     return "Nothing obviously wrong: telescope and camera connected, safety clear."
+
+
+def register_standalone(server, agent: AgentClient) -> None:
+    """Setup tools for a telescope with no network account.
+
+    Same job as connect_my_telescope, minus the two steps that need an account:
+    the cloud never issues credentials and nothing is written back to the
+    agent. Someone running standalone gets the part they care about -- find the
+    telescope, connect to it, confirm it is up -- without being told to sign in
+    to something they have deliberately not joined.
+    """
+
+    @server.tool()
+    def connect_telescope(host: str = "", port: int = 0) -> dict:
+        """Find the telescope on this network and connect to it. One call.
+
+        Nothing is uploaded and no account is involved. Give `host` and `port`
+        to skip discovery when the telescope's address is already known.
+        """
+        steps: list[dict] = []
+
+        if host and port:
+            target = {"host": host, "port": int(port)}
+            steps.append(_step("discover", True, f"Using {host}:{port} as given."))
+        else:
+            try:
+                found = agent.post("/api/discover", timeout=25.0)
+            except ApiError as exc:
+                steps.append(_step("discover", False, exc.message))
+                return {"connected": False, "steps": steps,
+                        "detail": "Could not search for the telescope."}
+            servers = (found or {}).get("servers") or []
+            if not servers:
+                steps.append(_step("discover", False, "No telescope answered."))
+                return {"connected": False, "steps": steps,
+                        "detail": NO_TELESCOPE_FOUND,
+                        "most_likely_cause": (
+                            "The telescope is in Access Point mode, so it is on "
+                            "its own network rather than yours."),
+                        "checks": NETWORK_CHECKS}
+            target = servers[0]
+            steps.append(_step("discover", True,
+                               f"Found {len(servers)} telescope(s).",
+                               chosen=target, all_found=servers))
+
+        try:
+            agent.post("/api/connect", {"host": target.get("host"),
+                                        "port": int(target.get("port") or 0),
+                                        "set_as_default": True}, timeout=25.0)
+            steps.append(_step("connect", True, "Connected to the telescope."))
+        except ApiError as exc:
+            steps.append(_step("connect", False, exc.message))
+            return {"connected": False, "steps": steps,
+                    "detail": "Found the telescope but could not connect to it."}
+
+        online = False
+        for _ in range(6):
+            try:
+                status = agent.get("/api/status", timeout=8.0)
+                if ((status or {}).get("telescope") or {}).get("connected"):
+                    online = True
+                    break
+            except ApiError:
+                pass
+            time.sleep(2)
+        steps.append(_step("verify", online,
+                           "Telescope reports connected." if online else
+                           "Telescope has not reported connected yet."))
+
+        return {
+            "connected": online,
+            "steps": steps,
+            "detail": (
+                "Your telescope is connected. Ask for imaging targets, or point "
+                "it somewhere and start stacking."
+                if online else
+                "Connected, but the telescope has not confirmed it is up yet. "
+                "Check node_status in a moment; node_logs will say why if it "
+                "does not come up."
+            ),
+        }

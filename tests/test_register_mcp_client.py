@@ -14,16 +14,12 @@ Run with:  python3 -m pytest tests/test_register_mcp_client.py
 """
 
 import json
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location(
-    "register_mcp_client", REPO / "scripts" / "register_mcp_client.py")
-reg = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(reg)
+from telescope_mcp import register_client as reg
 
 COMMAND = "/Applications/TelescopeNetNode.app/Contents/MacOS/TelescopeNetNode"
 DATA_DIR = "/Users/someone/Library/Application Support/TelescopeNet/NodeAgent"
@@ -194,3 +190,40 @@ class PlatformPathTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallerEntryTest(_Tmp):
+    """What the installers actually register has to be launchable.
+
+    A packaged build registers the agent binary directly; a source checkout
+    registers an interpreter, which needs the module before the flags or the
+    command cannot start at all.
+    """
+
+    def test_a_packaged_build_registers_the_agent_directly(self):
+        reg.register("/Applications/TelescopeNetNode.app/Contents/MacOS/TelescopeNetNode",
+                     DATA_DIR, self.path)
+        entry = self.read()["mcpServers"]["telescope-net"]
+        self.assertTrue(entry["command"].endswith("TelescopeNetNode"))
+        self.assertEqual(entry["args"][0], "--mcp")
+
+    def test_a_source_checkout_registers_the_module_too(self):
+        reg.register("/usr/bin/python3", DATA_DIR, self.path,
+                     prefix_args=["-m", "src.main_service"])
+        entry = self.read()["mcpServers"]["telescope-net"]
+        self.assertEqual(entry["args"][:3], ["-m", "src.main_service", "--mcp"])
+
+    def test_windows_config_path_is_under_roaming_appdata(self):
+        from unittest.mock import patch
+        with patch("platform.system", return_value="Windows"), \
+             patch.dict("os.environ", {"APPDATA": r"C:\Users\Someone\AppData\Roaming"}):
+            path = str(reg.config_path()).replace("\\", "/")
+        self.assertIn("AppData/Roaming/Claude/claude_desktop_config.json", path)
+
+    def test_an_explicit_path_overrides_the_platform_default(self):
+        """The Windows installer runs elevated, so an inherited %APPDATA% can
+        belong to the elevating admin rather than the member. It therefore
+        passes the path rather than letting it be inferred."""
+        ok, msg = reg.register("agent.exe", DATA_DIR, self.path)
+        self.assertTrue(ok)
+        self.assertIn(str(self.path), msg)
