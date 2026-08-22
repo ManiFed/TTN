@@ -361,6 +361,65 @@ def public_view(node_row: dict) -> dict:
     return out
 
 
+#: How many nights of the reliability window we need before the observing-rate
+#: term means anything. Below this the member was away for almost all of it and
+#: there is simply no evidence either way.
+_MIN_AVAILABLE_NIGHTS = 5
+
+
+def opted_out_nights(node_id: str, node_row: Optional[dict],
+                     window_days: int = 30) -> set:
+    """Dates in the window the member chose not to observe.
+
+    Deliberately member-initiated only: declined nights, stand-downs, and
+    vacation. Weather holds are *not* excluded -- a site that is clouded out
+    often genuinely delivers less, and that is legitimate information for
+    scheduling. What is not legitimate is treating "I am away this week" as
+    identical to "my telescope is broken".
+
+    Fails open: any problem reading the intents returns an empty set, so a node
+    is scored the way it always was rather than being silently exempted.
+    """
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=window_days)
+    out: set = set()
+
+    try:
+        rows = db.query(
+            """SELECT night, status FROM night_intents
+               WHERE node_id = %s AND night >= %s""",
+            (node_id, start.isoformat()),
+        )
+    except Exception as exc:      # table absent on an un-migrated database
+        logger.debug("Could not read night intents for %s: %s", node_id, exc)
+        rows = []
+    for row in rows:
+        if (row.get("status") or "") in ("declined", "stood_down"):
+            night = str(row.get("night") or "")
+            if night:
+                out.add(night)
+
+    # Vacation predates night_intents and is still how a multi-night absence is
+    # recorded, so it has to be counted here too or a fortnight away would
+    # still read as a fortnight of failure.
+    row = node_row or {}
+    vac_from = str(row.get("vacation_from") or "").strip()
+    vac_until = str(row.get("vacation_until") or "").strip()
+    if vac_until:
+        try:
+            until_d = datetime.fromisoformat(vac_until).date()
+            from_d = (datetime.fromisoformat(vac_from).date() if vac_from
+                      else until_d - timedelta(days=window_days))
+            day = max(from_d, start)
+            while day <= min(until_d, today):
+                out.add(day.isoformat())
+                day += timedelta(days=1)
+        except ValueError:
+            pass
+
+    return out
+
+
 def refresh_node_performance(node_id: str) -> dict:
     """
     Recompute performance statistics for one node from its measurement history
@@ -373,7 +432,10 @@ def refresh_node_performance(node_id: str) -> dict:
         Otherwise:
             0.40 × aavso_acceptance_rate        (do good data reach AAVSO?)
           + 0.25 × (1 − outlier_rate)           (does this node agree with others?)
-          + 0.20 × min(1, clear_nights_30d/30)  (how often is it actually observing?)
+          + 0.20 × (clear_nights_30d / nights_available)
+                                                (when it could observe, did it?
+                                                 nights the member opted out of
+                                                 are not counted against them)
           + 0.15 × precision_factor             (how precise is its photometry?)
 
         precision_factor = max(0, 1 − mean_uncertainty / 0.30)
@@ -422,6 +484,24 @@ def refresh_node_performance(node_id: str) -> dict:
     ) or {}
     clear_nights = int((clear_row or {}).get("n", 0) or 0)
 
+    # Nights the member opted out of are removed from the denominator rather
+    # than counted as nights the telescope failed to deliver. Scoring them as
+    # failures made a holiday indistinguishable from a broken mount, and this
+    # number multiplies tile value in event_tiling -- so taking a week off cost
+    # a member their share of transient response for the following month.
+    node_row = db.query_one(
+        "SELECT vacation_from, vacation_until FROM nodes WHERE node_id = %s",
+        (node_id,))
+    opted_out = opted_out_nights(node_id, node_row)
+    available_nights = max(0, 30 - len(opted_out))
+    if available_nights < _MIN_AVAILABLE_NIGHTS:
+        # Away for essentially the whole window. The question this term asks --
+        # "when it could have observed, did it?" -- has no answer, so it must
+        # not be answered against them.
+        observing_rate = 1.0
+    else:
+        observing_rate = min(1.0, clear_nights / available_nights)
+
     if total < 10:
         reliability = 0.5   # insufficient data — neutral score
     else:
@@ -429,7 +509,7 @@ def refresh_node_performance(node_id: str) -> dict:
         reliability = (
             0.40 * acceptance_rate
             + 0.25 * (1.0 - outlier_rate)
-            + 0.20 * min(1.0, clear_nights / 30.0)
+            + 0.20 * observing_rate
             + 0.15 * precision_factor
         )
         reliability = round(max(0.0, min(1.0, reliability)), 4)
