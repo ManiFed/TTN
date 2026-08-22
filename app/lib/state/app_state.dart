@@ -6,6 +6,7 @@ import '../api/api_client.dart';
 import '../api/auth_store.dart';
 import '../config.dart';
 import '../models/models.dart';
+import '../services/updater_service.dart';
 
 /// True if [latest] is a newer X.Y.Z version than [current]. Non-numeric or
 /// malformed strings compare as not-newer rather than throwing, since this
@@ -57,8 +58,14 @@ class AppState extends ChangeNotifier {
   String? updateAvailableVersion;
   String updateDownloadPage = '';
   bool _updateBannerDismissed = false;
+
+  /// True while the self-updater is downloading/verifying/installing in the
+  /// background. The banner hides during this window since there's nothing
+  /// useful for the member to click — the app is about to quit and relaunch
+  /// on its own.
+  bool updateInstalling = false;
   bool get showUpdateBanner =>
-      updateAvailableVersion != null && !_updateBannerDismissed;
+      updateAvailableVersion != null && !_updateBannerDismissed && !updateInstalling;
 
   void dismissUpdateBanner() {
     _updateBannerDismissed = true;
@@ -67,16 +74,39 @@ class AppState extends ChangeNotifier {
 
   Future<void> checkForUpdate() async {
     try {
-      final result = await _api.latestVersion();
-      if (result == null) return;
-      final (latest, downloadPage) = result;
-      if (_isNewerVersion(AppConfig.appVersion, latest)) {
-        updateAvailableVersion = latest;
-        updateDownloadPage = downloadPage;
-        notifyListeners();
+      final info = await _api.latestVersion();
+      if (info == null) return;
+      if (!_isNewerVersion(AppConfig.appVersion, info.latest)) return;
+
+      updateAvailableVersion = info.latest;
+      updateDownloadPage = info.downloadPage;
+      notifyListeners();
+
+      if (info.canSelfUpdate) {
+        unawaited(_selfUpdate(info));
       }
     } catch (_) {
       // Never let an update check disrupt the app.
+    }
+  }
+
+  /// Downloads, verifies, and swaps in the new build, then quits so the OS
+  /// relaunches it. If anything fails (offline, no write access, checksum
+  /// mismatch, unsupported platform), this silently falls back to the
+  /// dismissible banner + manual download link — a failed self-update must
+  /// never crash or block the app the member is currently using.
+  Future<void> _selfUpdate(VersionInfo info) async {
+    updateInstalling = true;
+    notifyListeners();
+    try {
+      await UpdaterService.downloadVerifyAndRestart(
+        zipUrl: info.macosUpdateUrl!,
+        expectedSha256: info.macosUpdateSha256!,
+      );
+      // Not reached on success — UpdaterService calls exit(0) itself.
+    } catch (_) {
+      updateInstalling = false;
+      notifyListeners();
     }
   }
 

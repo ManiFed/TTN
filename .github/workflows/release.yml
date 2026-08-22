@@ -177,6 +177,12 @@ jobs:
           FLUTTER_APP_SOURCE="dist/TelescopeNet.app" bash build/macos/build_dmg.sh
           # Stable-named copy so the download link never needs a code change
           cp "dist/TelescopeNetNode-${VERSION}-macOS.pkg" "dist/TelescopeNetNode-macOS.pkg"
+      - name: Checksum the in-app updater asset
+        run: |
+          # The app's self-updater downloads this zip directly (no admin
+          # password, unlike the .pkg) and verifies it against this checksum
+          # before ever swapping it into a running .app bundle.
+          shasum -a 256 dist/TelescopeNet-macos.app.zip > dist/TelescopeNet-macos.app.zip.sha256
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -186,6 +192,8 @@ jobs:
           gh release create "${TAG}" \
             "dist/TelescopeNetNode-${VERSION}-macOS.pkg" \
             "dist/TelescopeNetNode-macOS.pkg" \
+            "dist/TelescopeNet-macos.app.zip" \
+            "dist/TelescopeNet-macos.app.zip.sha256" \
             --repo "${{ github.repository }}" \
             --title "Node Agent ${TAG}" \
             --generate-notes \

@@ -154,8 +154,16 @@ def download_node_agent(platform: str = "macos"):
 # nag members to update instead of silently drifting out of sync the way
 # v1.0.4 did. Cached for a few minutes — GitHub's API is rate-limited and this
 # value changes at most a few times a month.
-_latest_version_cache: dict = {"version": None, "checked_at": 0.0}
+_latest_version_cache: dict = {"version": None, "checked_at": 0.0, "macos_sha256": None}
 _LATEST_VERSION_TTL = 300.0
+
+# Stable, version-agnostic asset name for the swappable macOS app bundle used
+# by the in-app self-updater (distinct from the .pkg, which needs an admin
+# password every time and is only for fresh installs). release.yml publishes
+# this alongside its .sha256 checksum file on every tag.
+_UPDATE_ASSET_NAME = "TelescopeNet-macos.app.zip"
+_UPDATE_CHECKSUM_NAME = f"{_UPDATE_ASSET_NAME}.sha256"
+
 
 def _fetch_latest_version() -> str | None:
     now = _time.time()
@@ -176,9 +184,29 @@ def _fetch_latest_version() -> str | None:
     return _latest_version_cache["version"]
 
 
+def _fetch_update_checksum() -> str | None:
+    """sha256 of the current macOS update zip, so the app can verify the
+    download before it ever swaps it into a running .app bundle."""
+    now = _time.time()
+    if _latest_version_cache["macos_sha256"] and now - _latest_version_cache["checked_at"] < _LATEST_VERSION_TTL:
+        return _latest_version_cache["macos_sha256"]
+    try:
+        import requests
+        resp = requests.get(f"{_GITHUB_LATEST_RELEASE}/{_UPDATE_CHECKSUM_NAME}", timeout=5)
+        resp.raise_for_status()
+        # `shasum -a 256` format: "<hex digest>  <filename>"
+        sha256 = resp.text.strip().split()[0]
+    except Exception as exc:
+        logger.warning("Could not fetch macOS update checksum: %s", exc)
+        return _latest_version_cache["macos_sha256"]
+    _latest_version_cache["macos_sha256"] = sha256 or None
+    return _latest_version_cache["macos_sha256"]
+
+
 @app.route("/api/v1/versions", methods=["GET"])
 def api_versions():
-    """Newest published node/app version, for update-nag banners.
+    """Newest published node/app version, for update-nag banners and the
+    in-app self-updater.
 
     Node agent + Flutter app are built and released together from one tag, so
     a single version string covers every platform.
@@ -187,6 +215,8 @@ def api_versions():
     return jsonify({
         "latest": version,
         "download_page": _GITHUB_RELEASE_PAGE,
+        "macos_update_url": f"{_GITHUB_LATEST_RELEASE}/{_UPDATE_ASSET_NAME}",
+        "macos_update_sha256": _fetch_update_checksum(),
     })
 
 
