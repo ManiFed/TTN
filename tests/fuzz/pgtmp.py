@@ -21,6 +21,20 @@ _CANDIDATE_BIN_DIRS = [
 ]
 
 
+def available() -> bool:
+    """Whether a local PostgreSQL exists to spin an ephemeral cluster from.
+
+    Tests that need a real database should skip on this rather than error.
+    CI runners without PostgreSQL installed would otherwise turn every such
+    test red, which buries the failures that actually mean something.
+    """
+    try:
+        _pg_bin()
+        return True
+    except RuntimeError:
+        return False
+
+
 def _pg_bin() -> str:
     for d in _CANDIDATE_BIN_DIRS:
         if os.path.isfile(os.path.join(d, "initdb")):

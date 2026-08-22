@@ -26,6 +26,13 @@ import urllib.request
 
 from tests.fuzz.faults import FaultPlan
 from tests.fuzz.harness import NodeHarness
+from tests.fuzz.pgtmp import available as _pg_available
+
+# These drive the real cloud against an ephemeral PostgreSQL. Without one they
+# cannot run at all -- and erroring rather than skipping turns the whole suite
+# red on any machine or runner without PostgreSQL installed, which buries the
+# failures that do mean something.
+_needs_pg = unittest.skipUnless(_pg_available(), "PostgreSQL not installed")
 
 CLEAN = FaultPlan()          # onboarding must work on healthy hardware
 
@@ -44,6 +51,7 @@ def _cloud_post(url: str, path: str, payload: dict, headers: dict) -> tuple[int,
             return exc.code, {}
 
 
+@_needs_pg
 class OnboardingJourneyTest(unittest.TestCase):
     """One boot, walked through the whole journey in order."""
 
@@ -173,6 +181,7 @@ class OnboardingJourneyTest(unittest.TestCase):
                         f"agent does not consider the telescope connected: {state}")
 
 
+@_needs_pg
 class RetryDoesNotCreateGhostNodesTest(unittest.TestCase):
     """Linking is retried in the real world; retries must not pile up
     duplicate telescopes on the member's account."""
@@ -217,6 +226,7 @@ class RetryDoesNotCreateGhostNodesTest(unittest.TestCase):
                          f"expected one telescope on the account, got {len(nodes)}")
 
 
+@_needs_pg
 class SelfRegisteredNodeIsClaimedNotDuplicatedTest(unittest.TestCase):
     """A node registers itself anonymously on first boot, so by the time its
     owner links it a cloud node for this computer already exists. The app
@@ -297,6 +307,7 @@ class SetupPageTest(unittest.TestCase):
         self.assertRegex(token, r"^[A-Z]{4}-\d{4}$")
 
 
+@_needs_pg
 class DirectInstallPathTest(unittest.TestCase):
     """The desktop app's other route: install credentials straight into the
     local agent, no pairing token round-trip."""
