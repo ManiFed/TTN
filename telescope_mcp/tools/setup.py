@@ -20,6 +20,39 @@ import time
 from ..client import AgentClient, ApiError, CloudClient, encode_path
 
 
+#: Discovery is a UDP broadcast to 255.255.255.255:32227, which by construction
+#: only reaches the local subnet. Nearly every failure here is one of the four
+#: below, and the first is by far the most common -- smart telescopes ship in
+#: Access Point mode, where the scope makes its own network and your phone joins
+#: *it*. In that mode the telescope is not on your LAN at all, and on a Seestar
+#: the ALPACA server does not even start. The vendor app shows "connected"
+#: either way, so nothing tells the member which mode they are in.
+NO_TELESCOPE_FOUND = (
+    "No telescope answered on this network.\n\n"
+    "The usual cause is Access Point mode: the telescope is broadcasting its "
+    "own Wi-Fi network rather than having joined yours, so this computer cannot "
+    "see it. On a Seestar the ALPACA server only runs in Station Mode — and the "
+    "Seestar app reports 'connected' in both modes, so it will not tell you "
+    "which one you are in.\n\n"
+    "Switch the telescope to Station Mode (join it to your home Wi-Fi), make "
+    "sure this computer is on that same network, then try again."
+)
+
+#: Worked through in order of how often each is the actual problem.
+NETWORK_CHECKS = [
+    "Is the telescope in Station Mode, joined to your home Wi-Fi? In the vendor "
+    "app this is usually 'Station Mode' or 'Join network'. Access Point or "
+    "hotspot mode will not work.",
+    "Is this computer on the same network as the telescope — not a guest "
+    "network, and not the 5GHz half of a split network the scope cannot join?",
+    "Does your router have client isolation or AP isolation switched on? Many "
+    "mesh systems enable it by default, and it silently blocks the discovery "
+    "broadcast even though both devices have working Wi-Fi.",
+    "Is the telescope powered on and finished booting? Give it a minute after "
+    "power-up before the ALPACA server appears.",
+]
+
+
 def _step(name: str, ok: bool, detail: str = "", **extra) -> dict:
     out = {"step": name, "ok": ok, "detail": detail}
     out.update(extra)
@@ -69,9 +102,11 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
             if not servers:
                 steps.append(_step("discover", False, "No telescope answered."))
                 return {"connected": False, "steps": steps,
-                        "detail": "No ALPACA telescope answered on this network. "
-                                  "Check the telescope is powered on and on the "
-                                  "same network as this computer."}
+                        "detail": NO_TELESCOPE_FOUND,
+                        "most_likely_cause": (
+                            "The telescope is in Access Point mode, so it is on "
+                            "its own network rather than yours."),
+                        "checks": NETWORK_CHECKS}
             target = servers[0]
             steps.append(_step("discover", True,
                                f"Found {len(servers)} telescope(s).",
@@ -230,6 +265,16 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
         report["summary"] = _summarise(report)
         return report
 
+
+    @server.tool()
+    def network_help() -> dict:
+        """Why the telescope cannot be found, and what to check.
+
+        Setup fails at the network step more than anywhere else, almost always
+        for the same reason: the telescope is in Access Point mode and is not
+        on the same network as this computer.
+        """
+        return {"most_common_cause": NO_TELESCOPE_FOUND, "checks": NETWORK_CHECKS}
 
 def _summarise(report: dict) -> str:
     """A one-line read on what is actually wrong, before anyone reads the JSON."""

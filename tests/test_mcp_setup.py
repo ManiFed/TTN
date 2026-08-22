@@ -134,11 +134,32 @@ class FlowTest(_Fixture):
         self.assertIn("auth_login", text)
         self.client.post.assert_not_called()
 
-    def test_no_telescope_found_says_what_to_check(self):
+    def test_no_telescope_found_leads_with_access_point_mode(self):
+        """The most common setup failure, and the vendor app hides it.
+
+        A generic "check it is powered on" sends people to look at the wrong
+        thing: the telescope usually IS on and IS connected — to its own
+        network. Saying so first is the difference between a two-minute fix
+        and giving up.
+        """
         self.discovered = {"servers": []}
         ok, text, _ = call(self.server, "connect_my_telescope", {})
-        self.assertIn("powered on", text)
+        self.assertFalse(ok is None)
+        self.assertIn("Access Point", text)
+        self.assertIn("Station Mode", text)
         self.client.post.assert_not_called()
+
+    def test_no_telescope_found_lists_the_other_causes_in_order(self):
+        self.discovered = {"servers": []}
+        _, text, _ = call(self.server, "connect_my_telescope", {})
+        for phrase in ("guest network", "client isolation", "finished booting"):
+            self.assertIn(phrase, text)
+
+    def test_network_help_is_available_without_running_a_connect(self):
+        """So "why can't you find my telescope" is answerable on its own."""
+        _, text, _ = call(self.server, "network_help", {})
+        self.assertIn("Station Mode", text)
+        self.assertIn("client isolation", text)
 
     def test_an_explicit_host_skips_discovery(self):
         call(self.server, "connect_my_telescope",
