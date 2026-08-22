@@ -12,6 +12,12 @@ import 'package:boundless_skies/services/updater_service.dart';
 /// than asserting on its text. `open` is shadowed by a stub on PATH so the test
 /// does not try to launch anything.
 void main() {
+  // The updater is macOS-only by design -- downloadVerifyAndRestart throws
+  // immediately anywhere else -- and the script it generates uses `ditto`,
+  // which does not exist on Linux or Windows. Running these there tests the
+  // absence of a macOS tool, not this code.
+  final notMacOS = Platform.isMacOS ? null : 'macOS-only';
+
   late Directory root;
   late Directory binDir;
 
@@ -70,7 +76,7 @@ void main() {
         reason: 'the new bundle should be in place');
     expect(Directory('${target.path}.bak').existsSync(), isFalse,
         reason: 'the backup should be cleaned up after a successful swap');
-  });
+  }, skip: notMacOS);
 
   test('a failed copy restores the previous install', () async {
     // The single most important behaviour here: if the swap fails, the member
@@ -90,7 +96,7 @@ void main() {
         reason: 'the previous version should be restored');
     expect(Directory('${target.path}.bak').existsSync(), isFalse,
         reason: 'the backup should be moved back, not left behind');
-  });
+  }, skip: notMacOS);
 
   test('a stale backup from an earlier attempt does not block the swap',
       () async {
@@ -106,7 +112,7 @@ void main() {
 
     expect(File('${target.path}/version.txt').readAsStringSync(), 'new');
     expect(Directory('${target.path}.bak').existsSync(), isFalse);
-  });
+  }, skip: notMacOS);
 
   test('the working directory is cleaned up afterwards', () async {
     final target = makeBundle('${root.path}/TelescopeNet.app', 'old');
@@ -118,7 +124,7 @@ void main() {
 
     expect(workDir.existsSync(), isFalse,
         reason: 'the downloaded update should not be left on disk');
-  });
+  }, skip: notMacOS);
 
   test('a path containing spaces is handled', () async {
     // /Applications/My Telescope.app is entirely legal, and an unquoted
@@ -131,7 +137,7 @@ void main() {
         target: target.path, newApp: newApp.path, workDir: workDir.path);
 
     expect(File('${target.path}/version.txt').readAsStringSync(), 'new');
-  });
+  }, skip: notMacOS);
 
   test('the script waits for the old process to exit before swapping', () {
     final script = UpdaterService.buildApplyScript(
