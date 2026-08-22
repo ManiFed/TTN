@@ -2108,6 +2108,176 @@ def _tonight_allows_observing() -> bool:
     return bool(intent.get("observing"))
 
 
+#: Object types worth looking at, in the order we would rather image them.
+#: These are pyongc's full type names, as they appear in _dso_catalog -- the
+#: abbreviations you might expect ("PN", "GCl") do not occur.
+#:
+#: Deliberately not ordered by brightness: someone who asked for an imaging
+#: programme wants something that reads as a picture. A nebula or a globular
+#: does that; the 9,793 mostly-anonymous galaxies in the catalogue do not,
+#: which is why Galaxy sits near the end rather than dominating by count.
+_IMAGING_TYPES = (
+    "Emission Nebula",
+    "Reflection Nebula",
+    "Planetary Nebula",
+    "Star cluster + Nebula",
+    "Supernova remnant",
+    "HII Ionized region",
+    "Nebula",
+    "Globular Cluster",
+    "Open Cluster",
+    "Galaxy",
+    "Galaxy Pair",
+    "Galaxy Triplet",
+    "Group of galaxies",
+)
+
+#: Objects with a Messier number first, then NGC. A member recognises M51.
+def _imaging_rank(obj: dict) -> tuple:
+    obj_id = str(obj.get("id") or "")
+    named = 0 if obj_id.startswith("M") and obj_id[1:].isdigit() else 1
+    try:
+        type_rank = _IMAGING_TYPES.index(str(obj.get("type") or ""))
+    except ValueError:
+        type_rank = len(_IMAGING_TYPES)
+    return (named, type_rank, obj_id)
+
+
+def _pick_imaging_target() -> Optional[dict]:
+    """A catalogue object worth imaging that is safely reachable right now.
+
+    Reuses _slew_rejection so the imaging half of the night obeys exactly the
+    same horizon mask and safety state as the research half -- an unattended
+    slew must not be able to reach somewhere a scheduled one could not.
+    """
+    candidates = [o for o in _dso_catalog
+                  if str(o.get("type") or "") in _IMAGING_TYPES]
+    for obj in sorted(candidates, key=_imaging_rank):
+        try:
+            if _slew_rejection(float(obj["ra"]), float(obj["dec"])) is None:
+                return obj
+        except (TypeError, ValueError, KeyError):
+            continue
+    return None
+
+
+def _run_imaging_block(target: Optional[dict] = None) -> None:
+    """Point at something and build a stacked image until the night ends.
+
+    Runs when a bounded research block finishes and the member asked for
+    imaging afterwards. Nobody is awake for this, so it is deliberately
+    unambitious: pick one target, centre it, stack, and stop the moment safety
+    says so. It never re-slews looking for something better -- a mount hunting
+    around an empty sky at 3am is worse than a shorter stack.
+    """
+    if target is None:
+        target = _pick_imaging_target()
+    if target is None:
+        logger.info("Imaging: nothing reachable right now — skipping")
+        _telemetry.event("imaging_no_target", severity="info", detail={})
+        return
+
+    name = str(target.get("id") or "?")
+    ra, dec = float(target["ra"]), float(target["dec"])
+
+    reason = _slew_rejection(ra, dec)
+    if reason:
+        logger.info("Imaging: %s not reachable (%s)", name, reason)
+        return
+
+    logger.info("Imaging: starting on %s", name)
+    _telemetry.event("imaging_started", severity="info",
+                     detail={"target": name, "ra": ra, "dec": dec})
+    with _imaging_lock:
+        _imaging_state.update({"running": True, "target": name,
+                               "started_at": time.time(), "error": None})
+    cfg = _load_config()
+    centering = cfg.get("centering", {}) or {}
+    stacking = cfg.get("stacking", {}) or {}
+
+    def _num(source, key, default, cast):
+        try:
+            return cast(source.get(key, default))
+        except (TypeError, ValueError):
+            return cast(default)
+
+    # The slew is fatal and the centring is not, so they cannot share a
+    # handler: folded together, a mount that failed to move would fall through
+    # to "stacking anyway" and spend the night imaging whatever it happened to
+    # be pointing at, reporting success.
+    try:
+        with _device_lock:
+            # slew_to_coordinates takes RA in HOURS, which is how the catalogue
+            # stores it. _run_centering_bg takes DEGREES. Getting that wrong
+            # points the telescope fifteen times too far round the sky.
+            _tel.slew_to_coordinates(ra, dec)
+    except Exception as exc:
+        logger.warning("Imaging: could not slew to %s: %s", name, exc)
+        with _imaging_lock:
+            _imaging_state.update({"running": False, "error": str(exc)[:300]})
+        _telemetry.event("imaging_failed", severity="warning",
+                         detail={"target": name, "error": str(exc)[:200]})
+        return
+
+    try:
+        _run_centering_bg(
+            ra * 15.0, dec,
+            _num(centering, "exposure_s", 3.0, float),
+            _num(centering, "tolerance_arcmin", 3.0, float),
+            _num(centering, "max_iterations", 4, int),
+            _num(centering, "settle_s", 2.0, float),
+        )
+    except Exception as exc:
+        # Centring is an improvement, not a requirement: an uncentred frame is
+        # still a frame, and giving up here would waste the rest of the night.
+        logger.info("Imaging: centring on %s failed (%s) — stacking anyway",
+                    name, exc)
+
+    try:
+        exposure_s = _num(stacking, "exposure_s", 10.0, float)
+        # Enough frames to run until dawn; the loop below is what actually
+        # ends the block, on safety or a stand-down.
+        n_frames = max(1, int((10 * 3600) / max(1.0, exposure_s)))
+        threading.Thread(
+            target=_run_stacking_bg,
+            args=(n_frames, exposure_s,
+                  max(1, _num(stacking, "preview_every", 1, int))),
+            daemon=True, name="imaging-stack",
+        ).start()
+    except Exception as exc:
+        logger.warning("Imaging: could not start on %s: %s", name, exc)
+        with _imaging_lock:
+            _imaging_state.update({"running": False, "error": str(exc)[:300]})
+        _telemetry.event("imaging_failed", severity="warning",
+                         detail={"target": name, "error": str(exc)[:200]})
+        return
+
+    # Hold until safety, a stand-down, or dawn ends it. Checked on the same
+    # cadence the scheduler uses so a stand-down stops imaging as fast as it
+    # stops a research run.
+    while not _sched_cancelled() and _tonight_allows_observing():
+        if _safety_mgr is not None and not _safety_mgr.is_safe():
+            logger.info("Imaging: stopping — %s",
+                        _safety_mgr.status().get("reason") or "unsafe")
+            break
+        time.sleep(5)
+
+    with _imaging_lock:
+        _imaging_state["running"] = False
+    logger.info("Imaging: finished on %s", name)
+    _telemetry.event("imaging_finished", severity="info", detail={"target": name})
+
+
+_imaging_lock = threading.Lock()
+_imaging_state: dict = {"running": False, "target": "", "started_at": None,
+                        "error": None}
+
+
+def imaging_status() -> dict:
+    with _imaging_lock:
+        return dict(_imaging_state)
+
+
 def _research_window_expired() -> bool:
     """True once tonight's research block has run its allotted hours.
 
@@ -3857,6 +4027,12 @@ def api_stack_stop():
     return jsonify({"ok": True})
 
 
+@app.route("/api/imaging/status", methods=["GET"])
+def api_imaging_status():
+    """Whether the imaging half of the night is running, and on what."""
+    return jsonify(imaging_status())
+
+
 @app.route("/api/stack/status", methods=["GET"])
 def api_stack_status():
     with _stack_lock:
@@ -4355,6 +4531,7 @@ def _run_schedule_bg(items: list, source: str = "manual",
                 for it in items
             ],
         })
+    imaging_handoff = False
     logger.info("Schedule started: %d observations", len(items))
     _telemetry.event("schedule_started", severity="info",
                      detail={"items": len(items), "source": source,
@@ -4413,6 +4590,12 @@ def _run_schedule_bg(items: list, source: str = "manual",
                                   .get("research_hours") or 0.0))
                 _telemetry.event("research_window_complete", severity="info",
                                  detail={"completed": idx, "total": len(items)})
+                # Hand over rather than simply stopping. Without this the night
+                # ended here: the log claimed the rest was "released for
+                # imaging" and nothing was listening, so a member who asked for
+                # two hours of research and then a picture got the research and
+                # a parked telescope.
+                imaging_handoff = True
                 break
             # ── Gap fill: a dead wait before this item's start time is spent
             # on an alternate that fits, instead of sleeping (cloud plans only;
@@ -4549,6 +4732,18 @@ def _run_schedule_bg(items: list, source: str = "manual",
             "schedule_finished", severity="info",
             detail={"completed": completed, "total": len(items),
                     "cancelled": cancelled, "error": error, "source": source})
+
+    # The imaging half of the night. Outside the finally block so the schedule
+    # is properly marked done first -- imaging is a separate activity, not a
+    # continuation of the run, and reporting the research as still in progress
+    # while stacking would misdescribe what the telescope is doing.
+    if imaging_handoff and not cancelled and _tonight_allows_observing():
+        try:
+            _run_imaging_block()
+        except Exception as exc:
+            logger.warning("Imaging block failed: %s", exc)
+            _telemetry.event("imaging_failed", severity="warning",
+                             detail={"error": str(exc)[:200]})
 
 
 @app.route("/api/schedule/run", methods=["POST"])
