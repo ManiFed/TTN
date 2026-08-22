@@ -25,11 +25,23 @@ Install the dependency (already in `requirements.txt`):
 pip install "mcp>=2.0"
 ```
 
-**Local, over stdio** — Claude Code or Claude Desktop, on your own machine:
+**On a member's machine, there is nothing to do.** `postinstall.sh` runs
+`scripts/register_mcp_client.py`, which merges one entry into Claude Desktop's
+config pointing at the packaged agent with `--mcp`. It keeps a backup, writes
+atomically, and refuses outright if the existing config cannot be parsed — that
+file may list other MCP servers the member depends on, and rewriting it would
+delete them. `uninstall.sh` removes only that one key.
+
+**From a checkout, over stdio:**
 
 ```bash
 python -m telescope_mcp.cloud_server
 ```
+
+The packaged agent serves the same thing as `TelescopeNetNode --mcp`. In that
+mode stdout is the JSON-RPC transport, so setup runs with stdout redirected to
+stderr — one stray print would corrupt the stream and the client would drop the
+connection with a parse error pointing nowhere useful.
 
 **Remote, over HTTP** — so it can be added as a connector rather than installed:
 

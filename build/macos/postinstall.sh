@@ -97,6 +97,29 @@ fi
 chown "${CONSOLE_USER}:staff" "${CONFIG}"
 chmod 600 "${CONFIG}"
 
+# ── Register the MCP server with Claude Desktop ───────────────────────────────
+# So members never hand-edit claude_desktop_config.json. That step is invisible
+# in an installer, easy to get subtly wrong, and fails silently -- the tools
+# simply never appear, with nothing to search for.
+#
+# The script merges one key and refuses to touch a config it cannot parse, so a
+# member's other MCP servers are never disturbed. Run as the console user: the
+# config lives in their home, and a root-owned file there would break Claude.
+# Never fatal -- Claude Desktop not being installed is a normal outcome.
+MCP_REGISTER="${APP_DIR}/Contents/Resources/register_mcp_client.py"
+AGENT_BIN="${APP_DIR}/Contents/MacOS/TelescopeNetNode"
+if [ -f "${MCP_REGISTER}" ] && [ -x "${AGENT_BIN}" ]; then
+    if sudo -u "${CONSOLE_USER}" /usr/bin/python3 "${MCP_REGISTER}" \
+            --command "${AGENT_BIN}" --data-dir "${DATA_DIR}"; then
+        echo "Claude Desktop can now control this telescope."
+    else
+        echo "NOTE: could not register the MCP server automatically."
+        echo "      The telescope still works; AI control needs manual setup."
+    fi
+else
+    echo "NOTE: MCP registration helper not packaged; skipping."
+fi
+
 # ── Prevent idle sleep ─────────────────────────────────────────────────────────
 # Disable idle sleep on AC power (does not affect battery sleep)
 pmset -c sleep 0 2>/dev/null || true

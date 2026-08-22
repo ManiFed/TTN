@@ -183,6 +183,9 @@ def main() -> None:
                         help="Start headless (service mode; do not open UI)")
     parser.add_argument("--data-dir", default="",
                         help="Working directory for config.yaml and data/ (default: current dir)")
+    parser.add_argument("--mcp", action="store_true",
+                        help="Serve the MCP tool interface on stdio instead of "
+                             "running the dashboard (used by AI assistants)")
     args = parser.parse_args()
 
     if args.data_dir:
@@ -193,6 +196,10 @@ def main() -> None:
         data_dir = pathlib.Path.cwd()
     _prepare_data_dir(data_dir)
     os.chdir(data_dir)
+
+    if args.mcp:
+        _run_mcp_server()
+        return
 
     _setup_service_logging()
 
@@ -219,6 +226,31 @@ def main() -> None:
 
     import src.dashboard as dashboard
     dashboard.launch(port=args.port)
+
+
+def _run_mcp_server() -> None:
+    """Serve the MCP tool interface over stdio.
+
+    stdout is the JSON-RPC transport here, so a single stray print would
+    corrupt the stream and the client would drop the connection with a parse
+    error that points nowhere useful. Setup therefore runs with stdout
+    redirected to stderr, and logging goes to the rotating file as usual --
+    only the protocol is allowed to write to the real stdout.
+
+    This shares the agent's process model but not its port: the MCP server
+    talks to the already-running agent over 127.0.0.1:5173 like any other
+    client, so running it never competes for the dashboard port.
+    """
+    import contextlib
+
+    with contextlib.redirect_stdout(sys.stderr):
+        _setup_service_logging()
+        # Logging must not reach stdout either; the file handler installed
+        # above plus stderr is enough, and basicConfig would add a stdout one.
+        from telescope_mcp.local_server import build_server
+        server = build_server()
+
+    server.run("stdio")
 
 
 def _setup_service_logging() -> None:

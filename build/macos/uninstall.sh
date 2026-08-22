@@ -27,6 +27,13 @@ if [ -n "${CONSOLE_USER}" ] && [ "${CONSOLE_USER}" != "root" ] && [ "${CONSOLE_U
         launchctl asuser "${CONSOLE_UID}" launchctl bootout "gui/${CONSOLE_UID}" "${AGENT_PLIST}" 2>/dev/null || true
         rm -f "${AGENT_PLIST}"
     fi
+
+    # Deregister from Claude Desktop, or the member is left with a tool entry
+    # pointing at a binary that no longer exists. Removes only our own key.
+    MCP_REGISTER="/Applications/TelescopeNetNode.app/Contents/Resources/register_mcp_client.py"
+    if [ -f "${MCP_REGISTER}" ]; then
+        sudo -u "${CONSOLE_USER}" /usr/bin/python3 "${MCP_REGISTER}" --remove 2>/dev/null || true
+    fi
 fi
 
 # Older installs: a root LaunchDaemon -- clean those up too if present.
