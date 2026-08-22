@@ -17,9 +17,12 @@ rest. `run_all()` is what the admin endpoint and the MCP tool both call.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from . import db, registry
+
+logger = logging.getLogger("cloud.integrity")
 
 #: A node quiet for longer than this, while claiming to be observing, is a
 #: finding rather than a blip. Deliberately well above HEARTBEAT_STALE_S (15
@@ -242,8 +245,9 @@ def run_all() -> dict:
     for name, fn in CHECKS:
         try:
             findings.extend(fn())
-        except Exception as exc:  # a broken check must not hide the others
-            errors.append({"check": name, "error": f"{type(exc).__name__}: {exc}"})
+        except Exception:  # a broken check must not hide the others
+            logger.exception("Fleet-integrity check failed: %s", name)
+            errors.append({"check": name, "error": "check failed; see server logs"})
 
     findings.sort(key=lambda f: (_SEVERITY_ORDER.get(f["severity"], 9), f["check"]))
     counts: dict[str, int] = {}
