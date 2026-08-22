@@ -16,6 +16,55 @@ def register(server, client: CloudClient) -> None:
     # ── Auth ──────────────────────────────────────────────────────────────
 
     @server.tool()
+    def sign_in() -> dict:
+        """Sign in, or create an account, by opening a browser window.
+
+        Returns a link for the member to open. They sign in or sign up there,
+        in a real browser against the real cloud, and this conversation
+        receives the session afterwards — so no password is ever typed into a
+        tool call, a transcript, or a model's context.
+
+        Give them the link, then call `sign_in_status` with the returned code
+        once they say they have finished. The link is single-use and lasts ten
+        minutes.
+        """
+        result = client.post("/auth/browser/start", {})
+        return {
+            "open_this": result.get("url"),
+            "code": result.get("code"),
+            "expires_at": result.get("expires_at"),
+            "next_step": (
+                "Ask them to open that link and sign in or create an account. "
+                "When they say they are done, call sign_in_status with the code."
+            ),
+        }
+
+    @server.tool()
+    def sign_in_status(code: str) -> dict:
+        """Finish a browser sign-in started by `sign_in`.
+
+        Call after the member says they have signed in. On success the session
+        is held for the rest of this conversation; the token itself is never
+        returned.
+        """
+        result = client.post("/auth/browser/poll", {"code": code})
+        status = result.get("status")
+        if status == "approved":
+            token = result.get("token")
+            if not token:
+                return {"signed_in": False,
+                        "detail": "The link was approved but carried no session. "
+                                  "Start again with sign_in."}
+            client.set_token(token)
+            return {"signed_in": True, "user_id": result.get("user_id"),
+                    "detail": "Signed in. Everything on this account is available now."}
+        return {"signed_in": False, "status": status,
+                "detail": result.get("detail", ""),
+                "next_step": ("Wait a moment and call sign_in_status again."
+                              if status == "pending" else
+                              "Call sign_in for a fresh link.")}
+
+    @server.tool()
     def auth_login(email: str, password: str) -> dict:
         """Sign in to an existing Telescope Net member account.
 

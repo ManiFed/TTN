@@ -93,15 +93,14 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
                 "steps": steps,
                 "detail": (
                     "Linking a telescope needs a Telescope Net account.\n\n"
-                    "If you already have one, sign in with auth_login and ask "
-                    "again.\n\n"
-                    "If you do not, create one in the Telescope Net app, which "
-                    "the installer opened for you — it takes a moment, and then "
-                    "everything here works. Sign-up deliberately is not done "
-                    "through this interface, because it needs a password and a "
-                    "password typed into a chat is a password in a transcript."
+                    "Call `sign_in` and give them the link it returns. They can "
+                    "sign in, or create an account, in a browser there — and "
+                    "then this works. It takes a moment.\n\n"
+                    "That happens in a browser rather than here because it needs "
+                    "a password, and a password typed into a chat is a password "
+                    "in a transcript."
                 ),
-                "next_step": "auth_login, or create an account in the app first",
+                "next_step": "sign_in",
             }
 
         # 1. Find the telescope, unless we were told where it is.
