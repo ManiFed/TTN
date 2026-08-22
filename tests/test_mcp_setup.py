@@ -133,8 +133,8 @@ class FlowTest(_Fixture):
         is needed -- this is the wall a brand-new member hits first."""
         self.client.authenticated = False
         ok, text, _ = call(self.server, "connect_my_telescope", {})
-        self.assertIn("auth_login", text)
-        self.assertIn("app", text.lower(), "no route to creating an account")
+        self.assertIn("sign_in", text)
+        self.assertIn("browser", text.lower(), "no route to creating an account")
         self.assertIn("password", text.lower(), "no reason given for the detour")
         self.client.post.assert_not_called()
 
