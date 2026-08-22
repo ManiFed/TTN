@@ -129,9 +129,13 @@ class FlowTest(_Fixture):
         self.assertEqual(installs[0][0][1]["node_id"], "node_new")
 
     def test_signing_in_is_required_before_linking(self):
+        """And the message has to say how to get an account, not just that one
+        is needed -- this is the wall a brand-new member hits first."""
         self.client.authenticated = False
         ok, text, _ = call(self.server, "connect_my_telescope", {})
         self.assertIn("auth_login", text)
+        self.assertIn("app", text.lower(), "no route to creating an account")
+        self.assertIn("password", text.lower(), "no reason given for the detour")
         self.client.post.assert_not_called()
 
     def test_no_telescope_found_leads_with_access_point_mode(self):

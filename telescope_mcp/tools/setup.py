@@ -88,9 +88,21 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
         steps: list[dict] = []
 
         if not client.authenticated:
-            return {"connected": False, "steps": steps,
-                    "detail": "Sign in first with auth_login — linking a "
-                              "telescope needs a member account."}
+            return {
+                "connected": False,
+                "steps": steps,
+                "detail": (
+                    "Linking a telescope needs a Telescope Net account.\n\n"
+                    "If you already have one, sign in with auth_login and ask "
+                    "again.\n\n"
+                    "If you do not, create one in the Telescope Net app, which "
+                    "the installer opened for you — it takes a moment, and then "
+                    "everything here works. Sign-up deliberately is not done "
+                    "through this interface, because it needs a password and a "
+                    "password typed into a chat is a password in a transcript."
+                ),
+                "next_step": "auth_login, or create an account in the app first",
+            }
 
         # 1. Find the telescope, unless we were told where it is.
         if host and port:

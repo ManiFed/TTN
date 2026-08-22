@@ -47,6 +47,23 @@ def config_path() -> Path:
     return Path.home() / ".config/Claude/claude_desktop_config.json"
 
 
+def client_installed() -> bool:
+    """Whether Claude Desktop appears to be installed on this machine.
+
+    Registration writes the config either way -- a member who installs Claude
+    afterwards should find the telescope already there. But the installer
+    should not announce "Claude Desktop can now control this telescope" to
+    somebody who has never heard of it, so the message is chosen from this.
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return Path("/Applications/Claude.app").exists()
+    if system == "Windows":
+        local = os.environ.get("LOCALAPPDATA") or ""
+        return bool(local) and (Path(local) / "AnthropicClaude").exists()
+    return (Path.home() / ".local/share/applications/claude.desktop").exists()
+
+
 def load(path: Path) -> tuple[dict, str | None]:
     """Existing config, or an error explaining why we must not touch it."""
     if not path.exists():
@@ -120,7 +137,10 @@ def register(command: str, data_dir: str, path: Path,
 
     kept = (f" Left {len(existing)} other MCP server(s) untouched: "
             f"{', '.join(existing)}." if existing else "")
-    return True, f"Registered '{SERVER_KEY}' in {path}.{kept}"
+    waiting = ("" if client_installed() else
+               " Claude Desktop is not installed yet; the telescope will be "
+               "there when it is.")
+    return True, f"Registered '{SERVER_KEY}' in {path}.{kept}{waiting}"
 
 
 def remove(path: Path) -> tuple[bool, str]:

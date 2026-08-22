@@ -17,11 +17,15 @@ def register(server, client: CloudClient) -> None:
 
     @server.tool()
     def auth_login(email: str, password: str) -> dict:
-        """Sign in to a Telescope Net member account.
+        """Sign in to an existing Telescope Net member account.
 
         Holds the session token in memory for the rest of this conversation and
         never returns it. Signing in here does not sign the member out of the
         app — sessions are per-device.
+
+        There is no sign-up tool: creating an account needs a password, and a
+        password typed into a chat is a password in a transcript. Someone
+        without an account should create one in the Telescope Net app first.
         """
         result = client.post("/auth/login", {"email": email, "password": password})
         token = result.get("token")

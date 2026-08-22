@@ -227,3 +227,32 @@ class InstallerEntryTest(_Tmp):
         ok, msg = reg.register("agent.exe", DATA_DIR, self.path)
         self.assertTrue(ok)
         self.assertIn(str(self.path), msg)
+
+
+class DiscoverabilityTest(_Tmp):
+    """A member has to be told this exists.
+
+    Nothing else in the product mentions the assistant, so if registration is
+    silent the whole feature is invisible: it works perfectly and nobody ever
+    uses it.
+    """
+
+    def test_the_message_says_where_it_registered(self):
+        ok, msg = reg.register("agent", DATA_DIR, self.path)
+        self.assertTrue(ok)
+        self.assertIn("telescope-net", msg)
+
+    def test_it_registers_even_when_the_assistant_is_absent(self):
+        """Someone who installs Claude later should find it already there."""
+        from unittest.mock import patch
+        with patch.object(reg, "client_installed", return_value=False):
+            ok, msg = reg.register("agent", DATA_DIR, self.path)
+        self.assertTrue(ok)
+        self.assertIn("telescope-net", self.read()["mcpServers"])
+        self.assertIn("not installed yet", msg)
+
+    def test_it_does_not_claim_success_at_someone_who_has_no_assistant(self):
+        from unittest.mock import patch
+        with patch.object(reg, "client_installed", return_value=True):
+            _, msg = reg.register("agent", DATA_DIR, self.path)
+        self.assertNotIn("not installed yet", msg)
