@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
@@ -97,34 +98,54 @@ class UpdaterService {
     required Directory workDir,
   }) async {
     final script = File('${workDir.path}/apply_update.sh');
-    final myPid = pid;
-    final target = currentBundle.path;
-    // Move the old bundle aside rather than deleting it up front, so a
-    // failed/partial `ditto` (disk full, permissions changing mid-flight)
-    // leaves the previous working install restorable instead of gone.
-    await script.writeAsString('''
-#!/bin/bash
-for i in \$(seq 1 100); do
-  kill -0 $myPid 2>/dev/null || break
-  sleep 0.1
-done
-BACKUP="$target.bak"
-rm -rf "\$BACKUP"
-mv "$target" "\$BACKUP"
-if ditto "${newApp.path}" "$target"; then
-  rm -rf "\$BACKUP"
-else
-  rm -rf "$target"
-  mv "\$BACKUP" "$target"
-fi
-open "$target"
-rm -rf "${workDir.path}"
-''');
+    await script.writeAsString(buildApplyScript(
+      targetPath: currentBundle.path,
+      newAppPath: newApp.path,
+      workDirPath: workDir.path,
+      waitForPid: pid,
+    ));
     await Process.run('chmod', ['+x', script.path]);
     await Process.start('/bin/bash', [script.path],
         mode: ProcessStartMode.detached);
     exit(0);
   }
+
+  /// The script that actually replaces the installed bundle.
+  ///
+  /// Extracted so it can be executed against a throwaway directory in tests:
+  /// this is the one step that can destroy a working install, and the rollback
+  /// branch only ever runs when something has already gone wrong — which is
+  /// exactly when nobody is watching. @visibleForTesting rather than private
+  /// for that reason.
+  ///
+  /// The old bundle is moved aside rather than deleted up front, so a partial
+  /// `ditto` (disk full, permissions changing mid-flight) leaves the previous
+  /// install restorable instead of gone.
+  @visibleForTesting
+  static String buildApplyScript({
+    required String targetPath,
+    required String newAppPath,
+    required String workDirPath,
+    required int waitForPid,
+  }) =>
+      '''
+#!/bin/bash
+for i in \$(seq 1 100); do
+  kill -0 $waitForPid 2>/dev/null || break
+  sleep 0.1
+done
+BACKUP="$targetPath.bak"
+rm -rf "\$BACKUP"
+mv "$targetPath" "\$BACKUP"
+if ditto "$newAppPath" "$targetPath"; then
+  rm -rf "\$BACKUP"
+else
+  rm -rf "$targetPath"
+  mv "\$BACKUP" "$targetPath"
+fi
+open "$targetPath"
+rm -rf "$workDirPath"
+''';
 
   /// Finds the `.app` bundle directory containing the running executable
   /// (e.g. `/Applications/TelescopeNet.app`), or null if this isn't a real
