@@ -36,6 +36,16 @@ def register(server, agent: AgentClient) -> None:
         return Image(data=data, format=_fmt(mime))
 
     @server.tool()
+    def imaging_status() -> dict:
+        """Whether the telescope is imaging right now, and what it is on.
+
+        After a bounded research block the node picks an imaging target and
+        starts stacking on its own, so this answers "what did it choose"
+        without anyone having to be awake for the handover.
+        """
+        return agent.get("/api/imaging/status")
+
+    @server.tool()
     def stack_status() -> dict:
         """How the live stack is progressing: frames in, frames kept, alignment."""
         return agent.get("/api/stack/status")
