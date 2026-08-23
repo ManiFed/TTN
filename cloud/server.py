@@ -55,7 +55,7 @@ from werkzeug.routing import IntegerConverter as _IntegerConverter
 from werkzeug.routing import ValidationError as _ValidationError
 from werkzeug.utils import safe_join
 
-from cloud import alerts, auth, autonomy, browser_auth, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
+from cloud import agent_chat, alerts, auth, autonomy, billing, browser_auth, calibration, credits, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -2206,6 +2206,146 @@ def api_me_node_stand_down(user, node_id):
 def api_node_tonight(node):
     """What this node should be doing tonight. Polled by the agent."""
     return jsonify(nightly.resolve(node))
+
+
+def _node_owner(node_id: str) -> "str | None":
+    """The member whose credit a node's conversations are charged to.
+
+    A telescope can be claimed by more than one account -- a school scope, a
+    shared club instrument -- so the earliest claim owns the bill rather than
+    whoever happens to come back first from the query.
+    """
+    row = db.query_one(
+        """SELECT user_id FROM node_members WHERE node_id = %s
+           ORDER BY claimed_at ASC LIMIT 1""", (node_id,))
+    return str(row["user_id"]) if row else None
+
+
+@app.route("/api/v1/agent/chat", methods=["POST"])
+@require_node
+def api_agent_chat(node):
+    """One model call for the telescope-side chat, billed to the node's owner.
+
+    The node runs the tool loop -- it is the only thing that can reach the
+    telescope -- but holds no API key. It sends the conversation here and the
+    cloud pays, meters and refuses.
+    """
+    owner = _node_owner(node["node_id"])
+    if not owner:
+        return jsonify({"error": "This telescope is not linked to a member "
+                                 "account, so there is no credit to draw on."}), 403
+
+    body = _json_body()
+    messages = body.get("messages")
+    tools = body.get("tools")
+    if not isinstance(messages, list) or not isinstance(tools, list):
+        return jsonify({"error": "messages and tools are required."}), 400
+
+    try:
+        result = agent_chat.complete(
+            owner, messages, tools, str(body.get("system") or ""), _config)
+    except credits.OutOfCredit as exc:
+        # 402 rather than 403: this is about money, and the node distinguishes
+        # "top up" from "you are not allowed".
+        return jsonify({"error": str(exc), "out_of_credit": True,
+                        "credits": credits.summary(owner)}), 402
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 503
+    return jsonify(result)
+
+
+@app.route("/api/v1/me/credits", methods=["GET"])
+@auth.require_member
+def api_me_credits(user):
+    """Balance, what tonight has cost so far, and the ceiling."""
+    return jsonify(credits.summary(user["user_id"]))
+
+
+@app.route("/api/v1/me/credits/history", methods=["GET"])
+@auth.require_member
+def api_me_credits_history(user):
+    return jsonify({"entries": credits.history(user["user_id"])})
+
+
+@app.route("/api/v1/me/credits/cap", methods=["PUT"])
+@auth.require_member
+def api_me_credits_cap(user):
+    """Set the most that may be spent in one day.
+
+    The ceiling exists so a misbehaving loop costs one night rather than a
+    balance, so it is the member's to raise -- and theirs to lower.
+    """
+    body = _json_body()
+    try:
+        dollars_value = float(body.get("nightly_cap"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "nightly_cap must be a number of dollars."}), 400
+    if dollars_value < 0:
+        return jsonify({"error": "nightly_cap cannot be negative."}), 400
+    credits.set_nightly_cap(user["user_id"], credits.to_micros(dollars_value))
+    return jsonify(credits.summary(user["user_id"]))
+
+
+@app.route("/api/v1/me/credits/checkout", methods=["POST"])
+@auth.require_member
+def api_me_credits_checkout(user):
+    """A Stripe Checkout link for one credit pack."""
+    body = _json_body()
+    origin = request.url_root.rstrip("/")
+    try:
+        url = billing.checkout_url(
+            user["user_id"], str(user.get("email") or ""),
+            str(body.get("pack") or "small"), _config,
+            success_url=f"{origin}/credits/thanks",
+            cancel_url=f"{origin}/credits/cancelled",
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 503
+    return jsonify({"url": url, "packs": billing.PACKS})
+
+
+@app.route("/api/v1/stripe/webhook", methods=["POST"])
+def api_stripe_webhook():
+    """Where Stripe reports completed payments.
+
+    Public by necessity, so the signature is the only thing standing between
+    this endpoint and anyone minting themselves credit.
+    """
+    try:
+        result = billing.apply_webhook(
+            request.get_data(), request.headers.get("Stripe-Signature", ""),
+            _config)
+    except PermissionError:
+        return jsonify({"error": "invalid signature"}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 503
+    return jsonify(result)
+
+
+@app.route("/credits/thanks", methods=["GET"])
+def credits_thanks_page():
+    return Response(
+        "<!DOCTYPE html><meta charset='utf-8'>"
+        "<body style='font-family:-apple-system,sans-serif;background:#02030A;"
+        "color:#F2F5FF;display:grid;place-items:center;height:100vh;margin:0'>"
+        "<div style='text-align:center'><h1 style='font-weight:600'>Thank you.</h1>"
+        "<p style='color:rgba(242,245,255,.66)'>Your credit is on its way and "
+        "usually lands within a few seconds.<br/>You can close this and go back "
+        "to your telescope.</p></div></body>", mimetype="text/html")
+
+
+@app.route("/credits/cancelled", methods=["GET"])
+def credits_cancelled_page():
+    return Response(
+        "<!DOCTYPE html><meta charset='utf-8'>"
+        "<body style='font-family:-apple-system,sans-serif;background:#02030A;"
+        "color:#F2F5FF;display:grid;place-items:center;height:100vh;margin:0'>"
+        "<div style='text-align:center'><h1 style='font-weight:600'>No charge made.</h1>"
+        "<p style='color:rgba(242,245,255,.66)'>Nothing was taken. Your telescope "
+        "carries on observing regardless &mdash; only the chat needs credit."
+        "</p></div></body>", mimetype="text/html")
 
 
 @app.route("/api/v1/me/highlights", methods=["GET"])

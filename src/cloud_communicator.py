@@ -472,6 +472,45 @@ class CloudCommunicator:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    def agent_chat(self, messages: list, tools: list, system: str) -> dict:
+        """One model call for the local chat page, paid for by the cloud.
+
+        Deliberately not routed through _post: that raises on any non-200, and
+        the two failures that matter here are ones a member needs to read
+        rather than a stack trace. Out of credit is a 402 carrying a message
+        and a balance; a model outage is a 503 saying the telescope is
+        unaffected. Both are answers, not errors.
+        """
+        import requests
+        if not (self._node_id and self._api_key):
+            return {"error": "This telescope is not linked to an account yet, "
+                             "so there is no credit to draw on."}
+        try:
+            resp = requests.post(
+                self._url + "/api/v1/agent/chat",
+                json={"messages": messages, "tools": tools, "system": system},
+                headers=self._headers(), timeout=180)
+        except Exception as exc:
+            logger.warning("Agent chat request failed: %s", exc)
+            return {"error": "Could not reach the network just now. Your "
+                             "telescope carries on observing regardless."}
+
+        if resp.status_code == 401:
+            self._handle_unauthorized(resp, self._api_key)
+            return {"error": "This telescope's credentials were rejected. It "
+                             "will re-register itself; try again shortly."}
+        if resp.status_code in (402, 503):
+            try:
+                return resp.json()
+            except ValueError:
+                return {"error": "The network refused that request."}
+        if resp.status_code != 200:
+            logger.warning("Agent chat HTTP %s: %s",
+                           resp.status_code, resp.text[:200])
+            return {"error": "Something went wrong reaching the network. Your "
+                             "telescope carries on observing regardless."}
+        return resp.json()
+
     def _get(self, path: str) -> dict:
         import requests
         attempted_key = self._api_key

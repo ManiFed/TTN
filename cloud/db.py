@@ -237,6 +237,29 @@ _SCHEMA: list[str] = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS credit_ledger (
+        id            SERIAL PRIMARY KEY,
+        user_id       TEXT NOT NULL,
+        kind          TEXT NOT NULL,
+        amount_micros BIGINT NOT NULL,
+        day           TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        detail_json   TEXT DEFAULT '{}',
+        reference     TEXT UNIQUE
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_credit_ledger_user
+        ON credit_ledger (user_id, day)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS credit_settings (
+        user_id            TEXT PRIMARY KEY,
+        nightly_cap_micros BIGINT NOT NULL,
+        updated_at         TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS night_intents (
         id            SERIAL PRIMARY KEY,
         node_id       TEXT NOT NULL,

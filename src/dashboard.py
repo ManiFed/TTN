@@ -4067,6 +4067,276 @@ def api_imaging_targets():
                     "reachable_only": False})
 
 
+_CHAT_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Your telescope</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --ink:#F2F5FF; --ink-2:rgba(242,245,255,.68); --ink-3:rgba(242,245,255,.42);
+    --accent:#8FD9FF; --warm:#FFC07A; --bg:#02030A;
+    --line:rgba(215,228,255,.16);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       display:flex;flex-direction:column;height:100vh}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+         padding:16px 22px;border-bottom:1px solid var(--line)}
+  h1{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .status{font-size:13px;color:var(--ink-3)}
+  .status b{color:var(--ink-2);font-weight:500}
+  main{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:18px}
+  .turn{max-width:70ch}
+  .who{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+       color:var(--ink-3);margin-bottom:5px}
+  .said{white-space:pre-wrap}
+  .me .said{color:var(--ink-2)}
+  .tools{margin-top:8px;font-size:13px;color:var(--ink-3)}
+  .tools li{list-style:none}
+  .tools .bad{color:var(--warm)}
+  .note{max-width:70ch;padding:13px 16px;border-radius:12px;font-size:14px;
+        background:rgba(255,192,122,.08);border:1px solid rgba(255,192,122,.22)}
+  .note a{color:var(--warm)}
+  form{display:flex;gap:10px;padding:16px 22px;border-top:1px solid var(--line)}
+  label.sr, .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+                overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  input[type=text]{flex:1;padding:13px 15px;border-radius:12px;font-size:16px;
+       border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--ink)}
+  input[type=text]:focus-visible,button:focus-visible{outline:2px solid var(--accent);
+       outline-offset:2px}
+  button{padding:13px 22px;border:0;border-radius:100px;background:var(--accent);
+         color:#06121c;font-size:15px;font-weight:600;cursor:pointer}
+  button[disabled]{opacity:.5;cursor:default}
+  .thinking{color:var(--ink-3);font-size:14px}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+       background:var(--accent);margin-right:7px;animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+  @media (prefers-reduced-motion: reduce){ .dot{animation:none;opacity:.7} }
+  .suggestions{display:flex;gap:8px;flex-wrap:wrap;padding:0 22px 4px}
+  .suggestions button{background:transparent;border:1px solid var(--line);
+       color:var(--ink-2);font-size:13.5px;font-weight:400;padding:8px 14px}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Your telescope</h1>
+    <p class="status" id="status" aria-live="polite">
+      <span id="credit"></span>
+    </p>
+  </header>
+
+  <main id="log" role="log" aria-live="polite" aria-label="Conversation" tabindex="0">
+    <div class="turn">
+      <p class="who">Telescope</p>
+      <p class="said">Ask me anything about your telescope. If you are just
+starting out, say <em>connect my telescope</em>.</p>
+    </div>
+  </main>
+
+  <div class="suggestions" id="suggestions" aria-label="Suggestions">
+    <button type="button" data-say="connect my telescope">connect my telescope</button>
+    <button type="button" data-say="what is the plan tonight?">what's the plan tonight?</button>
+    <button type="button" data-say="is anything wrong?">is anything wrong?</button>
+    <button type="button" data-say="show me what it imaged">show me what it imaged</button>
+  </div>
+
+  <form id="form">
+    <label class="sr" for="q">Message your telescope</label>
+    <input id="q" type="text" autocomplete="off" autofocus
+           placeholder="Ask your telescope&hellip;"/>
+    <button id="send" type="submit">Send</button>
+  </form>
+
+<script>
+(function(){
+  var log = document.getElementById('log');
+  var form = document.getElementById('form');
+  var box = document.getElementById('q');
+  var send = document.getElementById('send');
+  var credit = document.getElementById('credit');
+  var suggestions = document.getElementById('suggestions');
+  var busy = false;
+
+  function el(tag, cls, text){
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function turn(who, text, cls){
+    var wrap = el('div', 'turn' + (cls ? ' ' + cls : ''));
+    wrap.appendChild(el('p', 'who', who));
+    wrap.appendChild(el('p', 'said', text));
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return wrap;
+  }
+
+  function note(html){
+    var n = el('div', 'note');
+    n.innerHTML = html;
+    log.appendChild(n);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function showCredit(c){
+    // An unlinked node answers {} rather than an error, which is truthy --
+    // so guarding on the object alone rendered "Credit $NaN of $NaN".
+    if (!c || typeof c.balance !== 'number') { credit.textContent = ''; return; }
+    credit.innerHTML = 'Credit <b>$' + Number(c.balance).toFixed(2) + '</b>'
+      + ' · tonight <b>$' + Number(c.spent_today).toFixed(2) + '</b>'
+      + ' of $' + Number(c.nightly_cap).toFixed(2);
+  }
+
+  function toolList(used){
+    if (!used || !used.length) return null;
+    var ul = el('ul', 'tools');
+    used.forEach(function(t){
+      var li = el('li', t.ok ? '' : 'bad',
+        (t.ok ? '✓ ' : '✗ ') + t.tool.replace(/_/g, ' '));
+      ul.appendChild(li);
+    });
+    return ul;
+  }
+
+  function ask(question){
+    if (busy || !question) return;
+    busy = true;
+    send.disabled = true;
+    box.value = '';
+    turn('You', question, 'me');
+
+    var wait = el('div', 'turn');
+    wait.appendChild(el('p', 'who', 'Telescope'));
+    var p = el('p', 'thinking');
+    p.appendChild(el('span', 'dot'));
+    p.appendChild(document.createTextNode('Working on it…'));
+    wait.appendChild(p);
+    log.appendChild(wait);
+    log.scrollTop = log.scrollHeight;
+
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: question})
+    }).then(function(r){ return r.json(); }).then(function(data){
+      log.removeChild(wait);
+      var wrap = turn('Telescope', data.reply || '(no answer)');
+      var tools = toolList(data.tools_used);
+      if (tools) wrap.appendChild(tools);
+      showCredit(data.credits);
+      if (data.out_of_credit) {
+        note('You are out of credit for now. '
+           + '<a href="https://app.thetelescope.net/credits" target="_blank" '
+           + 'rel="noopener">Top up</a> to keep talking &mdash; '
+           + 'your telescope keeps observing either way.');
+      }
+    }).catch(function(){
+      log.removeChild(wait);
+      turn('Telescope', 'I could not reach the node software on this computer. '
+         + 'It may have stopped; the telescope itself is unaffected.');
+    }).then(function(){
+      busy = false;
+      send.disabled = false;
+      box.focus();
+    });
+  }
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    ask(box.value.trim());
+  });
+
+  suggestions.addEventListener('click', function(e){
+    var b = e.target.closest('button[data-say]');
+    if (b) ask(b.getAttribute('data-say'));
+  });
+
+  fetch('/api/chat/credits').then(function(r){ return r.json(); })
+    .then(showCredit).catch(function(){});
+})();
+</script>
+</body>
+</html>
+"""
+
+#: One conversation per node. A telescope has one owner in front of it, and a
+#: shared history is what makes "and now park it" mean anything.
+_chat_lock = threading.Lock()
+_chat_convo = None
+
+
+def _chat_conversation():
+    """The live conversation, built on first use.
+
+    Built lazily because the MCP tool surface and the cloud link both have to
+    exist first, and the page may be opened before either is ready.
+    """
+    global _chat_convo
+    with _chat_lock:
+        if _chat_convo is None:
+            from src.agent_loop import Conversation
+            from telescope_mcp.local_server import build_server
+
+            def send(messages, tools, system):
+                if _cloud is None:
+                    return {"error": "This telescope is not connected to the "
+                                     "network yet, so there is nobody to ask."}
+                return _cloud.agent_chat(messages, tools, system)
+
+            _chat_convo = Conversation(send, build_server())
+        return _chat_convo
+
+
+@app.route("/chat")
+def chat_page():
+    """Talk to this telescope in plain language, with no assistant installed."""
+    return Response(_CHAT_PAGE, mimetype="text/html")
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    """One question, answered -- running tools against this telescope as needed."""
+    question = str((request.get_json(force=True) or {}).get("message") or "").strip()
+    if not question:
+        return jsonify({"error": "Say something first."}), 400
+    if len(question) > 4000:
+        return jsonify({"error": "That is longer than I can take in one go."}), 400
+    try:
+        return jsonify(_chat_conversation().ask(question))
+    except Exception as exc:
+        logger.exception("Chat turn failed")
+        return jsonify({"reply": f"Something went wrong answering that "
+                                 f"({type(exc).__name__}). Your telescope is "
+                                 f"unaffected and carries on observing.",
+                        "tools_used": []}), 200
+
+
+@app.route("/api/chat/credits")
+def api_chat_credits():
+    """Balance for the header. Absent when the node is not linked yet."""
+    if _cloud is None:
+        return jsonify({})
+    try:
+        return jsonify(_cloud._get("/api/v1/me/credits"))
+    except Exception:
+        return jsonify({})
+
+
+@app.route("/api/chat/reset", methods=["POST"])
+def api_chat_reset():
+    """Start again. Long histories cost more per turn and drift off topic."""
+    global _chat_convo
+    with _chat_lock:
+        _chat_convo = None
+    return jsonify({"ok": True})
+
+
 @app.route("/api/imaging/status", methods=["GET"])
 def api_imaging_status():
     """Whether the imaging half of the night is running, and on what."""
