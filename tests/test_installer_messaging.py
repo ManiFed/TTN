@@ -117,3 +117,43 @@ class NoDesktopAppTest(unittest.TestCase):
 
     def test_the_build_points_at_the_chat_page(self):
         self.assertIn("/chat", BUILD_DMG)
+
+
+class OpeningTest(unittest.TestCase):
+    """What the installer opens, and when.
+
+    A real install failed both ways at once: it opened the chat page for
+    somebody who already had Claude Desktop, and opened it before the agent
+    had bound its port, so the browser showed a refused connection.
+    """
+
+    def test_it_waits_for_the_agent_before_opening_anything(self):
+        self.assertIn("AGENT_READY", POSTINSTALL)
+        wait = POSTINSTALL.index("AGENT_READY=0")
+        open_at = POSTINSTALL.index("/usr/bin/open")
+        self.assertLess(wait, open_at, "it opens before it waits")
+
+    def test_the_wait_is_long_enough_for_a_first_run(self):
+        """Ten seconds was not: a fresh unsigned bundle pays Gatekeeper
+        verification and a one-off unpack before any of our code runs."""
+        self.assertIn("seq 1 60", POSTINSTALL)
+
+    def test_it_never_opens_a_page_that_is_not_being_served(self):
+        """A refused connection reads as "the install failed"."""
+        guard = 'if [ "${AGENT_READY}" -eq 1 ]'
+        self.assertIn(guard, POSTINSTALL)
+        self.assertLess(POSTINSTALL.index(guard),
+                        POSTINSTALL.index("/usr/bin/open"))
+
+    def test_it_does_not_open_the_page_when_an_assistant_is_installed(self):
+        """They have just had their telescope registered with it; a second
+        unfamiliar chat window on top of that is noise."""
+        self.assertIn('[ "${HAS_ASSISTANT}" -eq 0 ]', POSTINSTALL)
+
+    def test_the_assistant_check_happens_before_it_is_used(self):
+        self.assertLess(POSTINSTALL.index("HAS_ASSISTANT=0"),
+                        POSTINSTALL.index('[ "${HAS_ASSISTANT}" -eq 0 ]'))
+
+    def test_it_says_what_to_do_if_the_agent_never_came_up(self):
+        self.assertIn("still", POSTINSTALL)
+        self.assertIn("/chat", POSTINSTALL)

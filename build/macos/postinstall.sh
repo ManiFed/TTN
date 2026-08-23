@@ -110,6 +110,20 @@ AGENT_BIN="${APP_DIR}/Contents/MacOS/TelescopeNetNode"
 if [ -x "${AGENT_BIN}" ]; then
     if sudo -u "${CONSOLE_USER}" "${AGENT_BIN}" --register-mcp \
             --data-dir "${DATA_DIR}"; then
+# Whether this member already has an assistant that can drive the telescope.
+# Decided once so the open, the closing message and the registration note
+# cannot disagree with each other.
+HAS_ASSISTANT=0
+# Written as an `if` for legibility. (`[ -d x ] && VAR=1` also works here --
+# `set -e` does not fire on a failing AND-list in a loop body -- but a reader
+# has to know that to be sure, and this script is one people edit rarely.)
+for candidate in "/Applications/Claude.app" "/Applications/Cursor.app" \
+                 "/Applications/Windsurf.app"; do
+    if [ -d "${candidate}" ]; then
+        HAS_ASSISTANT=1
+    fi
+done
+
         MCP_REGISTERED=1
     else
         echo "NOTE: could not register the MCP server automatically."
@@ -157,13 +171,25 @@ echo "Service installed and started: com.telescopenet.nodeagent (as ${CONSOLE_US
 
 # ── Open the UI for the logged-in desktop user ────────────────────────────────
 DASHBOARD_URL="http://localhost:5173"
-# Give launchd a few seconds to bind the dashboard port before opening.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+# Wait for the agent to bind its port, and remember whether it ever did.
+#
+# The old loop gave up after ten seconds and carried on regardless, so a first
+# run that took longer ended with a browser pointed at a refused connection.
+# Ten seconds is not enough on a first run: a freshly installed, unsigned
+# PyInstaller bundle pays Gatekeeper verification and a one-off unpack before
+# any of our code executes.
+AGENT_READY=0
+for _ in $(seq 1 60); do
     if /usr/bin/curl -fsS "${DASHBOARD_URL}/api/status" >/dev/null 2>&1; then
+        AGENT_READY=1
         break
     fi
     sleep 1
 done
+if [ "${AGENT_READY}" -eq 0 ]; then
+    echo "NOTE: the node software has not answered yet. It may still be"
+    echo "      starting; give it a minute, then open ${DASHBOARD_URL}/chat"
+fi
 
 # ── Unwrap a Gatekeeper ".localized" quarantine rename ─────────────────────────
 # Kept for upgrades from installs that shipped the desktop app: the rename
@@ -181,11 +207,19 @@ if [ ! -d "${DESKTOP_APP}" ] && [ -d "${LOCALIZED_WRAPPER}/$(basename "${DESKTOP
     rm -rf "${LOCALIZED_WRAPPER}"
 fi
 
-# Open the chat page, which is the interface now. The desktop app is being
-# retired: it may still be on disk from an earlier install, but opening it here
-# would hand a new member the surface we are moving away from.
-launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}/chat" || true
-echo "Opened ${DASHBOARD_URL}/chat for ${CONSOLE_USER}"
+# Open the chat page only when it is the interface this member will use.
+#
+# Someone who already has an assistant installed has just had their telescope
+# registered with it; opening a second, unfamiliar chat window on top of that
+# is confusing rather than helpful. They get told to restart the assistant
+# instead, which is the step they actually need.
+#
+# And never open a page that is not being served: a refused connection reads
+# as "the install failed", when the agent is usually just still starting.
+if [ "${AGENT_READY}" -eq 1 ] && [ "${HAS_ASSISTANT}" -eq 0 ]; then
+    launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}/chat" || true
+    echo "Opened ${DASHBOARD_URL}/chat for ${CONSOLE_USER}"
+fi
 
 echo ""
 echo "Installation complete!"
@@ -195,8 +229,7 @@ echo ""
 if [ "${MCP_REGISTERED:-0}" = "1" ]; then
     # ChatGPT is deliberately not counted: it reaches MCP servers only as
     # remote connectors, so it cannot start this one or see the telescope.
-    if [ -d "/Applications/Claude.app" ] || [ -d "/Applications/Cursor.app" ] \
-       || [ -d "/Applications/Windsurf.app" ]; then
+    if [ "${HAS_ASSISTANT}" -eq 1 ]; then
         echo "You can now run this telescope by asking."
         echo "  Quit and reopen your AI assistant, then say:"
         echo "      connect my telescope"
