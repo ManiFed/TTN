@@ -410,3 +410,45 @@ class SelfHealTest(_Tmp):
         (self.path.parent / reg.OPT_OUT_MARKER).write_text("")
         self.assertFalse(self._ensure())
         self.assertFalse(self.path.exists())
+
+
+class OnlyThePackagedAgentRegistersTest(unittest.TestCase):
+    """A source checkout must never touch a member's Claude config.
+
+    The keep-registered loop was added to repair entries Claude drops. Run from
+    source it did the opposite: the test suite boots dashboards in temp
+    directories, and each one rewrote the real config to point at a venv
+    interpreter and a scratch path deleted moments later. Claude then reported
+    "Server disconnected" -- which is precisely what a member saw.
+    """
+
+    def test_the_loop_returns_immediately_when_not_frozen(self):
+        import sys
+        from unittest.mock import patch
+        import src.dashboard as dash
+
+        called = []
+        with patch("telescope_mcp.register_client.ensure_registered",
+                   side_effect=lambda *a, **k: called.append(a)), \
+             patch.object(sys, "frozen", False, create=True), \
+             patch("time.sleep", side_effect=AssertionError("entered the loop")):
+            dash._keep_registered_loop()
+        self.assertEqual(called, [], "a checkout rewrote the config")
+
+    def test_a_packaged_build_does_register(self):
+        import sys
+        from unittest.mock import patch
+        import src.dashboard as dash
+
+        called = []
+
+        def stop(*a, **k):
+            called.append(a)
+            raise KeyboardInterrupt
+
+        with patch("telescope_mcp.register_client.ensure_registered",
+                   side_effect=stop), \
+             patch.object(sys, "frozen", True, create=True):
+            with self.assertRaises(KeyboardInterrupt):
+                dash._keep_registered_loop()
+        self.assertEqual(len(called), 1)

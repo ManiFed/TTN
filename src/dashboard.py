@@ -4083,11 +4083,19 @@ def _keep_registered_loop() -> None:
     import sys
     from telescope_mcp.register_client import ensure_registered
 
-    prefix = [] if getattr(sys, "frozen", False) else ["-m", "src.main_service"]
+    # Only the installed agent owns this registration. A source checkout must
+    # never touch it: the test suite boots dashboards in temp directories, and
+    # each one happily rewrote the member's real Claude config to point at a
+    # venv interpreter and a scratch path that is deleted moments later. Claude
+    # then reports "Server disconnected", which is exactly what happened.
+    if not getattr(sys, "frozen", False):
+        logger.debug("Not a packaged build — leaving Claude's config alone")
+        return
+
     data_dir = str(pathlib.Path.cwd())
     while True:
         try:
-            ensure_registered(sys.executable, data_dir, prefix_args=prefix)
+            ensure_registered(sys.executable, data_dir)
         except Exception as exc:
             logger.debug("Registration check failed: %s", exc)
         time.sleep(300)
