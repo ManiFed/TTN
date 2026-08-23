@@ -268,9 +268,12 @@ class MultiClientTest(_Tmp):
     merges rather than writes.
     """
 
-    def test_the_supported_clients_are_the_ones_people_use(self):
-        for name in ("Claude Desktop", "Cursor", "Windsurf", "Claude Code"):
-            self.assertIn(name, reg.CLIENTS)
+    def test_claude_desktop_is_the_only_registered_client(self):
+        """One supported path. Cursor, Windsurf and Claude Code all work if
+        configured by hand, but every extra one is another setup story to
+        describe, test and support -- and another sentence a member has to
+        decide whether applies to them."""
+        self.assertEqual(list(reg.CLIENTS), ["Claude Desktop"])
 
     def test_chatgpt_is_not_registered_locally(self):
         """ChatGPT reaches MCP servers only as remote connectors over HTTPS, so
@@ -292,11 +295,6 @@ class MultiClientTest(_Tmp):
                     self.assertTrue(str(reg.config_path(name)),
                                     f"{name} has no path on {system}")
 
-    def test_clients_do_not_share_a_config_path(self):
-        """Two clients pointed at one file would fight over it."""
-        paths = [str(reg.config_path(n)) for n in reg.CLIENTS]
-        self.assertEqual(len(paths), len(set(paths)))
-
     def test_an_unknown_client_falls_back_rather_than_raising(self):
         self.assertTrue(str(reg.config_path("Some Future Assistant")))
 
@@ -313,21 +311,15 @@ class MultiClientTest(_Tmp):
         self.assertTrue(ok)
         self.assertEqual(len(written), len(reg.CLIENTS))
 
-    def test_one_unwritable_config_does_not_sink_the_rest(self):
-        """A locked-down editor install must not stop the assistant someone
-        actually uses from being set up."""
+    def test_an_unwritable_config_is_reported_rather_than_hidden(self):
+        """With one supported client its failure is the whole failure, and the
+        installer has to be able to say so."""
         from unittest.mock import patch
-        calls = {"n": 0}
-
-        def flaky(command, data_dir, path, prefix_args=None):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                return False, "is not valid JSON. Refusing to touch it."
-            return True, "Registered."
-
-        with patch.object(reg, "register", side_effect=flaky):
+        with patch.object(reg, "register",
+                          return_value=(False, "is not valid JSON. Refusing "
+                                               "to touch it.")):
             ok, msg = reg.register_all("agent", DATA_DIR)
-        self.assertTrue(ok, "one failure should not fail the whole thing")
+        self.assertFalse(ok)
         self.assertIn("Could not write", msg)
 
     def test_it_registers_clients_that_are_not_installed_yet(self):

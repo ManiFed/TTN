@@ -30,16 +30,18 @@ class WelcomeTest(unittest.TestCase):
 
     def test_it_says_you_run_it_by_asking(self):
         self.assertIn("asking", WELCOME.lower())
-        self.assertIn("connect my telescope", WELCOME)
 
     def test_station_mode_is_a_stated_requirement(self):
         """The single most common setup failure, and the telescope's own app
         reports "connected" in either mode."""
         self.assertIn("Station Mode", WELCOME)
 
-    def test_it_names_the_assistants_that_work(self):
-        for name in ("Claude Desktop", "Cursor", "Windsurf"):
-            self.assertIn(name, WELCOME)
+    def test_it_names_claude_desktop_and_nothing_else(self):
+        """One supported path. Every "or Cursor, or Windsurf" is a sentence
+        somebody has to decide whether applies to them."""
+        self.assertIn("Claude Desktop", WELCOME)
+        for other in ("Cursor", "Windsurf"):
+            self.assertNotIn(other, WELCOME)
 
     def test_it_does_not_promise_chatgpt(self):
         """ChatGPT reaches MCP servers only as remote connectors, so it cannot
@@ -49,21 +51,14 @@ class WelcomeTest(unittest.TestCase):
 
 class PostinstallTest(unittest.TestCase):
 
-    def test_it_opens_the_chat_page(self):
-        self.assertIn("/chat", POSTINSTALL)
-
-    def test_it_no_longer_opens_the_desktop_app(self):
-        """The actual symptom: install finished and the retired app appeared."""
-        opens = re.findall(r"/usr/bin/open[^\n]*", POSTINSTALL)
-        self.assertTrue(opens, "nothing is opened at all")
-        for line in opens:
-            self.assertNotIn("-a ", line,
-                             f"still launching an application: {line.strip()}")
-            self.assertNotIn("DESKTOP_APP", line)
-
-    def test_the_closing_summary_points_at_the_chat_page(self):
-        self.assertIn("Talk to it:", POSTINSTALL)
+    def test_it_launches_no_application(self):
+        """It opened the retired desktop app once. Now it opens nothing at
+        all -- Claude Desktop is the interface and the member starts it."""
+        self.assertNotIn("/usr/bin/open", POSTINSTALL)
         self.assertNotIn('echo "Desktop app:', POSTINSTALL)
+
+    def test_the_closing_summary_says_what_to_say(self):
+        self.assertIn("set up my telescope", POSTINSTALL)
 
     def test_the_gatekeeper_self_heal_is_still_there(self):
         """Upgrades from installs that shipped the app can still leave a
@@ -120,43 +115,30 @@ class NoDesktopAppTest(unittest.TestCase):
 
 
 class OpeningTest(unittest.TestCase):
-    """What the installer opens, and when.
+    """The installer opens nothing now.
 
-    A real install failed both ways at once: it opened the chat page for
-    somebody who already had Claude Desktop, and opened it before the agent
-    had bound its port, so the browser showed a refused connection.
+    It used to launch a browser at a local chat page -- which failed twice over
+    in one real install: it opened for somebody who already had Claude Desktop,
+    and it opened before the agent had bound its port, so they got a refused
+    connection. There is no page any more; Claude Desktop is the interface, and
+    the conclusion pane says so.
     """
 
-    def test_it_waits_for_the_agent_before_opening_anything(self):
+    def test_it_opens_nothing(self):
+        self.assertNotIn("/usr/bin/open", POSTINSTALL)
+
+    def test_it_still_waits_for_the_agent(self):
+        """So the closing message can say whether it actually came up."""
         self.assertIn("AGENT_READY", POSTINSTALL)
-        wait = POSTINSTALL.index("AGENT_READY=0")
-        open_at = POSTINSTALL.index("/usr/bin/open")
-        self.assertLess(wait, open_at, "it opens before it waits")
-
-    def test_the_wait_is_long_enough_for_a_first_run(self):
-        """Ten seconds was not: a fresh unsigned bundle pays Gatekeeper
-        verification and a one-off unpack before any of our code runs."""
         self.assertIn("seq 1 60", POSTINSTALL)
-
-    def test_it_never_opens_a_page_that_is_not_being_served(self):
-        """A refused connection reads as "the install failed"."""
-        guard = 'if [ "${AGENT_READY}" -eq 1 ]'
-        self.assertIn(guard, POSTINSTALL)
-        self.assertLess(POSTINSTALL.index(guard),
-                        POSTINSTALL.index("/usr/bin/open"))
-
-    def test_it_does_not_open_the_page_when_an_assistant_is_installed(self):
-        """They have just had their telescope registered with it; a second
-        unfamiliar chat window on top of that is noise."""
-        self.assertIn('[ "${HAS_ASSISTANT}" -eq 0 ]', POSTINSTALL)
-
-    def test_the_assistant_check_happens_before_it_is_used(self):
-        self.assertLess(POSTINSTALL.index("HAS_ASSISTANT=0"),
-                        POSTINSTALL.index('[ "${HAS_ASSISTANT}" -eq 0 ]'))
 
     def test_it_says_what_to_do_if_the_agent_never_came_up(self):
         self.assertIn("still", POSTINSTALL)
-        self.assertIn("/chat", POSTINSTALL)
+        self.assertIn("Claude Desktop", POSTINSTALL)
+
+    def test_it_tells_them_to_restart_claude(self):
+        """It only notices new tools when it starts."""
+        self.assertIn("Quit and reopen Claude Desktop", POSTINSTALL)
 
 
 CONCLUSION = (REPO / "build/macos/resources/conclusion.html").read_text()
@@ -175,16 +157,20 @@ class ConclusionTest(unittest.TestCase):
         self.assertIn("conclusion.html", BUILD_DMG)
 
     def test_it_says_exactly_what_to_say(self):
-        self.assertIn("connect my telescope", CONCLUSION)
+        self.assertIn("set up my telescope", CONCLUSION)
 
-    def test_it_gives_the_address_in_case_nothing_opened(self):
-        self.assertIn("localhost:5173/chat", CONCLUSION)
+    def test_it_says_where_to_say_it(self):
+        self.assertIn("Claude Desktop", CONCLUSION)
+
+    def test_it_covers_not_having_claude_yet(self):
+        self.assertIn("claude.ai/download", CONCLUSION)
 
     def test_it_leads_with_station_mode(self):
         self.assertIn("Station Mode", CONCLUSION)
 
-    def test_it_tells_assistant_users_to_restart(self):
-        self.assertIn("Quit and reopen", CONCLUSION)
+    def test_it_tells_them_to_restart_claude(self):
+        """The invisible step: it only notices new tools on start."""
+        self.assertIn("quit and reopen it", CONCLUSION.lower())
 
     def test_it_says_where_to_go_when_stuck(self):
         self.assertIn("info@boundlessskies.org", CONCLUSION)

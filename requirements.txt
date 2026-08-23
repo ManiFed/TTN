@@ -25,7 +25,6 @@ zwoasi>=0.0.22
 pyongc>=1.2
 anthropic>=0.92        # cloud weight-tuning monitor only (cloud/tuning.py)
 mcp>=2.0               # telescope_mcp/ — chat interface over the cloud + node APIs
-stripe>=11.0           # cloud/billing.py — credit top-ups and webhook verification
 google-auth>=2.28.0    # cloud/push.py — FCM HTTP v1 API OAuth2 tokens
 defusedxml>=0.7.1      # safe XML parsing for public resolver responses
 keyrings.alt>=5.0      # headless fallback backend for CI and Linux nodes
