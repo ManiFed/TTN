@@ -58,7 +58,7 @@ class PostinstallTest(unittest.TestCase):
         self.assertNotIn('echo "Desktop app:', POSTINSTALL)
 
     def test_the_closing_summary_says_what_to_say(self):
-        self.assertIn("set up my telescope", POSTINSTALL)
+        self.assertIn("connect my telescope", POSTINSTALL)
 
     def test_the_gatekeeper_self_heal_is_still_there(self):
         """Upgrades from installs that shipped the app can still leave a
@@ -157,7 +157,7 @@ class ConclusionTest(unittest.TestCase):
         self.assertIn("conclusion.html", BUILD_DMG)
 
     def test_it_says_exactly_what_to_say(self):
-        self.assertIn("set up my telescope", CONCLUSION)
+        self.assertIn("connect my telescope", CONCLUSION)
 
     def test_it_says_where_to_say_it(self):
         self.assertIn("Claude Desktop", CONCLUSION)

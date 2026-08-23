@@ -206,7 +206,7 @@ def run(agent_base: str = "") -> dict:
 def _summary(results: list, healthy: bool) -> str:
     if healthy:
         return ("Everything is connected. Open Claude Desktop and say "
-                "'set up my telescope'.")
+                "'connect my telescope'.")
     broken = results[-1]
     return f"{broken['detail']}\n\n{broken['fix']}".strip()
 

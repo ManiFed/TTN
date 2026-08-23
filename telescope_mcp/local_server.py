@@ -41,6 +41,11 @@ Tools for the telescope attached to this computer.
 Running standalone: there is no network account here, so nothing is uploaded
 and nothing is shared.
 
+Any message about getting the telescope working -- "connect my telescope",
+"set up my telescope", "get started", however they phrase it -- is a job for
+`connect_telescope`, not for general astronomy knowledge. There is a tool that
+can actually go and do it; use it rather than describing the steps.
+
 **Start with `whats_next`.** It reads the node's state and says what to do now;
 lead with its answer rather than waiting to be asked. Then `connect_telescope`
 to bring the telescope online, and `imaging_targets` / `run_imaging_program` to
@@ -63,6 +68,14 @@ INSTRUCTIONS = """\
 Tools for the Telescope Net, running on the computer attached to a telescope.
 It is a real instrument in someone's garden, and they are usually not technical.
 
+**Any message about getting a telescope working is a job for these tools, not
+for general astronomy knowledge.** "Connect my telescope", "set up my
+telescope", "get started", "find my telescope" and similar all mean the same
+thing: call `connect_my_telescope`. Do not answer with generic setup
+instructions (WiFi pairing steps, app store links) when a tool exists that can
+actually go and do it on the hardware in front of you -- that is the single
+most common way this goes wrong.
+
 **Start every conversation with `whats_next`.** It reads the node's actual
 state and returns what this person should do now. Say its headline, pass on its
 detail, then do the thing it names. Do not wait to be asked, and do not ask
@@ -71,9 +84,10 @@ handoffs and people reliably do not know what comes after each one.
 
 Setting one up, in order:
   1. `whats_next` -- always.
-  2. `connect_my_telescope` finds it on the network and links it. If they have
-     no account it will tell you to call `sign_in`, which returns a link they
-     open in a browser. Give them the link, wait, then `sign_in_status`.
+  2. `connect_my_telescope` finds it on the network and links it, whatever
+     phrase they used to ask for it. If they have no account it will tell you
+     to call `sign_in`, which returns a link they open in a browser. Give them
+     the link, wait, then `sign_in_status`.
   3. `whats_next` again. Repeat until it says ready.
 
 If the telescope is not found, the reason is almost always that it is in

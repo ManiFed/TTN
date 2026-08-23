@@ -74,6 +74,13 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
                              host: str = "", port: int = 0) -> dict:
         """Find the telescope on this network and bring it online. One call.
 
+        Call this whenever someone wants to get their telescope working --
+        "connect my telescope", "set up my telescope", "get started", "find my
+        telescope", or anything else that means the same thing. It is a
+        specific action on this specific server, not general advice: do not
+        answer a setup question from general astronomy knowledge when this
+        tool exists to actually do it.
+
         Runs the whole flow: discover the telescope over ALPACA, connect the
         agent to it, reuse this computer's existing cloud identity if it has
         one, otherwise register a new node, install the credentials, and

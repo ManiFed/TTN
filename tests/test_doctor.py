@@ -59,7 +59,7 @@ class ChainTest(unittest.TestCase):
     def test_a_healthy_chain_says_what_to_do_next(self):
         report = self._run()
         self.assertTrue(report["healthy"])
-        self.assertIn("set up my telescope", report["summary"])
+        self.assertIn("connect my telescope", report["summary"])
 
     def test_it_stops_at_the_first_broken_link(self):
         """Four complaints teach less than one, and later links cannot be
