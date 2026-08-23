@@ -87,6 +87,24 @@ sends neither, so it is unaffected — same as `curl`.
 | `TELESCOPE_MCP_ENV` | `sim` | `sim` \| `staging` \| `production` |
 | `TELESCOPE_MCP_ALLOW_PRODUCTION_WRITES` | unset | opt in to hardware writes on production |
 
+## When the tools do not appear
+
+```bash
+TelescopeNetNode --doctor
+```
+
+Walks the chain in order and stops at the first broken link: is the node agent
+running, is it registered with Claude, does the registered command actually
+start, and has Claude been restarted since it was registered.
+
+That last one is the invisible failure. Claude reads its tool list only at
+startup, so an entry written while it is open does nothing and says nothing --
+from inside the conversation it is indistinguishable from a telescope that is
+not connected, and the assistant answers from general knowledge instead.
+
+The check has to live outside the assistant for the same reason: when the tools
+are missing, none of this code is running to say so.
+
 ## Safety
 
 Three rails, each tested in `tests/test_mcp_guards.py`:

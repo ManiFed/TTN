@@ -198,6 +198,11 @@ def main() -> None:
                              "installer passes this explicitly: it runs "
                              "elevated, so an inherited APPDATA can belong to "
                              "the elevating admin rather than the member")
+    parser.add_argument("--doctor", action="store_true",
+                        help="check the whole chain -- agent running, "
+                             "registered with Claude, the command actually "
+                             "starts, Claude restarted since -- and say which "
+                             "link is broken")
     parser.add_argument("--mcp", action="store_true",
                         help="Serve the MCP tool interface on stdio instead of "
                              "running the dashboard (used by AI assistants)")
@@ -211,6 +216,10 @@ def main() -> None:
         data_dir = pathlib.Path.cwd()
     _prepare_data_dir(data_dir)
     os.chdir(data_dir)
+
+    if args.doctor:
+        from telescope_mcp.doctor import main as doctor_main
+        sys.exit(doctor_main())
 
     if args.register_mcp or args.deregister_mcp:
         # Runs from the installer, where there is no interpreter to call a
