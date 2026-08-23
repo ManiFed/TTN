@@ -166,6 +166,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 # ── Unwrap a Gatekeeper ".localized" quarantine rename ─────────────────────────
+# Kept for upgrades from installs that shipped the desktop app: the rename
+# leaves a stray folder in /Applications that confuses Finder whether or not
+# anything opens the bundle.
 # Because this .pkg (and the app inside it) aren't signed/notarized, macOS
 # Installer sometimes can't validate the payload during copy and defensively
 # renames the destination folder by appending ".localized", leaving the real
@@ -178,13 +181,11 @@ if [ ! -d "${DESKTOP_APP}" ] && [ -d "${LOCALIZED_WRAPPER}/$(basename "${DESKTOP
     rm -rf "${LOCALIZED_WRAPPER}"
 fi
 
-if [ -d "${DESKTOP_APP}" ]; then
-    launchctl asuser "${CONSOLE_UID}" /usr/bin/open -a "${DESKTOP_APP}" || true
-    echo "Desktop app opened for ${CONSOLE_USER}: ${DESKTOP_APP}"
-else
-    # Never fall back to a browser — the product UI is the desktop app.
-    echo "WARNING: Desktop app missing at ${DESKTOP_APP}; not opening browser"
-fi
+# Open the chat page, which is the interface now. The desktop app is being
+# retired: it may still be on disk from an earlier install, but opening it here
+# would hand a new member the surface we are moving away from.
+launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}/chat" || true
+echo "Opened ${DASHBOARD_URL}/chat for ${CONSOLE_USER}"
 
 echo ""
 echo "Installation complete!"
@@ -212,7 +213,7 @@ if [ "${MCP_REGISTERED:-0}" = "1" ]; then
     fi
     echo ""
 fi
-echo "Desktop app: ${DESKTOP_APP} (if packaged)"
+echo "Talk to it:  ${DASHBOARD_URL}/chat"
 echo "Dashboard:   ${DASHBOARD_URL}"
 echo "Service:     com.telescopenet.nodeagent (gui/${CONSOLE_UID})"
 echo "Logs:        ${LOG_DIR}/node_agent.log"
