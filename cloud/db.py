@@ -226,6 +226,17 @@ _SCHEMA: list[str] = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS auth_browser_sessions (
+        code        TEXT PRIMARY KEY,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        user_id     TEXT DEFAULT '',
+        token       TEXT DEFAULT '',
+        created_at  TEXT NOT NULL,
+        approved_at TEXT DEFAULT '',
+        expires_at  TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS night_intents (
         id            SERIAL PRIMARY KEY,
         node_id       TEXT NOT NULL,

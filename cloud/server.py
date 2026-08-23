@@ -55,7 +55,7 @@ from werkzeug.routing import IntegerConverter as _IntegerConverter
 from werkzeug.routing import ValidationError as _ValidationError
 from werkzeug.utils import safe_join
 
-from cloud import alerts, auth, autonomy, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
+from cloud import alerts, auth, autonomy, browser_auth, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
 from cloud.conditions import fetch_astronomy_weather, fetch_light_pollution_detail
 
@@ -1906,6 +1906,132 @@ def api_admin_calibration_rollback(model_version):
     if not calibration.rollback(model_version):
         return jsonify({"error": "model not found"}), 404
     return jsonify({"ok": True, "model_version": model_version})
+
+
+_AUTH_LINK_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Sign in — The Telescope Net</title>
+<style>
+ :root{color-scheme:dark}
+ body{margin:0;min-height:100vh;display:grid;place-items:center;background:#02030A;
+      color:#F2F5FF;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+ .card{width:min(92vw,380px);padding:32px;border-radius:18px;
+       background:rgba(255,255,255,.04);border:1px solid rgba(215,228,255,.18)}
+ h1{margin:0 0 6px;font-size:21px;letter-spacing:-.02em}
+ p.sub{margin:0 0 22px;color:rgba(242,245,255,.62);font-size:13.5px}
+ label{display:block;margin:14px 0 6px;font-size:12.5px;color:rgba(242,245,255,.72)}
+ input{width:100%;padding:11px 13px;border-radius:10px;box-sizing:border-box;
+       border:1px solid rgba(215,228,255,.22);background:rgba(0,0,0,.28);color:#F2F5FF;font-size:15px}
+ button{width:100%;margin-top:20px;padding:12px;border:0;border-radius:100px;
+        background:#8FD9FF;color:#06121c;font-size:15px;font-weight:600;cursor:pointer}
+ button:disabled{opacity:.55;cursor:default}
+ .toggle{margin-top:16px;text-align:center;font-size:13px;color:rgba(242,245,255,.62)}
+ .toggle a{color:#8FD9FF;cursor:pointer;text-decoration:none}
+ .msg{margin-top:16px;font-size:13.5px;min-height:1.2em}
+ .err{color:#FF9F9F} .ok{color:#8FD9FF}
+</style></head><body>
+<div class="card">
+  <h1 id="title">Sign in</h1>
+  <p class="sub">Then return to your assistant &mdash; it is waiting.</p>
+  <form id="f" autocomplete="on">
+    <div id="namewrap" style="display:none">
+      <label for="name">Your name</label>
+      <input id="name" autocomplete="name"/>
+    </div>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required/>
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" required/>
+    <button id="go" type="submit">Sign in</button>
+  </form>
+  <div class="toggle" id="toggle">
+    New here? <a id="swap">Create an account</a>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+<script>
+ const code = new URLSearchParams(location.search).get('code') || '';
+ let signup = false;
+ const $ = id => document.getElementById(id);
+ $('swap').onclick = () => {
+   signup = !signup;
+   $('title').textContent = signup ? 'Create your account' : 'Sign in';
+   $('namewrap').style.display = signup ? 'block' : 'none';
+   $('go').textContent = signup ? 'Create account' : 'Sign in';
+   $('pw').autocomplete = signup ? 'new-password' : 'current-password';
+   $('toggle').innerHTML = signup
+     ? 'Already a member? <a id="swap2">Sign in</a>'
+     : 'New here? <a id="swap">Create an account</a>';
+   const again = $('swap') || $('swap2');
+   if (again) again.onclick = $('swap').onclick;
+ };
+ $('f').onsubmit = async e => {
+   e.preventDefault();
+   $('go').disabled = true;
+   $('msg').className = 'msg';
+   $('msg').textContent = 'Working...';
+   try {
+     const body = {email: $('email').value.trim(), password: $('pw').value};
+     if (signup) body.display_name = $('name').value.trim();
+     const r = await fetch(signup ? '/api/v1/auth/register' : '/api/v1/auth/login',
+                           {method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify(body)});
+     const j = await r.json();
+     if (!r.ok) throw new Error(j.error || 'That did not work.');
+     const a = await fetch('/api/v1/auth/browser/approve',
+                           {method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({code, token: j.token, user_id: j.user_id})});
+     const aj = await a.json();
+     if (!a.ok) throw new Error(aj.error || 'Could not finish signing in.');
+     $('msg').className = 'msg ok';
+     $('msg').textContent = 'Done. You can close this and go back to your assistant.';
+     $('f').style.display = 'none';
+     $('toggle').style.display = 'none';
+   } catch (err) {
+     $('msg').className = 'msg err';
+     $('msg').textContent = err.message;
+     $('go').disabled = false;
+   }
+ };
+</script></body></html>"""
+
+
+@app.route("/auth/link", methods=["GET"])
+def auth_link_page():
+    """Where a member signs in or signs up to complete a browser sign-in.
+
+    The password is typed here, into the real cloud over TLS, and never passes
+    through a tool call or an agent's context.
+    """
+    return Response(_AUTH_LINK_PAGE, mimetype="text/html")
+
+
+@app.route("/api/v1/auth/browser/start", methods=["POST"])
+def api_auth_browser_start():
+    """Begin a browser sign-in; returns the link for the member to open."""
+    return jsonify(browser_auth.start(request.url_root))
+
+
+@app.route("/api/v1/auth/browser/approve", methods=["POST"])
+def api_auth_browser_approve():
+    """Attach a session to a pending link. Called by the page, not the agent."""
+    body = _json_body()
+    ok = browser_auth.approve(
+        str(body.get("code") or ""),
+        str(body.get("user_id") or ""),
+        str(body.get("token") or ""),
+    )
+    if not ok:
+        return jsonify({"error": "That sign-in link is no longer valid. "
+                                 "Ask your assistant for a new one."}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/v1/auth/browser/poll", methods=["POST"])
+def api_auth_browser_poll():
+    """Has the member finished? Hands the session over exactly once."""
+    return jsonify(browser_auth.poll(str(_json_body().get("code") or "")))
 
 
 @app.route("/api/v1/auth/login", methods=["POST"])
