@@ -44,15 +44,19 @@ def _home(*parts: str) -> Path:
     return Path.home().joinpath(*parts)
 
 
-#: Clients that launch a local MCP server themselves, and where each keeps its
-#: config. Membership here means "this program will start our process and talk
-#: to it over stdin/stdout".
+#: Claude Desktop, and only Claude Desktop.
 #:
-#: ChatGPT is deliberately absent. Its MCP support is *remote connectors* --
-#: an HTTPS URL configured server-side -- so it never launches anything locally
-#: and cannot reach a telescope on a home network at all. Writing it a config
-#: file would create something nothing reads, and worse, would let the
-#: installer claim ChatGPT was set up when it was not. See REMOTE_ONLY_NOTE.
+#: Cursor, Windsurf and Claude Code all launch local MCP servers too, and
+#: registering them was a few lines. It was dropped anyway: every one of them
+#: is another setup path to describe, test and support, and every screen that
+#: says "or Cursor, or Windsurf" is a screen where somebody has to work out
+#: which sentence applies to them. One supported path that always works beats
+#: four that mostly do -- the members here are not developers.
+#:
+#: They still work if someone configures them by hand; nothing blocks that.
+#: ChatGPT never could: its MCP support is remote connectors over HTTPS, so it
+#: never launches anything locally and cannot see a telescope on a home
+#: network at all. See REMOTE_ONLY_NOTE.
 #: A client is registered whether or not it is installed -- someone who adds
 #: one later should find the telescope already there -- so this is a map of
 #: where to write, not a list of what is present.
@@ -67,21 +71,6 @@ CLIENTS: dict[str, dict[str, Path]] = {
         "Windows": _appdata() / "Claude/claude_desktop_config.json",
         "Linux": _home(".config/Claude/claude_desktop_config.json"),
     },
-    "Cursor": {
-        "Darwin": _home(".cursor/mcp.json"),
-        "Windows": _home(".cursor/mcp.json"),
-        "Linux": _home(".cursor/mcp.json"),
-    },
-    "Windsurf": {
-        "Darwin": _home(".codeium/windsurf/mcp_config.json"),
-        "Windows": _home(".codeium/windsurf/mcp_config.json"),
-        "Linux": _home(".codeium/windsurf/mcp_config.json"),
-    },
-    "Claude Code": {
-        "Darwin": _home(".claude.json"),
-        "Windows": _home(".claude.json"),
-        "Linux": _home(".claude.json"),
-    },
 }
 
 #: How to tell whether a client is actually installed, so the installer can say
@@ -92,21 +81,6 @@ _PRESENCE: dict[str, dict[str, Path]] = {
         "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "AnthropicClaude",
         "Linux": _home(".local/share/applications/claude.desktop"),
     },
-    "Cursor": {
-        "Darwin": Path("/Applications/Cursor.app"),
-        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "Programs/Cursor",
-        "Linux": _home(".local/share/applications/cursor.desktop"),
-    },
-    "Windsurf": {
-        "Darwin": Path("/Applications/Windsurf.app"),
-        "Windows": Path(os.environ.get("LOCALAPPDATA") or "") / "Programs/Windsurf",
-        "Linux": _home(".local/share/applications/windsurf.desktop"),
-    },
-    "Claude Code": {
-        "Darwin": _home(".claude.json"),
-        "Windows": _home(".claude.json"),
-        "Linux": _home(".claude.json"),
-    },
 }
 
 
@@ -114,9 +88,8 @@ _PRESENCE: dict[str, dict[str, Path]] = {
 REMOTE_ONLY_NOTE = (
     "ChatGPT connects to MCP servers only as remote connectors -- an HTTPS URL "
     "it reaches over the internet -- so it cannot start the node software on "
-    "your computer, and cannot see a telescope on your home network. Driving "
-    "the telescope needs an assistant that runs the server locally: Claude "
-    "Desktop, Claude Code, Cursor or Windsurf."
+    "your computer, and cannot see a telescope on your home network. Install "
+    "Claude Desktop from https://claude.ai/download instead."
 )
 
 

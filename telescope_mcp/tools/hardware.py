@@ -17,6 +17,21 @@ def register(server, agent: AgentClient) -> None:
     # ── Status and diagnosis ──────────────────────────────────────────────
 
     @server.tool()
+    def whats_next() -> dict:
+        """What this member should do right now, and what happens after it.
+
+        Call this first, before anything else, whenever someone opens a
+        conversation about their telescope or says they have just installed it.
+        Setting a telescope up is a sequence of handoffs and people do not
+        reliably know what comes after each one -- so lead with the answer
+        rather than waiting to be asked for it.
+
+        Returns a headline, a detail worth repeating, and the exact thing to do
+        next. Say the headline, then do the thing.
+        """
+        return agent.get("/api/next-step")
+
+    @server.tool()
     def node_status() -> dict:
         """Full status of the node on this computer.
 

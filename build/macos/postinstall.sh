@@ -117,12 +117,9 @@ HAS_ASSISTANT=0
 # Written as an `if` for legibility. (`[ -d x ] && VAR=1` also works here --
 # `set -e` does not fire on a failing AND-list in a loop body -- but a reader
 # has to know that to be sure, and this script is one people edit rarely.)
-for candidate in "/Applications/Claude.app" "/Applications/Cursor.app" \
-                 "/Applications/Windsurf.app"; do
-    if [ -d "${candidate}" ]; then
-        HAS_ASSISTANT=1
-    fi
-done
+if [ -d "/Applications/Claude.app" ]; then
+    HAS_ASSISTANT=1
+fi
 
         MCP_REGISTERED=1
     else
@@ -188,7 +185,7 @@ for _ in $(seq 1 60); do
 done
 if [ "${AGENT_READY}" -eq 0 ]; then
     echo "NOTE: the node software has not answered yet. It may still be"
-    echo "      starting; give it a minute, then open ${DASHBOARD_URL}/chat"
+    echo "      starting; give it a minute before asking Claude Desktop."
 fi
 
 # ── Unwrap a Gatekeeper ".localized" quarantine rename ─────────────────────────
@@ -207,20 +204,6 @@ if [ ! -d "${DESKTOP_APP}" ] && [ -d "${LOCALIZED_WRAPPER}/$(basename "${DESKTOP
     rm -rf "${LOCALIZED_WRAPPER}"
 fi
 
-# Open the chat page only when it is the interface this member will use.
-#
-# Someone who already has an assistant installed has just had their telescope
-# registered with it; opening a second, unfamiliar chat window on top of that
-# is confusing rather than helpful. They get told to restart the assistant
-# instead, which is the step they actually need.
-#
-# And never open a page that is not being served: a refused connection reads
-# as "the install failed", when the agent is usually just still starting.
-if [ "${AGENT_READY}" -eq 1 ] && [ "${HAS_ASSISTANT}" -eq 0 ]; then
-    launchctl asuser "${CONSOLE_UID}" /usr/bin/open "${DASHBOARD_URL}/chat" || true
-    echo "Opened ${DASHBOARD_URL}/chat for ${CONSOLE_USER}"
-fi
-
 echo ""
 echo "Installation complete!"
 echo ""
@@ -230,23 +213,16 @@ if [ "${MCP_REGISTERED:-0}" = "1" ]; then
     # ChatGPT is deliberately not counted: it reaches MCP servers only as
     # remote connectors, so it cannot start this one or see the telescope.
     if [ "${HAS_ASSISTANT}" -eq 1 ]; then
-        echo "You can now run this telescope by asking."
-        echo "  Quit and reopen your AI assistant, then say:"
-        echo "      connect my telescope"
-        echo "  (It needs a restart to notice the new tools.)"
+        echo "Quit and reopen Claude Desktop, then say: set up my telescope"
+        echo "(It only notices new tools when it starts.)"
     else
-        echo "This telescope can be run by asking, if you use an AI assistant."
-        echo "  Install Claude Desktop (https://claude.ai/download), Cursor or"
-        echo "  Windsurf — the telescope is already set up in it — then say:"
-        echo "      connect my telescope"
-        echo ""
-        echo "  ChatGPT will not work for this: it can only reach assistants'"
-        echo "  tools over the internet, and your telescope is on your own"
-        echo "  network where it cannot see it."
+        echo "Install Claude Desktop from https://claude.ai/download, open it,"
+        echo "and say: set up my telescope"
+        echo "Your telescope is already configured inside it."
     fi
     echo ""
 fi
-echo "Talk to it:  ${DASHBOARD_URL}/chat"
+echo "Say to Claude Desktop:  set up my telescope"
 echo "Dashboard:   ${DASHBOARD_URL}"
 echo "Service:     com.telescopenet.nodeagent (gui/${CONSOLE_UID})"
 echo "Logs:        ${LOG_DIR}/node_agent.log"
