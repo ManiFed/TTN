@@ -16,15 +16,12 @@ cd "$(dirname "$0")/../.."   # repo root
 
 VERSION="${VERSION:-1.0.4}"
 APP_NAME="TelescopeNetNode"
-DESKTOP_APP_NAME="TelescopeNet"
 BUNDLE_DIR="dist/${APP_NAME}.app"
-DESKTOP_BUNDLE_DIR="dist/${DESKTOP_APP_NAME}.app"
 CONTENTS="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS}/MacOS"
 RESOURCES_DIR="${CONTENTS}/Resources"
 BUILD_DIR="build/macos"
 DIST_DIR="dist"
-FLUTTER_APP_SOURCE="${FLUTTER_APP_SOURCE:-app/build/macos/Build/Products/Release/boundless_skies.app}"
 
 SIGN_ID=""
 if [ "$1" = "--sign" ]; then
@@ -82,43 +79,13 @@ cp "${BUILD_DIR}/com.boundlessskies.nodeagent.plist" "${RESOURCES_DIR}/com.teles
 cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 [ -f "build/icon.icns" ] && cp "build/icon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-# ── Foreground UI = Flutter member app (NOT the Python node dashboard) ────────
-# The node agent HTML (dashboard.py) is a background service only.
-# Users must open TelescopeNet.app — the Flutter member control surface.
-HAS_DESKTOP_APP=0
-# Accept either product name from Flutter builds
-if [ ! -d "${FLUTTER_APP_SOURCE}" ]; then
-    for candidate in \
-        "app/build/macos/Build/Products/Release/TelescopeNet.app" \
-        "app/build/macos/Build/Products/Release/boundless_skies.app" \
-        "dist/TelescopeNet.app"
-    do
-        if [ -d "${candidate}" ]; then
-            FLUTTER_APP_SOURCE="${candidate}"
-            break
-        fi
-    done
-fi
-if [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" != "${DESKTOP_BUNDLE_DIR}" ]; then
-    echo "Using Flutter member app: ${FLUTTER_APP_SOURCE}"
-    rm -rf "${DESKTOP_BUNDLE_DIR}"
-    cp -R "${FLUTTER_APP_SOURCE}" "${DESKTOP_BUNDLE_DIR}"
-    # Normalize executable/display name expectations for open -a
-    HAS_DESKTOP_APP=1
-elif [ -d "${FLUTTER_APP_SOURCE}" ] && [ "${FLUTTER_APP_SOURCE}" = "${DESKTOP_BUNDLE_DIR}" ]; then
-    HAS_DESKTOP_APP=1
-else
-    echo "ERROR: Flutter member app not found."
-    echo "  Expected one of:"
-    echo "    app/build/macos/Build/Products/Release/TelescopeNet.app"
-    echo "    app/build/macos/Build/Products/Release/boundless_skies.app"
-    echo "    dist/TelescopeNet.app  (from CI artifact)"
-    echo "  Or set FLUTTER_APP_SOURCE=/path/to/TelescopeNet.app"
-    echo ""
-    echo "  Do NOT ship the Python dashboard HTML as the UI."
-    echo "  Build: cd app && flutter build macos --release --dart-define=API_BASE=https://api.thetelescope.net"
-    exit 1
-fi
+# ── No foreground app ─────────────────────────────────────────────────────────
+# The Flutter member app is retired. The interface is the chat page the node
+# agent serves at localhost:5173/chat, plus whichever AI assistant the member
+# already uses -- postinstall.sh registers the telescope with all of them.
+#
+# Shipping the app alongside that would put a second, diverging control surface
+# in /Applications and hand new members the one we are moving away from.
 
 # ── Code signing ───────────────────────────────────────────────────────────────
 if [ -n "${SIGN_ID}" ]; then
@@ -127,12 +94,6 @@ if [ -n "${SIGN_ID}" ]; then
         --sign "${SIGN_ID}" \
         "${BUNDLE_DIR}"
     codesign --verify --deep --strict "${BUNDLE_DIR}"
-    if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
-        codesign --deep --force --options runtime \
-            --sign "${SIGN_ID}" \
-            "${DESKTOP_BUNDLE_DIR}"
-        codesign --verify --deep --strict "${DESKTOP_BUNDLE_DIR}"
-    fi
 else
     echo "Skipping code signing (pass --sign 'Developer ID: ...' to sign)"
 fi
@@ -146,9 +107,6 @@ FINAL_PKG="${DIST_DIR}/${APP_NAME}-${VERSION}-macOS.pkg"
 rm -rf "${PKG_STAGING}"
 mkdir -p "${PKG_STAGING}/Applications"
 cp -r "${BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
-if [ "${HAS_DESKTOP_APP}" -eq 1 ]; then
-    cp -r "${DESKTOP_BUNDLE_DIR}" "${PKG_STAGING}/Applications/"
-fi
 
 # pkgbuild only runs scripts named exactly "preinstall" / "postinstall"
 # (no .sh extension). Stage copies so the repo can keep the .sh names.
@@ -235,6 +193,6 @@ rm -rf "${PKG_STAGING}" "${SCRIPTS_STAGING}" "${COMPONENT_PKG}" "${DIST_DIR}/dis
 echo ""
 echo "=== Build complete ==="
 echo "  Installer:  ${FINAL_PKG}"
-echo "  Desktop app: ${DESKTOP_APP_NAME}.app"
+echo "  Talk to it:  http://localhost:5173/chat (opens after install)"
 echo "  Background service: ${APP_NAME}.app"
 echo ""

@@ -1,8 +1,11 @@
 name: Release macOS installer
 
-# Builds the node agent + the Flutter member app together and publishes the
-# combined installer to GitHub Releases. This is the only path that produces
-# a public download.
+# Builds the node agent and publishes the installer to GitHub Releases. This is
+# the only path that produces a public download.
+#
+# The Flutter member app is retired and is no longer built, signed or shipped:
+# the interface is the chat page the node agent serves at localhost:5173/chat,
+# plus whichever AI assistant the member already uses.
 #
 # Runs automatically on every push to main that touches app/src/build code --
 # NOT just on manually pushed tags. A hotfix session that fixed real bugs but
@@ -86,75 +89,8 @@ jobs:
           path: dist/TelescopeNetNode
           if-no-files-found: error
 
-  flutter-macos:
-    needs: resolve-version
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-version.outputs.tag }}
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.32.4'
-          channel: stable
-      # app/macos is a real, committed Xcode project (configured for App
-      # Store submission with Automatic signing + a real DEVELOPMENT_TEAM),
-      # not regenerated per-run -- so nothing here should touch its content.
-      - working-directory: app
-        run: flutter pub get
-      # CI has no Apple Developer signing certificate, so the Automatic/team
-      # signing that a real distribution build needs would fail here. This
-      # override only applies to this ephemeral checkout: it produces an
-      # unsigned, ad-hoc build for the public installer download, and never
-      # touches the committed project (App Store builds are made locally).
-      - name: Disable code signing for this CI-only build
-        working-directory: app
-        run: |
-          # DEVELOPMENT_TEAM/CODE_SIGN_STYLE are explicit per-target settings
-          # baked into project.pbxproj, which outrank an xcconfig override
-          # for the same keys -- patch those directly (in this checkout
-          # only), then also set the two signing-gate keys, which aren't
-          # set in the pbxproj, via xcconfig.
-          sed -i.bak 's/DEVELOPMENT_TEAM = QTAM997KMW;/DEVELOPMENT_TEAM = "";/g' \
-            macos/Runner.xcodeproj/project.pbxproj
-          sed -i.bak 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' \
-            macos/Runner.xcodeproj/project.pbxproj
-          cat >> macos/Runner/Configs/Release.xcconfig <<'EOF'
-          CODE_SIGN_IDENTITY = -
-          CODE_SIGNING_REQUIRED = NO
-          CODE_SIGNING_ALLOWED = NO
-          EOF
-      - working-directory: app
-        run: |
-          flutter build macos --release \
-            --dart-define=API_BASE=https://api.thetelescope.net \
-            --dart-define=APP_VERSION=${{ needs.resolve-version.outputs.version }}
-      - name: Stage macOS .app
-        run: |
-          SRC=""
-          for candidate in \
-            "app/build/macos/Build/Products/Release/The Telescope Net.app" \
-            app/build/macos/Build/Products/Release/TelescopeNet.app \
-            app/build/macos/Build/Products/Release/boundless_skies.app
-          do
-            if [ -d "$candidate" ]; then SRC="$candidate"; break; fi
-          done
-          if [ -z "$SRC" ]; then
-            echo "No macOS .app found under Release/"; find app/build/macos -name '*.app' 2>/dev/null || true
-            exit 1
-          fi
-          mkdir -p dist
-          rm -rf dist/TelescopeNet.app
-          cp -R "$SRC" dist/TelescopeNet.app
-          ditto -c -k --sequesterRsrc --keepParent dist/TelescopeNet.app dist/TelescopeNet-macos.app.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: telescopenet-macos
-          path: dist/TelescopeNet-macos.app.zip
-          if-no-files-found: error
-
   assemble-and-release:
-    needs: [resolve-version, node-agent-macos, flutter-macos]
+    needs: [resolve-version, node-agent-macos]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -164,25 +100,14 @@ jobs:
         with:
           name: node-agent-macos
           path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: telescopenet-macos
-          path: dist
       - name: Assemble .pkg installer
         env:
           VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           chmod +x dist/TelescopeNetNode
-          unzip -o dist/TelescopeNet-macos.app.zip -d dist
-          FLUTTER_APP_SOURCE="dist/TelescopeNet.app" bash build/macos/build_dmg.sh
+          bash build/macos/build_dmg.sh
           # Stable-named copy so the download link never needs a code change
           cp "dist/TelescopeNetNode-${VERSION}-macOS.pkg" "dist/TelescopeNetNode-macOS.pkg"
-      - name: Checksum the in-app updater asset
-        run: |
-          # The app's self-updater downloads this zip directly (no admin
-          # password, unlike the .pkg) and verifies it against this checksum
-          # before ever swapping it into a running .app bundle.
-          shasum -a 256 dist/TelescopeNet-macos.app.zip > dist/TelescopeNet-macos.app.zip.sha256
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -192,8 +117,6 @@ jobs:
           gh release create "${TAG}" \
             "dist/TelescopeNetNode-${VERSION}-macOS.pkg" \
             "dist/TelescopeNetNode-macOS.pkg" \
-            "dist/TelescopeNet-macos.app.zip" \
-            "dist/TelescopeNet-macos.app.zip.sha256" \
             --repo "${{ github.repository }}" \
             --title "Node Agent ${TAG}" \
             --generate-notes \

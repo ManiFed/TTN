@@ -76,3 +76,44 @@ class PostinstallTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BUILD_DMG = (REPO / "build/macos/build_dmg.sh").read_text()
+RELEASE = (REPO / ".github/workflows/release.yml").read_text()
+
+
+class NoDesktopAppTest(unittest.TestCase):
+    """The desktop app is retired, so nothing should build, sign, stage or
+    publish it. Two control surfaces in /Applications is worse than one, and
+    the one being shipped would be the one we are moving away from."""
+
+    def test_the_package_does_not_stage_the_app(self):
+        for marker in ("HAS_DESKTOP_APP", "FLUTTER_APP_SOURCE",
+                       "DESKTOP_BUNDLE_DIR"):
+            self.assertNotIn(marker, BUILD_DMG)
+
+    def test_the_build_no_longer_fails_without_a_flutter_app(self):
+        """It used to exit 1 if the app was missing, which would now break
+        every release."""
+        self.assertNotIn("Flutter member app not found", BUILD_DMG)
+
+    def test_the_release_does_not_build_flutter(self):
+        """The job, not the word -- the header comment legitimately explains
+        why the app is no longer built."""
+        import yaml
+        jobs = yaml.safe_load(RELEASE)["jobs"]
+        self.assertNotIn("flutter-macos", jobs)
+        for name, job in jobs.items():
+            steps = yaml.dump(job.get("steps", []))
+            self.assertNotIn("flutter build", steps, f"{name} still builds it")
+            self.assertNotIn("subosito/flutter-action", steps)
+
+    def test_the_release_publishes_only_the_installer(self):
+        self.assertNotIn("TelescopeNet-macos.app.zip", RELEASE)
+
+    def test_the_node_agent_is_still_built_and_shipped(self):
+        self.assertIn("TelescopeNetNode", BUILD_DMG)
+        self.assertIn("node-agent-macos", RELEASE)
+
+    def test_the_build_points_at_the_chat_page(self):
+        self.assertIn("/chat", BUILD_DMG)

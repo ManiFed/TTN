@@ -185,8 +185,16 @@ def _fetch_latest_version() -> str | None:
 
 
 def _fetch_update_checksum() -> str | None:
-    """sha256 of the current macOS update zip, so the app can verify the
-    download before it ever swaps it into a running .app bundle."""
+    """sha256 of the macOS update zip, for the desktop app's self-updater.
+
+    The desktop app is retired and releases no longer publish that asset, so
+    this is expected to find nothing and the absence is logged at debug rather
+    than as a warning -- it would otherwise fire on every version check for a
+    condition that is now correct. Kept rather than deleted so an older
+    installed app still gets a truthful answer (no update available) instead of
+    a 500, and so the endpoint's shape does not change under clients that are
+    still out there.
+    """
     now = _time.time()
     if _latest_version_cache["macos_sha256"] and now - _latest_version_cache["checked_at"] < _LATEST_VERSION_TTL:
         return _latest_version_cache["macos_sha256"]
@@ -197,7 +205,7 @@ def _fetch_update_checksum() -> str | None:
         # `shasum -a 256` format: "<hex digest>  <filename>"
         sha256 = resp.text.strip().split()[0]
     except Exception as exc:
-        logger.warning("Could not fetch macOS update checksum: %s", exc)
+        logger.debug("No macOS update checksum published (expected): %s", exc)
         return _latest_version_cache["macos_sha256"]
     _latest_version_cache["macos_sha256"] = sha256 or None
     return _latest_version_cache["macos_sha256"]
