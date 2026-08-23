@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 
 from ..client import AgentClient, ApiError, CloudClient, encode_path
+from .star_catalog import CATALOG_CHOICES, catalog_installed
 
 
 #: Discovery is a UDP broadcast to 255.255.255.255:32227, which by construction
@@ -209,7 +210,7 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
                            "Telescope reports connected." if online else
                            "Telescope has not reported connected yet."))
 
-        return {
+        result = {
             "connected": online,
             "node_id": node_id,
             "steps": steps,
@@ -223,6 +224,17 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
                 "if it does not come up."
             ),
         }
+        if online and not catalog_installed():
+            result["next_step"] = "install_star_catalog"
+            result["star_catalog_choice"] = CATALOG_CHOICES
+            result["detail"] += (
+                "\n\nOne more thing: no ASTAP star catalog is installed yet, "
+                "so plate solving will fall back to a less accurate "
+                "pointing-based fix. Ask which size to install — D50 (~200 "
+                "MB, most setups) or D80 (~1.25 GB, narrow-field) — then call "
+                "install_star_catalog with that choice."
+            )
+        return result
 
     @server.tool()
     def diagnose(node_id: str = "") -> dict:
@@ -420,7 +432,7 @@ def register_standalone(server, agent: AgentClient) -> None:
                            "Telescope reports connected." if online else
                            "Telescope has not reported connected yet."))
 
-        return {
+        result = {
             "connected": online,
             "steps": steps,
             "detail": (
@@ -432,3 +444,14 @@ def register_standalone(server, agent: AgentClient) -> None:
                 "does not come up."
             ),
         }
+        if online and not catalog_installed():
+            result["next_step"] = "install_star_catalog"
+            result["star_catalog_choice"] = CATALOG_CHOICES
+            result["detail"] += (
+                "\n\nOne more thing: no ASTAP star catalog is installed yet, "
+                "so plate solving will fall back to a less accurate "
+                "pointing-based fix. Ask which size to install — D50 (~200 "
+                "MB, most setups) or D80 (~1.25 GB, narrow-field) — then call "
+                "install_star_catalog with that choice."
+            )
+        return result

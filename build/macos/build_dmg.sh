@@ -130,34 +130,12 @@ pkgbuild \
 RESOURCES_SRC="${BUILD_DIR}/resources"
 mkdir -p "${RESOURCES_SRC}"
 
-# Write welcome screen if absent
+# The real welcome screen is checked into the repo, not generated here — see
+# build/macos/resources/welcome.html. Fail loudly if it ever goes missing
+# rather than silently falling back to stale, hand-rolled copy.
 if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
-    cat > "${RESOURCES_SRC}/welcome.html" <<'HTML'
-<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"/></head>
-<body style="font-family: -apple-system, Helvetica; font-size: 13px; color: #1a1a1a; padding: 20px;">
-<h2 style="color:#1a1a1a;">Welcome to The Telescope Net</h2>
-<p>This installer sets up the <strong>Telescope Net desktop app</strong> and its always-on local node service.</p>
-<p>Your AI is your control surface. The node service runs silently in the background, connecting your telescope to the TTN network and contributing science-quality photometry to the global variable star record.</p>
-<p><strong>Works with your telescope</strong></p>
-<p>TTN supports a wide range of equipment, including:</p>
-<ul>
-<li><strong>Smart telescopes</strong> — ZWO Seestar S50 &amp; S30, Vaonis Vespera / Vespera II / Vespera Pro / Stellina / Hyperia, DwarfLab Dwarf II / Dwarf 3 / Dwarf S, Unistellar eVscope / eVscope 2 / eQuinox / eQuinox 2 / Odyssey, Celestron Origin</li>
-<li><strong>Traditional &amp; GOTO setups</strong> — Celestron, Meade, Sky-Watcher, William Optics, Takahashi, and many more via ALPACA/ASCOM</li>
-</ul>
-<p>After installation, the setup wizard will walk you through selecting your telescope and downloading the star catalog needed for accurate plate solving (~6 GB, downloaded in the background).</p>
-<p><strong>Requirements</strong></p>
-<ul>
-<li>macOS 11 or later</li>
-<li>Your telescope connected to your local WiFi or via USB</li>
-</ul>
-<p>Everything else — Python, the plate solver, all science libraries — is bundled. No separate downloads required.</p>
-<p style="color:#555;">After installation, The Telescope Net desktop app opens automatically. It connects to the background node service on this Mac.</p>
-<p style="color:#555;">Sign in and tap "Connect telescope" to link this computer to your member account. There is no activation code to enter.</p>
-</body>
-</html>
-HTML
+    echo "ERROR: welcome.html not found at ${RESOURCES_SRC}/welcome.html"
+    exit 1
 fi
 
 cat > "${DIST_DIR}/distribution.xml" <<EOF
