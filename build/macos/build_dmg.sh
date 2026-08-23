@@ -143,6 +143,10 @@ cat > "${DIST_DIR}/distribution.xml" <<EOF
 <installer-gui-script minSpecVersion="1">
     <title>The Telescope Net ${VERSION}</title>
     <welcome file="welcome.html" mime-type="text/html"/>
+    <!-- The last thing a member sees. Everything postinstall.sh echoes goes to
+         an installer log nobody opens, so without this the install ends on
+         macOS's generic "successful" and no idea what to do next. -->
+    <conclusion file="conclusion.html" mime-type="text/html"/>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
     <choices-outline>
         <line choice="default">

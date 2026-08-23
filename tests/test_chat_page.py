@@ -157,3 +157,93 @@ class ResetTest(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NextStepTest(_Base):
+    """One place decides what to do now, and every screen displays it.
+
+    Each screen used to end by assuming the member would work out the next move
+    themselves. They do not: the person who built this said he barely knew what
+    came next. So the node answers that question from its own state, and the
+    page leads with the answer rather than a blank prompt.
+    """
+
+    def _next(self, telescope=False, camera=False, linked=False):
+        from unittest.mock import MagicMock
+        cloud = MagicMock() if linked else None
+        if cloud is not None:
+            cloud.credentials.return_value = ("node_1", "key")
+        state = {"telescope": {"connected": telescope},
+                 "camera": {"connected": camera}}
+        with patch.object(dash, "_cloud", cloud), \
+             patch.dict(dash._state, state):
+            return self.client.get("/api/chat/next").get_json()
+
+    def test_no_telescope_asks_them_to_connect_one(self):
+        step = self._next()
+        self.assertEqual(step["state"], "no_telescope")
+        self.assertEqual(step["say"], "connect my telescope")
+
+    def test_no_telescope_warns_about_station_mode(self):
+        """The most common reason it will not be found, and the telescope's own
+        app will not mention it."""
+        self.assertIn("Station Mode", self._next()["detail"])
+
+    def test_a_connected_but_unlinked_telescope_asks_for_an_account(self):
+        step = self._next(telescope=True)
+        self.assertEqual(step["state"], "not_linked")
+        self.assertIn("account", step["headline"].lower() + step["detail"].lower())
+
+    def test_a_linked_telescope_with_no_camera_offers_to_diagnose(self):
+        step = self._next(telescope=True, linked=True)
+        self.assertEqual(step["state"], "no_camera")
+        self.assertEqual(step["say"], "is anything wrong?")
+
+    def test_a_working_telescope_says_it_observes_on_its_own(self):
+        step = self._next(telescope=True, camera=True, linked=True)
+        self.assertEqual(step["state"], "ready")
+        self.assertIn("on its own", step["headline"])
+
+    def test_there_is_always_something_to_say(self):
+        for kwargs in ({}, {"telescope": True}, {"telescope": True, "linked": True},
+                       {"telescope": True, "camera": True, "linked": True}):
+            step = self._next(**kwargs)
+            self.assertTrue(step["say"], f"no next action for {kwargs}")
+            self.assertTrue(step["headline"], f"no headline for {kwargs}")
+
+    def test_a_failure_still_gives_them_something_to_do(self):
+        """Never leave the page with nothing to say."""
+        with patch.object(dash, "_next_step", side_effect=RuntimeError("boom")):
+            step = self.client.get("/api/chat/next").get_json()
+        self.assertTrue(step["say"])
+        self.assertEqual(step["state"], "unknown")
+
+    def test_installed_assistants_are_reported(self):
+        with patch("telescope_mcp.register_client.installed_clients",
+                   return_value=["Claude Desktop"]):
+            self.assertIn("Claude Desktop", self._next()["assistants"])
+
+
+class NextStepPageTest(_Base):
+
+    def setUp(self):
+        super().setUp()
+        self.body = self.client.get("/chat").get_data(as_text=True)
+
+    def test_the_page_leads_with_the_next_step(self):
+        self.assertIn('id="next"', self.body)
+        self.assertIn("/api/chat/next", self.body)
+
+    def test_the_next_step_is_a_labelled_region(self):
+        self.assertIn('aria-labelledby="next-head"', self.body)
+
+    def test_it_offers_a_button_that_says_the_thing(self):
+        self.assertIn("next-do", self.body)
+
+    def test_it_refreshes_after_every_turn(self):
+        """The answer changes the moment anything actually happens."""
+        self.assertGreaterEqual(self.body.count("showNext()"), 2)
+
+    def test_it_tells_them_to_restart_their_assistant(self):
+        """Nobody restarts an app because a terminal said so."""
+        self.assertIn("only notices new", self.body)

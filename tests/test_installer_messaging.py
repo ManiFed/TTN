@@ -157,3 +157,34 @@ class OpeningTest(unittest.TestCase):
     def test_it_says_what_to_do_if_the_agent_never_came_up(self):
         self.assertIn("still", POSTINSTALL)
         self.assertIn("/chat", POSTINSTALL)
+
+
+CONCLUSION = (REPO / "build/macos/resources/conclusion.html").read_text()
+
+
+class ConclusionTest(unittest.TestCase):
+    """The last thing a member sees.
+
+    Everything postinstall.sh echoes goes to an installer log nobody opens, so
+    without this pane the install ends on macOS's generic "successful" and no
+    indication of what to do next.
+    """
+
+    def test_the_installer_shows_a_conclusion_pane(self):
+        self.assertIn("<conclusion", BUILD_DMG)
+        self.assertIn("conclusion.html", BUILD_DMG)
+
+    def test_it_says_exactly_what_to_say(self):
+        self.assertIn("connect my telescope", CONCLUSION)
+
+    def test_it_gives_the_address_in_case_nothing_opened(self):
+        self.assertIn("localhost:5173/chat", CONCLUSION)
+
+    def test_it_leads_with_station_mode(self):
+        self.assertIn("Station Mode", CONCLUSION)
+
+    def test_it_tells_assistant_users_to_restart(self):
+        self.assertIn("Quit and reopen", CONCLUSION)
+
+    def test_it_says_where_to_go_when_stuck(self):
+        self.assertIn("info@boundlessskies.org", CONCLUSION)

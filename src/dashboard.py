@@ -4116,6 +4116,12 @@ _CHAT_PAGE = r"""<!DOCTYPE html>
        background:var(--accent);margin-right:7px;animation:pulse 1.4s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
   @media (prefers-reduced-motion: reduce){ .dot{animation:none;opacity:.7} }
+  .next{margin:22px 22px 0;padding:20px 22px;border-radius:16px;max-width:70ch;
+        background:rgba(143,217,255,.07);border:1px solid rgba(143,217,255,.22)}
+  .next h2{margin:0 0 6px;font-size:17px;font-weight:600;letter-spacing:-.01em}
+  .next p{margin:0;color:var(--ink-2);font-size:14.5px}
+  .next .do{margin-top:14px;padding:11px 20px;font-size:15px}
+  .next .assist{margin-top:12px;font-size:13px;color:var(--ink-3)}
   .suggestions{display:flex;gap:8px;flex-wrap:wrap;padding:0 22px 4px}
   .suggestions button{background:transparent;border:1px solid var(--line);
        color:var(--ink-2);font-size:13.5px;font-weight:400;padding:8px 14px}
@@ -4129,13 +4135,14 @@ _CHAT_PAGE = r"""<!DOCTYPE html>
     </p>
   </header>
 
-  <main id="log" role="log" aria-live="polite" aria-label="Conversation" tabindex="0">
-    <div class="turn">
-      <p class="who">Telescope</p>
-      <p class="said">Ask me anything about your telescope. If you are just
-starting out, say <em>connect my telescope</em>.</p>
-    </div>
-  </main>
+  <section id="next" class="next" aria-labelledby="next-head" hidden>
+    <h2 id="next-head">Working out where you are&hellip;</h2>
+    <p id="next-detail"></p>
+    <button type="button" id="next-do" class="do"></button>
+    <p id="next-assist" class="assist"></p>
+  </section>
+
+  <main id="log" role="log" aria-live="polite" aria-label="Conversation" tabindex="0"></main>
 
   <div class="suggestions" id="suggestions" aria-label="Suggestions">
     <button type="button" data-say="connect my telescope">connect my telescope</button>
@@ -4244,6 +4251,7 @@ starting out, say <em>connect my telescope</em>.</p>
       busy = false;
       send.disabled = false;
       box.focus();
+      showNext();
     });
   }
 
@@ -4257,6 +4265,36 @@ starting out, say <em>connect my telescope</em>.</p>
     if (b) ask(b.getAttribute('data-say'));
   });
 
+  // What to do now. Refreshed after every turn, because the answer changes as
+  // soon as anything actually happens.
+  function showNext(){
+    fetch('/api/chat/next').then(function(r){ return r.json(); })
+      .then(function(n){
+        var box = document.getElementById('next');
+        document.getElementById('next-head').textContent = n.headline || '';
+        document.getElementById('next-detail').textContent = n.detail || '';
+        var go = document.getElementById('next-do');
+        if (n.say) {
+          go.textContent = 'Say \u201C' + n.say + '\u201D';
+          go.onclick = function(){ ask(n.say); };
+          go.hidden = false;
+        } else {
+          go.hidden = true;
+        }
+        var assist = document.getElementById('next-assist');
+        if (n.assistants && n.assistants.length) {
+          assist.textContent = 'Your telescope is also set up in '
+            + n.assistants.join(' and ')
+            + '. Quit and reopen it to use it there \u2014 it only notices new '
+            + 'tools on restart. Either way works.';
+        } else {
+          assist.textContent = '';
+        }
+        box.hidden = false;
+      }).catch(function(){});
+  }
+
+  showNext();
   fetch('/api/chat/credits').then(function(r){ return r.json(); })
     .then(showCredit).catch(function(){});
 })();
@@ -4291,6 +4329,98 @@ def _chat_conversation():
 
             _chat_convo = Conversation(send, build_server())
         return _chat_convo
+
+
+def _next_step() -> dict:
+    """What this member should do right now, and what happens after that.
+
+    Every screen ends by handing the person to the next one, and until now each
+    of those handoffs assumed they would work out the next move themselves.
+    They do not -- the person who built this barely does. So one place decides,
+    from the node's actual state, and everything else displays what it says.
+
+    Ordered by what blocks what: no telescope is useless without an account,
+    and an account is useless if the telescope was never found.
+    """
+    from telescope_mcp.register_client import installed_clients
+
+    assistants = []
+    try:
+        assistants = installed_clients()
+    except Exception:
+        pass
+
+    linked = False
+    node_id = ""
+    try:
+        if _cloud is not None:
+            node_id, key = _cloud.credentials()
+            linked = bool(node_id and key)
+    except Exception:
+        pass
+
+    with _state_lock:
+        scope = bool(_state.get("telescope", {}).get("connected"))
+        camera = bool(_state.get("camera", {}).get("connected"))
+
+    step = {"assistants": assistants, "linked": linked,
+            "telescope_connected": scope, "node_id": node_id}
+
+    if not scope:
+        step.update({
+            "state": "no_telescope",
+            "headline": "Let's find your telescope.",
+            "say": "connect my telescope",
+            "detail": ("First check it is on your home Wi-Fi — in its own app "
+                       "that is called Station Mode. Out of the box most smart "
+                       "telescopes make their own network, and while they do "
+                       "this computer cannot see them."),
+        })
+        return step
+
+    if not linked:
+        step.update({
+            "state": "not_linked",
+            "headline": "Your telescope is connected. Now link it to an account.",
+            "say": "connect my telescope",
+            "detail": ("This opens a browser page where you can sign in or "
+                       "make an account. It takes a moment, and then your "
+                       "measurements start counting towards the network."),
+        })
+        return step
+
+    if not camera:
+        step.update({
+            "state": "no_camera",
+            "headline": "The telescope is linked, but its camera has not reported in.",
+            "say": "is anything wrong?",
+            "detail": "I can read the logs and tell you what is missing.",
+        })
+        return step
+
+    step.update({
+        "state": "ready",
+        "headline": "Everything is connected. Your telescope observes on its own tonight.",
+        "say": "what's the plan tonight?",
+        "detail": ("You do not have to be awake for any of it. Ask in the "
+                   "morning to see what it measured and imaged."),
+    })
+    return step
+
+
+@app.route("/api/chat/next")
+def api_chat_next():
+    """The next thing to do, so no screen has to guess."""
+    try:
+        return jsonify(_next_step())
+    except Exception as exc:
+        logger.exception("Could not work out the next step")
+        # Never leave the page with nothing to say.
+        return jsonify({"state": "unknown",
+                        "headline": "Let's see where your telescope is up to.",
+                        "say": "is anything wrong?",
+                        "detail": f"({type(exc).__name__})",
+                        "assistants": []})
 
 
 @app.route("/chat")
