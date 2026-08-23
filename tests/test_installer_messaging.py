@@ -170,7 +170,12 @@ class ConclusionTest(unittest.TestCase):
 
     def test_it_tells_them_to_restart_claude(self):
         """The invisible step: it only notices new tools on start."""
-        self.assertIn("quit and reopen it", CONCLUSION.lower())
+        self.assertIn("quit it completely and open it", CONCLUSION.lower())
+
+    def test_it_covers_claude_dropping_the_telescope_on_the_way_out(self):
+        """The first real install failed this way: Claude rewrote its settings
+        and took our entry with it, so the member had no tools at all."""
+        self.assertIn("puts it back", CONCLUSION)
 
     def test_it_says_where_to_go_when_stuck(self):
         self.assertIn("info@boundlessskies.org", CONCLUSION)

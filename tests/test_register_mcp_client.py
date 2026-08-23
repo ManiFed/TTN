@@ -347,3 +347,66 @@ class MultiClientTest(_Tmp):
             ok, msg = reg.remove_all()
         self.assertTrue(ok)
         self.assertEqual(len(removed), len(reg.CLIENTS))
+
+
+class SelfHealTest(_Tmp):
+    """Registering once is not enough.
+
+    Claude Desktop keeps its own settings in the same file and rewrites it from
+    memory, so an entry written while it is running is dropped again the next
+    time it saves -- silently. The first real install hit exactly that: the
+    telescope was registered, Claude overwrote the file, and the member asked
+    to connect their telescope and got generic advice from an assistant that
+    had no tools at all.
+    """
+
+    def _ensure(self):
+        from unittest.mock import patch
+        with patch.object(reg, "config_path", return_value=self.path):
+            return reg.ensure_registered("agent", DATA_DIR)
+
+    def test_it_puts_the_entry_back_after_claude_drops_it(self):
+        self.write({"mcpServers": {"telescope-net": {"command": "agent"}}})
+        # What Claude Desktop leaves behind: its own keys, ours gone.
+        self.write({"coworkUserFilesPath": "/x", "preferences": {}})
+        self.assertTrue(self._ensure())
+        self.assertIn("telescope-net", self.read()["mcpServers"])
+
+    def test_it_preserves_whatever_claude_wrote(self):
+        self.write({"coworkUserFilesPath": "/x", "preferences": {"theme": "dark"}})
+        self._ensure()
+        data = self.read()
+        self.assertEqual(data["coworkUserFilesPath"], "/x")
+        self.assertEqual(data["preferences"], {"theme": "dark"})
+
+    def test_it_does_nothing_when_the_entry_is_already_right(self):
+        self._ensure()
+        before = self.path.read_text()
+        self.assertFalse(self._ensure(), "rewrote an already-correct config")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_it_updates_a_stale_entry(self):
+        """An upgrade that moves the binary must not leave a dead command."""
+        reg.register("/old/agent", DATA_DIR, self.path)
+        self.assertTrue(self._ensure())
+        self.assertEqual(self.read()["mcpServers"]["telescope-net"]["command"],
+                         "agent")
+
+    def test_it_leaves_other_servers_alone(self):
+        self.write({"mcpServers": {"filesystem": {"command": "npx"}}})
+        self._ensure()
+        self.assertIn("filesystem", self.read()["mcpServers"])
+
+    def test_it_refuses_a_config_it_cannot_parse(self):
+        """Never rewrite a file we cannot read -- it may list servers we
+        cannot see."""
+        self.write('{"mcpServers": {"filesystem"')
+        self.assertFalse(self._ensure())
+        self.assertIn('{"mcpServers": {"filesystem"', self.path.read_text())
+
+    def test_a_member_who_opted_out_stays_out(self):
+        """Removing the telescope from Claude is a decision, not a fault to
+        repair every five minutes."""
+        (self.path.parent / reg.OPT_OUT_MARKER).write_text("")
+        self.assertFalse(self._ensure())
+        self.assertFalse(self.path.exists())
