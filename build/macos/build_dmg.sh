@@ -181,7 +181,7 @@ if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
 <body style="font-family: -apple-system, Helvetica; font-size: 13px; color: #1a1a1a; padding: 20px;">
 <h2 style="color:#1a1a1a;">Welcome to The Telescope Net</h2>
 <p>This installer sets up the <strong>Telescope Net desktop app</strong> and its always-on local node service.</p>
-<p>The app is your control surface. The node service runs silently in the background, connecting your telescope to the TTN network and contributing science-quality photometry to the global variable star record.</p>
+<p>Your AI is your control surface. The node service runs silently in the background, connecting your telescope to the TTN network and contributing science-quality photometry to the global variable star record.</p>
 <p><strong>Works with your telescope</strong></p>
 <p>TTN supports a wide range of equipment, including:</p>
 <ul>
@@ -193,7 +193,6 @@ if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
 <ul>
 <li>macOS 11 or later</li>
 <li>Your telescope connected to your local WiFi or via USB</li>
-<li>A TTN member account (sign up at <strong>app.thetelescope.net</strong>)</li>
 </ul>
 <p>Everything else — Python, the plate solver, all science libraries — is bundled. No separate downloads required.</p>
 <p style="color:#555;">After installation, The Telescope Net desktop app opens automatically. It connects to the background node service on this Mac.</p>
