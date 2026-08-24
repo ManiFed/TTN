@@ -320,7 +320,7 @@
     <span class="brand-type"><strong>TTN</strong><small>The Telescope Net</small></span>
   </a>
   <nav class="topnav" aria-label="Primary navigation">
-    <a href="#idea">The network</a><a href="#how">How it works</a><a href="#control">Talk to it</a><a href="#science">The science</a><a class="nav-cta" href="#join">Join TTN</a>
+    <a href="#control">Talk to it</a><a href="#uses">What it's for</a><a href="#idea">The network</a><a href="#how">How it works</a><a href="#science">The science</a><a class="nav-cta" href="#join">Join TTN</a>
   </nav>
   <div class="progress" id="progress"></div>
   <div class="utcclock" id="utcclock"></div>
@@ -337,7 +337,7 @@
           <p class="sub">So you can point it at real research — eruptions, occultations, discoveries — without touching a driver, an app, or a line of code. <em>Say what you want. The network does the rest.</em></p>
           <div class="cta-row">
             <a class="btn btn-p" href="#join">Put your telescope on the map</a>
-            <a class="btn btn-g" href="#why">Tour the network ↓</a>
+            <a class="btn btn-g" href="#control">See it in action ↓</a>
           </div>
           <div class="hero-stats" aria-label="TTN network highlights">
             <div class="hero-stat"><b>Plain language</b><span>No dashboards, no config</span></div>
@@ -349,9 +349,44 @@
       <div class="cue"><span>scroll to lift off</span><span class="ln"></span></div>
     </section>
 
-    <!-- 1 — why it matters -->
+    <!-- 1 — the interface, up close -->
+    <section class="stop" id="control" data-ra="66.0" data-dec="15.5" data-fov="6" data-side="-1" data-time="">
+      <span class="section-index"><b>01</b> Start by talking to it</span>
+      <div class="sticky"><div class="wrap split">
+        <div></div>
+        <div class="panel glass">
+          <span class="kicker">Plain language</span><h2 style="margin-top:16px">Talk to your telescope.</h2>
+          <p class="lead">This is the whole interface: the node software runs a small server on your own computer, and your AI assistant talks to it. You run the whole rig by asking &mdash; no dashboards to learn, no config files to edit, no drivers to fight.</p>
+          <ol class="steps">
+            <li><span class="nm">1</span><span class="tx"><b>Nothing to set up.</b> The installer introduces your telescope to Claude Desktop. Open it and the tools are already there &mdash; no config files, no keys to paste.</span></li>
+            <li><span class="nm">2</span><span class="tx"><b>&ldquo;Connect my telescope.&rdquo;</b> It searches your network, links the scope to your account, and reports back when it&rsquo;s online. Usually under a minute.</span></li>
+            <li><span class="nm">3</span><span class="tx"><b>&ldquo;What&rsquo;s the plan tonight?&rdquo;</b> Every day it proposes a night&rsquo;s work, research first. Accept it, reshape it, or say nothing &mdash; the recommendation runs on its own at dusk.</span></li>
+            <li><span class="nm">4</span><span class="tx"><b>&ldquo;Two hours of research, then image the Whirlpool.&rdquo;</b> The measurements go to the network. The rest of the night is yours.</span></li>
+            <li><span class="nm">5</span><span class="tx"><b>&ldquo;Stop.&rdquo;</b> It stops &mdash; in about a second. Mid-exposure, mid-slew, whenever. Weather stops it too, without being asked.</span></li>
+            <li><span class="nm">6</span><span class="tx"><b>&ldquo;Show me.&rdquo;</b> Come back in the morning for the images and what the night measured.</span></li>
+          </ol>
+          <div class="cost">It stays on your machine. The telescope is reached over <b>your own network</b>, never exposed to the internet, and anything that moves the mount asks before it moves it.</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 1.5 — the other things people ask for -->
+    <section class="stop center" id="uses" data-ra="90" data-dec="10" data-fov="8" data-side="0" data-time="">
+      <div class="sticky"><div class="wrap">
+        <span class="kicker">Same sentence, different night</span>
+        <h2 style="font-size:clamp(30px,4vw,52px); margin-top:16px; letter-spacing:-.04em">One interface. Not just for research.</h2>
+        <p style="margin:18px auto 0; max-width:54ch; font-size:17px; line-height:1.55; color:var(--ink-2)">Research is what the network is built to do first — but the same plain-language interface runs everything else you'd want from a telescope, too.</p>
+        <div class="trust-list" style="width:100%; max-width:820px; margin-top:30px; text-align:left">
+          <div class="trust-item"><b>Research, on autopilot</b><span>&ldquo;What's the plan tonight?&rdquo; The network schedules real AAVSO-grade variable-star and transient work and submits it under your name.</span></div>
+          <div class="trust-item"><b>Imaging, for you</b><span>&ldquo;Then image the Whirlpool.&rdquo; Point it at anything you want to see — same conversation, just a personal target instead of a research one.</span></div>
+          <div class="trust-item"><b>Status, on demand</b><span>&ldquo;Is it clear tonight?&rdquo; &ldquo;Show me last night's images.&rdquo; &ldquo;Is my telescope okay?&rdquo; Weather, history, and health, without opening a dashboard.</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 2 — why it matters -->
     <section class="stop" id="why" data-ra="305.5" data-dec="40.7" data-fov="5.5" data-side="1" data-time="">
-      <span class="section-index"><b>01</b> Why it's worth talking to</span>
+      <span class="section-index"><b>02</b> Why it's worth talking to</span>
       <div class="sticky"><div class="chapter-visual" aria-hidden="true">
         <span class="v-kicker">SS Cygni · brightness over six hours</span>
         <svg viewBox="0 0 640 360" preserveAspectRatio="none">
@@ -375,9 +410,9 @@
       </div></div>
     </section>
 
-    <!-- 2 — the idea -->
+    <!-- 3 — the idea -->
     <section class="stop" id="idea" data-ra="307" data-dec="39" data-fov="9" data-side="-1" data-time="">
-      <span class="section-index"><b>02</b> What your one sentence joins</span>
+      <span class="section-index"><b>03</b> What your one sentence joins</span>
       <div class="sticky"><div class="chapter-visual network" aria-hidden="true">
         <span class="v-kicker">Distributed observing · longitude handoff</span>
         <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
@@ -400,13 +435,13 @@
       </div></div>
     </section>
 
-    <!-- 3 — how to join (concrete steps) -->
+    <!-- 4 — how to join (concrete steps) -->
     <section class="stop" id="how" data-ra="56.75" data-dec="24.11" data-fov="4" data-side="1" data-time="">
-      <span class="section-index"><b>03</b> Set up once, then just talk</span>
+      <span class="section-index"><b>04</b> Set up once, then just talk</span>
       <div class="sticky"><div class="wrap split">
         <div></div>
         <div class="panel glass">
-          <span class="kicker">Setting it up</span><h2 style="margin-top:16px">Connect once. Contribute nightly.</h2>
+          <span class="kicker">The setup checklist</span><h2 style="margin-top:16px">Connect once. Contribute nightly.</h2>
           <ol class="steps">
             <li><span class="nm">1</span><span class="tx"><b>Use the telescope you have, or get a small smart telescope.</b> Seestar, Vespera, Dwarf, Unistellar, Celestron Origin, and many ALPACA/ASCOM setups can join. No telescope budget? We help members look for funding.</span></li>
             <li><span class="nm">2</span><span class="tx"><b>Install the node software once.</b> Then just ask your AI assistant to connect your telescope — it finds it, links your account, and offers to install the star catalog for plate solving. No code to copy.</span></li>
@@ -417,27 +452,7 @@
       </div></div>
     </section>
 
-    <section class="stop" id="control" data-ra="66.0" data-dec="15.5" data-fov="6" data-side="-1" data-time="">
-      <span class="section-index"><b>04</b> The interface, in full</span>
-      <div class="sticky"><div class="wrap split">
-        <div></div>
-        <div class="panel glass">
-          <span class="kicker">Plain language</span><h2 style="margin-top:16px">Talk to your telescope.</h2>
-          <p class="lead">This is the whole interface: the node software runs a small server on your own computer, and your AI assistant talks to it. You run the whole rig by asking &mdash; no dashboards to learn, no config files to edit, no drivers to fight.</p>
-          <ol class="steps">
-            <li><span class="nm">1</span><span class="tx"><b>Nothing to set up.</b> The installer introduces your telescope to Claude Desktop. Open it and the tools are already there &mdash; no config files, no keys to paste.</span></li>
-            <li><span class="nm">2</span><span class="tx"><b>&ldquo;Connect my telescope.&rdquo;</b> It searches your network, links the scope to your account, and reports back when it&rsquo;s online. Usually under a minute.</span></li>
-            <li><span class="nm">3</span><span class="tx"><b>&ldquo;What&rsquo;s the plan tonight?&rdquo;</b> Every day it proposes a night&rsquo;s work, research first. Accept it, reshape it, or say nothing &mdash; the recommendation runs on its own at dusk.</span></li>
-            <li><span class="nm">4</span><span class="tx"><b>&ldquo;Two hours of research, then image the Whirlpool.&rdquo;</b> The measurements go to the network. The rest of the night is yours.</span></li>
-            <li><span class="nm">5</span><span class="tx"><b>&ldquo;Stop.&rdquo;</b> It stops &mdash; in about a second. Mid-exposure, mid-slew, whenever. Weather stops it too, without being asked.</span></li>
-            <li><span class="nm">6</span><span class="tx"><b>&ldquo;Show me.&rdquo;</b> Come back in the morning for the images and what the night measured.</span></li>
-          </ol>
-          <div class="cost">It stays on your machine. The telescope is reached over <b>your own network</b>, never exposed to the internet, and anything that moves the mount asks before it moves it.</div>
-        </div>
-      </div></div>
-    </section>
-
-    <!-- 3.5 — what we research -->
+    <!-- 4.5 — what we research -->
     <section class="stop center" id="research" data-ra="83.82" data-dec="-5.39" data-fov="9" data-side="0" data-time="">
       <div class="sticky"><div class="wrap">
         <span class="kicker">What &ldquo;what&rsquo;s the plan tonight&rdquo; points at</span>
@@ -759,8 +774,8 @@
       ex.fillStyle=bgnd; ex.beginPath(); ex.ellipse(nx,ny+n[2]*8,n[2]*28,n[2]*10,0,0,6.28); ex.fill();
       drawNode(nx,ny,n[2],t,phases[i],hover);
     });
-    // acquisition scan line — appears on section 5 (what it catches) to suggest imaging
-    if(curSection===5){
+    // acquisition scan line — appears on section 7 (what it catches) to suggest imaging
+    if(curSection===7){
       var scanY=hz*0.5+Math.sin(t*0.55)*hz*0.35;
       var sl=ex.createLinearGradient(0,scanY-1,0,scanY+1);
       sl.addColorStop(0,'rgba(143,217,255,0)'); sl.addColorStop(.5,'rgba(143,217,255,0.12)'); sl.addColorStop(1,'rgba(143,217,255,0)');
