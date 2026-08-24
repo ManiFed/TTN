@@ -1,13 +1,20 @@
 # The Telescope Net — Node Software & Cloud
 
-Seestar owners donate their telescope's nights. The pipeline schedules observations of
-scientifically valuable targets, processes the data into calibrated photometry, and
-submits it to AAVSO under the contributor's name. Members do real astronomy — no
-manual intervention required.
+**The Telescope Net is the natural language interface for telescope control** —
+so you can point it at real research, not a driver, an app, or a config file.
+Say "connect my telescope" or "what's the plan tonight" and the network
+handles the rest.
+
+That research program is the point. Seestar owners donate their telescope's
+nights. The pipeline schedules observations of scientifically valuable targets,
+processes the data into calibrated photometry, and submits it to AAVSO under
+the contributor's name. Members do real astronomy — no manual intervention
+required.
 
 > **The Telescope Net** is an astronomy charity that gives anyone access to real
-> telescope time. Automated software, with AI support, schedules variable-star
-> observations, processes photometry, and submits to AAVSO on each member's behalf.
+> telescope time through natural language. Automated software, with AI support,
+> schedules variable-star observations, processes photometry, and submits to
+> AAVSO on each member's behalf.
 
 ---
 
@@ -108,10 +115,9 @@ node_v1-main/
 │   ├── cloud.db          SQLite database
 │   └── aavso_batches/    Generated AAVSO submission batches
 │
-├── website/             Marketing site + member portal (Phase 1)
+├── website/             Marketing site
 │   ├── tour.html         Interactive founding network experience (main site)
-│   ├── README.md         Website documentation and API integration guide
-│   └── future/           Phase 2+ portal and future interfaces
+│   └── README.md         Website documentation and API integration guide
 │
 ├── app/                 Flutter desktop member app — the only member app (macOS, Windows, Linux, Raspberry Pi OS)
 │   ├── lib/              Screens (dashboard, observations, help/AI chat, nodes, notifications, more), API client, state, Aladin widgets
@@ -493,7 +499,7 @@ python3 -m cloud.main
 
 ## Marketing Site (`website/tour.html`) — Running the Founding Network Experience
 
-The `tour.html` is a standalone, zero-dependency HTML+CSS+JS site that tells the Boundless Skies story and drives member acquisition. It pulls **live data from the cloud API** but renders gracefully even when the API is offline.
+The `tour.html` is a standalone, zero-dependency HTML+CSS+JS site that pitches The Telescope Net as the natural language interface for telescope control, backed by a real research program, and drives member acquisition. It pulls **live data from the cloud API** but renders gracefully even when the API is offline.
 
 ### Quick Start — Website Dev
 
