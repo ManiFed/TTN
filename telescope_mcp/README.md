@@ -175,6 +175,9 @@ compose them into things someone would actually say:
 - `last_image()` / `stacked_preview()` — actual images, rendered inline.
 - `imaging_targets()` / `run_imaging_program()` — slew, centre and
   live-stack a target for the imaging half of the night.
+- `sky_tour(action="preview" | "start" | "next" | "stop")` — a narrated,
+  four-stop showcase of deep-sky objects. It advances one physical slew at a
+  time, so someone can look and talk about each stop before continuing.
 
 ## Fleet integrity
 
