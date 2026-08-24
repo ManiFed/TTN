@@ -799,11 +799,14 @@
   var curSection=0; // set by scroll handler, read by drawFrame
   var aladinSkyActive = false; // when true, canvas skips sky fills so real Aladin shows through
   var lensFlareUntil=1.4; // brief lens flare on page load
+  var earthCanvasVisible=true; // set by compute(); once the ground has fully faded behind Aladin, stop paying for its frames
   var T0=performance.now(),resizePending=false;
   (function loop(){
     if(resizePending){onResize();resizePending=false;}
-    var t=(performance.now()-T0)/1000;
-    drawFrame(t);
+    if(earthCanvasVisible){
+      var t=(performance.now()-T0)/1000;
+      drawFrame(t);
+    }
     requestAnimationFrame(loop);
   })();
   addEventListener('resize',function(){resizePending=true;});
@@ -993,6 +996,7 @@
       if(aladinSkyActive){
         var es=1-ep; earth.style.opacity=es.toFixed(3); if(ecap) ecap.style.opacity=es.toFixed(3);
         earth.style.transform='translateY('+(ep*55).toFixed(1)+'vh) scale('+(1+ep*0.12).toFixed(3)+')';
+        earthCanvasVisible = ep<1;
       } else {
         earth.style.opacity='1'; if(ecap) ecap.style.opacity='1';
         earth.style.transform='none';
