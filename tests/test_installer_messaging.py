@@ -58,7 +58,7 @@ class PostinstallTest(unittest.TestCase):
         self.assertNotIn('echo "Desktop app:', POSTINSTALL)
 
     def test_the_closing_summary_says_what_to_say(self):
-        self.assertIn("connect my telescope", POSTINSTALL)
+        self.assertIn("set up my telescope", POSTINSTALL)
 
     def test_the_gatekeeper_self_heal_is_still_there(self):
         """Upgrades from installs that shipped the app can still leave a
@@ -157,7 +157,7 @@ class ConclusionTest(unittest.TestCase):
         self.assertIn("conclusion.html", BUILD_DMG)
 
     def test_it_says_exactly_what_to_say(self):
-        self.assertIn("connect my telescope", CONCLUSION)
+        self.assertIn("set up my telescope", CONCLUSION)
 
     def test_it_says_where_to_say_it(self):
         self.assertIn("Claude Desktop", CONCLUSION)
@@ -170,12 +170,7 @@ class ConclusionTest(unittest.TestCase):
 
     def test_it_tells_them_to_restart_claude(self):
         """The invisible step: it only notices new tools on start."""
-        self.assertIn("quit it completely and open it", CONCLUSION.lower())
-
-    def test_it_covers_claude_dropping_the_telescope_on_the_way_out(self):
-        """The first real install failed this way: Claude rewrote its settings
-        and took our entry with it, so the member had no tools at all."""
-        self.assertIn("puts it back", CONCLUSION)
+        self.assertIn("quit and reopen it", CONCLUSION.lower())
 
     def test_it_says_where_to_go_when_stuck(self):
         self.assertIn("info@boundlessskies.org", CONCLUSION)

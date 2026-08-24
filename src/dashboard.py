@@ -4067,40 +4067,6 @@ def api_imaging_targets():
                     "reachable_only": False})
 
 
-def _keep_registered_loop() -> None:
-    """Keep the telescope present in Claude Desktop's config.
-
-    Claude Desktop stores its own settings in that file and rewrites it from
-    memory, so an entry added while it is running is dropped again the next
-    time it saves. The first real install hit exactly that: the tools were
-    registered, Claude overwrote the file, and the member asked to connect
-    their telescope and got generic advice from an assistant that had no tools.
-
-    Checking from here costs nothing -- the agent is already running all night
-    -- and it repairs the case no amount of install-time care can: the member
-    quits Claude an hour later and it takes our entry with it.
-    """
-    import sys
-    from telescope_mcp.register_client import ensure_registered
-
-    # Only the installed agent owns this registration. A source checkout must
-    # never touch it: the test suite boots dashboards in temp directories, and
-    # each one happily rewrote the member's real Claude config to point at a
-    # venv interpreter and a scratch path that is deleted moments later. Claude
-    # then reports "Server disconnected", which is exactly what happened.
-    if not getattr(sys, "frozen", False):
-        logger.debug("Not a packaged build — leaving Claude's config alone")
-        return
-
-    data_dir = str(pathlib.Path.cwd())
-    while True:
-        try:
-            ensure_registered(sys.executable, data_dir)
-        except Exception as exc:
-            logger.debug("Registration check failed: %s", exc)
-        time.sleep(300)
-
-
 def _next_step() -> dict:
     """What this member should do right now, and what happens after that.
 
@@ -5227,15 +5193,6 @@ def launch(port: int = 5173) -> None:
             daemon=True,
             name="offline-autonomy-resume",
         ).start()
-
-    # Outside the cloud block: a telescope with no account still needs to be
-    # reachable from Claude, and this is the only thing that repairs a config
-    # Claude Desktop has overwritten.
-    threading.Thread(
-        target=_keep_registered_loop,
-        daemon=True,
-        name="keep-registered",
-    ).start()
 
     def _commission_runtime() -> dict:
         with _state_lock:

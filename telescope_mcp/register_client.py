@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import platform
 import shutil
@@ -34,8 +33,6 @@ import sys
 from pathlib import Path
 
 #: The key we own inside "mcpServers". Everything else is left untouched.
-logger = logging.getLogger("telescope_mcp.register_client")
-
 SERVER_KEY = "telescope-net"
 
 
@@ -251,47 +248,6 @@ def remove(path: Path) -> tuple[bool, str]:
     except OSError as exc:
         return False, f"Could not write {path}: {exc}"
     return True, f"Removed '{SERVER_KEY}' from {path}."
-
-
-#: A member who deliberately removes the telescope from Claude should stay
-#: removed. Left next to the config so it survives reinstalls.
-OPT_OUT_MARKER = ".telescope-net-no-register"
-
-
-def opted_out(path: Path) -> bool:
-    return (path.parent / OPT_OUT_MARKER).exists()
-
-
-def ensure_registered(command: str, data_dir: str,
-                      prefix_args: list[str] | None = None) -> bool:
-    """Put the entry back if it has gone. Returns True if it had to.
-
-    Registering once at install time is not enough. Claude Desktop keeps its
-    own settings in the same file and rewrites it from memory -- so an entry
-    written while Claude is running is dropped again the next time it saves,
-    silently, and the member opens it to find no telescope and an assistant
-    answering from general knowledge instead. That is exactly what happened on
-    the first real install.
-
-    The agent runs continuously anyway, so it can simply check. Only ever adds
-    what is missing; never rewrites a config it cannot parse, and never argues
-    with a member who has opted out.
-    """
-    path = config_path()
-    if opted_out(path):
-        return False
-    data, error = load(path)
-    if error:
-        logger.debug("Not re-registering: %s", error)
-        return False
-    servers = data.get("mcpServers")
-    if isinstance(servers, dict) and servers.get(SERVER_KEY) == entry(
-            command, data_dir, prefix_args):
-        return False
-    ok, message = register(command, data_dir, path, prefix_args)
-    if ok:
-        logger.info("Re-registered with Claude Desktop: %s", message)
-    return ok
 
 
 def main() -> int:

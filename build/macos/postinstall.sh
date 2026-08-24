@@ -213,16 +213,16 @@ if [ "${MCP_REGISTERED:-0}" = "1" ]; then
     # ChatGPT is deliberately not counted: it reaches MCP servers only as
     # remote connectors, so it cannot start this one or see the telescope.
     if [ "${HAS_ASSISTANT}" -eq 1 ]; then
-        echo "Quit and reopen Claude Desktop, then say: connect my telescope"
+        echo "Quit and reopen Claude Desktop, then say: set up my telescope"
         echo "(It only notices new tools when it starts.)"
     else
         echo "Install Claude Desktop from https://claude.ai/download, open it,"
-        echo "and say: connect my telescope"
+        echo "and say: set up my telescope"
         echo "Your telescope is already configured inside it."
     fi
     echo ""
 fi
-echo "Say to Claude Desktop:  connect my telescope"
+echo "Say to Claude Desktop:  set up my telescope"
 echo "Dashboard:   ${DASHBOARD_URL}"
 echo "Service:     com.telescopenet.nodeagent (gui/${CONSOLE_UID})"
 echo "Logs:        ${LOG_DIR}/node_agent.log"

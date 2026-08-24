@@ -33,13 +33,6 @@ e2e:
 faults:
 	$(PYTHON) -m pytest tests/test_fault_tolerance_mcp.py -v
 
-# Whether the app in /Applications was built from the source you are
-# looking at right now. Diagnosing a fix that is not actually running
-# wastes everyone's time -- run this before telling anyone to retest.
-.PHONY: check-installed
-check-installed:
-	bash scripts/check_installed_build.sh
-
 # Fleet integrity sweep: what an unattended patrol would find right now.
 # Needs TELESCOPE_MCP_ADMIN_KEY. Read-only and safe against production.
 .PHONY: patrol

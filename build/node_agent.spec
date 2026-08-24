@@ -34,7 +34,6 @@ hidden_imports = [
     "telescope_mcp",
     "telescope_mcp.local_server",
     "telescope_mcp.register_client",
-    "telescope_mcp.doctor",
     "telescope_mcp.client",
     "telescope_mcp.guard",
     "telescope_mcp.tools",

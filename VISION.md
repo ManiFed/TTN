@@ -11,21 +11,14 @@
 
 ## The Mission
 
-The Telescope Net is the natural language interface for telescope control —
-built to run a real research program. Say what you want in plain language —
-"connect my telescope," "what's the plan tonight," "two hours of research,
-then image the Whirlpool" — and the network handles the rest: scheduling,
-pointing, exposing, validating, and submitting.
-
-That research program is the point, not a feature. We operate a distributed,
-global network of donated telescopes to observe targets professional
-observatories miss. Seestar smart telescope owners donate their telescope's
-nights to the network. Our pipeline automatically schedules observations of
-scientifically valuable targets, processes the data into calibrated
-photometry, and submits it to professional astronomical databases. Members
-contribute to real science — supernovae, novae, variable stars, transient
-phenomena — without physical effort, technical expertise, or significant
-cost. Natural language is how you reach it; the science is why it exists.
+The Telescope Net is an astronomy charity that operates a distributed,
+global network of donated telescopes to observe targets professional observatories
+miss. Seestar smart telescope owners donate their telescope's nights to the network.
+Our pipeline automatically schedules observations of scientifically valuable targets,
+processes the data into calibrated photometry, and submits it to professional
+astronomical databases. Members contribute to real science — supernovae, novae,
+variable stars, transient phenomena — without physical effort, technical expertise,
+or significant cost.
 
 ---
 
@@ -52,17 +45,14 @@ No existing service addresses this combination of barriers.
 
 The Telescope Net is a three-part system:
 
-1. A natural language interface — talk to your telescope through your AI
-   assistant instead of learning a dashboard, an app, or ASCOM/ALPACA
-2. A distributed network of donated Seestar telescopes operating autonomously
-   overnight, running a real research program
-3. An AI-supported pipeline that decides what to observe, processes the data,
-   and submits it to science
+1. A distributed network of donated Seestar telescopes operating autonomously overnight
+2. An AI-supported pipeline that decides what to observe, processes the data, and submits
+   it to science
+3. An easy-to-use mobile app that gives anyone a genuine connection to the science
+   their telescope produces
 
 Members contribute their telescope's nights to the network, which schedules the
 observations, processes the data, and submits it to AAVSO under the member's name.
-The natural language interface is how you drive it; the research program is
-what it's for.
 
 ---
 
@@ -79,11 +69,9 @@ and a statement of what must exist in the product.
 
 Establishes the mission in one sentence and directs each visitor type to their path.
 
-- Hero: leads with the natural language interface — talk to your telescope,
-  no dashboard, no app, no ASCOM config — with the research program (donated
-  telescopes, automated scheduling, real AAVSO submissions) as the reason it
-  exists, backed by a live counter of active nodes and recent AAVSO
-  submissions from the network.
+- Hero: a one-line description of the network (donated telescopes, automated
+  scheduling, real AAVSO submissions) with a live counter of active nodes and
+  recent AAVSO submissions from the network.
 - Three clear entry points: Join the Network / See the Science / Support the Mission.
 
 ---
