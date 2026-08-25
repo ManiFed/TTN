@@ -5043,26 +5043,26 @@ def api_history():
 
 @app.route("/api/history/<img_id>", methods=["GET"])
 def api_history_image(img_id: str):
-    # Image identifiers are generated locally.  Reject path syntax before an
+    # Image identifiers are generated locally. Reject path syntax before an
     # identifier is ever used to construct the on-disk cache filename.
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", img_id):
         return jsonify({"error": "Image not found"}), 404
+    safe_img_id = img_id
     with _img_full_lock:
-        b64 = _img_full.get(img_id)
+        b64 = _img_full.get(safe_img_id)
     if not b64:
-        # Lazy-load from disk if not in memory cache. img_id is already
-        # restricted to a safe charset above; os.path.basename() strips any
-        # directory components as a second, independent guard so the path
-        # can never escape _IMAGES_DIR.
+        # Lazy-load from disk if not in memory cache. safe_img_id is strictly
+        # allowlisted above and the resolved-path parent check below ensures
+        # the final path remains inside _IMAGES_DIR.
         images_root = _IMAGES_DIR.resolve()
-        disk_path = (images_root / (os.path.basename(img_id) + ".png")).resolve()
+        disk_path = (images_root / f"{safe_img_id}.png").resolve()
         if images_root != disk_path.parent:
             return jsonify({"error": "Image not found"}), 404
         if disk_path.exists():
             with open(disk_path, "rb") as _f:
                 b64 = base64.b64encode(_f.read()).decode()
             with _img_full_lock:
-                _img_full[img_id] = b64
+                _img_full[safe_img_id] = b64
     if not b64:
         return jsonify({"error": "Image not found"}), 404
     return Response(
