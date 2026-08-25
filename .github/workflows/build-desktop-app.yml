@@ -11,6 +11,9 @@ on:
       - '.github/workflows/build-desktop-app.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.target }}

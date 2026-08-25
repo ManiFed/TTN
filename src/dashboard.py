@@ -2878,7 +2878,8 @@ def _friendly_conn_error(device: str, host: str, port: int, exc: Exception) -> s
             f"connected to Wi-Fi, then check your router's device list for its current IP "
             f"(it may differ from {host} if it rejoined the network)."
         )
-    return f"Can't reach the {device} at {host}:{port}: {exc}"
+    logger.error("Connect failed for %s at %s:%d: %s", device, host, port, exc)
+    return f"Can't reach the {device} at {host}:{port}. See the node log for details."
 
 
 @app.route("/api/connect", methods=["POST"])
@@ -3517,12 +3518,14 @@ def api_cloud_connect():
         _cloud._config = cfg
         _cloud._url = (cfg.get("cloud") or {}).get("url", _cloud._url) or _cloud._url
     except Exception as exc:
-        return jsonify({"ok": False, "error": f"config reload failed: {exc}"}), 500
+        logger.exception("config.yaml reload failed")
+        return jsonify({"ok": False, "error": "config reload failed"}), 500
     ok = _cloud._ensure_registered()
     if ok:
         return jsonify({"ok": True, "registered": True, "node_id": _cloud._node_id})
+    logger.warning("Cloud registration failed: %s", _cloud.status.get("error"))
     return jsonify({"ok": False, "registered": False,
-                    "error": _cloud.status.get("error", "registration failed")}), 400
+                    "error": "registration failed"}), 400
 
 
 @app.route("/api/cloud/credentials", methods=["POST"])
@@ -3539,9 +3542,9 @@ def api_cloud_credentials():
         return jsonify({"ok": False, "error": "node_id and api_key required"}), 400
     try:
         _cloud.install_credentials(node_id, api_key)
-    except Exception as exc:
+    except Exception:
         logger.exception("install_credentials failed")
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": "could not install credentials"}), 500
     return jsonify({"ok": True, "registered": True, "node_id": node_id})
 
 
@@ -3701,7 +3704,8 @@ def api_config_post():
     try:
         yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("config.yaml POST rejected — invalid YAML: %s", exc)
+        return jsonify({"error": "invalid YAML — configuration was not saved"}), 400
     try:
         with open("config.yaml", "w") as fh:
             fh.write(raw)
@@ -5046,8 +5050,14 @@ def api_history_image(img_id: str):
     with _img_full_lock:
         b64 = _img_full.get(img_id)
     if not b64:
-        # Lazy-load from disk if not in memory cache
-        disk_path = _IMAGES_DIR / f"{img_id}.png"
+        # Lazy-load from disk if not in memory cache. img_id is already
+        # restricted to a safe charset above; os.path.basename() strips any
+        # directory components as a second, independent guard so the path
+        # can never escape _IMAGES_DIR.
+        images_root = _IMAGES_DIR.resolve()
+        disk_path = (images_root / (os.path.basename(img_id) + ".png")).resolve()
+        if images_root != disk_path.parent:
+            return jsonify({"error": "Image not found"}), 404
         if disk_path.exists():
             with open(disk_path, "rb") as _f:
                 b64 = base64.b64encode(_f.read()).decode()

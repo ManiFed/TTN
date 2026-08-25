@@ -56,7 +56,14 @@ def discover_servers(port: int = 32227, timeout: float = 5.0) -> list[dict]:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(timeout)
-            sock.bind(("", 0))
+            # Binding to all interfaces ('') is intentional and required here:
+            # this is a UDP broadcast socket (SO_BROADCAST) used to send the
+            # ALPACA discovery datagram to 255.255.255.255 and receive replies
+            # from any local interface/subnet the LAN telescope may be on.
+            # Binding to a single interface would silently miss replies on
+            # multi-homed hosts. Port 0 lets the OS pick an ephemeral source
+            # port, so this never listens on a well-known/fixed port either.
+            sock.bind(("", 0))  # lgtm[py/bind-socket-all-network-interfaces]
 
             logger.debug("Broadcasting ALPACA discovery on port %d", port)
             sock.sendto(DISCOVERY_MESSAGE, (BROADCAST_ADDR, port))
