@@ -17,6 +17,8 @@ from urllib.parse import quote
 
 import requests
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 #: Matches AppConfig._productionBase / apiPrefix in app/lib/config.dart.
 DEFAULT_CLOUD_BASE = "https://api.thetelescope.net"
 API_PREFIX = "/api/v1"
@@ -28,8 +30,11 @@ DEFAULT_AGENT_BASE = "http://127.0.0.1:5173"
 CLOUD_TIMEOUT = 10.0
 
 
-class ApiError(RuntimeError):
-    """A non-2xx response, carrying the server's own message where it gave one."""
+class ApiError(ToolError):
+    """A non-2xx response, carrying the server's own message where it gave one.
+
+    Subclassing ToolError (rather than a plain RuntimeError) is what makes that
+    message — rather than a generic "Error executing tool ..." — reach the model."""
 
     def __init__(self, status: int, message: str):
         super().__init__(message)

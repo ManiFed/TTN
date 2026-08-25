@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 #: Environments a destructive tool may target, least to most dangerous.
 ENVIRONMENTS = ("sim", "staging", "production")
 
@@ -27,8 +29,9 @@ _ENV_VAR = "TELESCOPE_MCP_ENV"
 _OVERRIDE_VAR = "TELESCOPE_MCP_ALLOW_PRODUCTION_WRITES"
 
 
-class GuardError(RuntimeError):
-    """Raised when a tool is refused. The message is shown to the model."""
+class GuardError(ToolError):
+    """Raised when a tool is refused. Subclassing ToolError is what makes the
+    message (rather than a generic "Error executing tool ...") reach the model."""
 
 
 def environment() -> str:
