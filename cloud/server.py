@@ -2226,6 +2226,58 @@ def api_me_node_stand_down(user, node_id):
     return jsonify(nightly.resolve(node))
 
 
+@app.route("/api/v1/me/nodes/<node_id>/nights/<night>", methods=["GET"])
+@auth.require_member
+def api_me_node_night(user, node_id, night):
+    """A future (or today's) night's plan for one telescope. Date is YYYY-MM-DD.
+
+    Same shape as /tonight, but for any schedulable date -- lets a member
+    plan ahead (e.g. decline a night they know they'll be away) instead of
+    only ever seeing today. Weather is not checked for nights beyond tonight,
+    since a forecast that far out isn't meaningful.
+    """
+    node, error = _member_node_or_403(user, node_id)
+    if error:
+        return error
+    try:
+        night = nightly.validate_night(node, night)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(nightly.resolve(node, night=night))
+
+
+@app.route("/api/v1/me/nodes/<node_id>/nights/<night>", methods=["POST"])
+@auth.require_member
+def api_me_node_night_respond(user, node_id, night):
+    """Answer a future night's proposal. Body: {decision: accept|decline, ...}."""
+    node, error = _member_node_or_403(user, node_id)
+    if error:
+        return error
+    try:
+        night = nightly.validate_night(node, night)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    body = _json_body()
+    try:
+        hours = body.get("research_hours")
+        nightly.respond(
+            node,
+            str(body.get("decision") or ""),
+            research_hours=float(hours) if hours is not None else None,
+            imaging_after=body.get("imaging_after"),
+            note=str(body.get("note") or ""),
+            night=night,
+        )
+    except (TypeError, ValueError):
+        logger.warning("Invalid night response payload for node %s", node_id, exc_info=True)
+        return jsonify({"error": "Invalid request payload."}), 400
+    # Only wake the node immediately if this answers tonight; a future night
+    # is picked up on its own poll cycle same as any other proposal.
+    if night == nightly.tonight_date(node):
+        live.publish(node_id, "retask", {"reason": "tonight"})
+    return jsonify(nightly.resolve(node, night=night))
+
+
 @app.route("/api/v1/nodes/tonight", methods=["GET"])
 @require_node
 def api_node_tonight(node):

@@ -16,8 +16,8 @@ from ..client import ApiError, CloudClient, encode_path
 from ..guard import require_confirmation
 
 
-def _nudge(verdict: dict) -> str:
-    """One line on where tonight leaves the science. Never scolds."""
+def _nudge(verdict: dict, when: str = "tonight") -> str:
+    """One line on where the night leaves the science. Never scolds."""
     proposal = verdict.get("proposal") or {}
     hours = proposal.get("research_hours")
     status = verdict.get("status")
@@ -26,22 +26,22 @@ def _nudge(verdict: dict) -> str:
         return ("Nothing to do about the weather. The night is held, not lost — "
                 "if the forecast improves the run goes ahead automatically.")
     if status == "stood_down":
-        return ("Stood down. Nothing further will happen tonight; say the word "
-                "when you want it back and it picks up the same evening.")
+        return (f"Stood down. Nothing further will happen {when}; say the word "
+                f"when you want it back and it picks up the same evening.")
     if status == "declined":
-        return ("Sitting tonight out. If you change your mind before dusk it "
-                "can still run — the research block is what feeds AAVSO.")
+        return (f"Sitting {when} out. If you change your mind before dusk it "
+                f"can still run — the research block is what feeds AAVSO.")
     if verdict.get("observing") and hours:
-        return (f"{float(hours):.0f} hours of photometry tonight goes into the "
+        return (f"{float(hours):.0f} hours of photometry {when} goes into the "
                 f"network's light curves alongside everyone else's. Imaging "
                 f"after the research block costs the science nothing.")
     return ("No answer needed — the research programme runs by default at dusk. "
             "Say so if you would rather it did not.")
 
 
-def _with_nudge(verdict: dict) -> dict:
+def _with_nudge(verdict: dict, when: str = "tonight") -> dict:
     out = dict(verdict)
-    out["nudge"] = _nudge(verdict)
+    out["nudge"] = _nudge(verdict, when)
     return out
 
 
@@ -97,6 +97,49 @@ def register(server, client: CloudClient) -> None:
             body["note"] = note
         return _with_nudge(
             client.post(f"/me/nodes/{encode_path(node_id)}/tonight", body))
+
+    @server.tool()
+    def scheduled_night(node_id: str, date: str) -> dict:
+        """What a telescope is scheduled to do on a future date (YYYY-MM-DD).
+
+        Same shape as `tonight`, but for planning ahead instead of just
+        today. Proposes a night if none exists yet for that date. Weather
+        isn't checked this far out, so the verdict is based only on any
+        decision made for that night.
+        """
+        return _with_nudge(
+            client.get(f"/me/nodes/{encode_path(node_id)}/nights/{encode_path(date)}"),
+            when=f"on {date}")
+
+    @server.tool()
+    def scheduled_night_accept(node_id: str, date: str,
+                               research_hours: float | None = None,
+                               imaging_after: bool | None = None,
+                               note: str = "") -> dict:
+        """Accept a future night's proposal (date is YYYY-MM-DD), optionally reshaping it."""
+        body: dict = {"decision": "accept"}
+        if research_hours is not None:
+            body["research_hours"] = float(research_hours)
+        if imaging_after is not None:
+            body["imaging_after"] = bool(imaging_after)
+        if note:
+            body["note"] = note
+        return _with_nudge(client.post(
+            f"/me/nodes/{encode_path(node_id)}/nights/{encode_path(date)}", body),
+            when=f"on {date}")
+
+    @server.tool()
+    def scheduled_night_decline(node_id: str, date: str, note: str = "") -> dict:
+        """Decline a future night (date is YYYY-MM-DD) in advance, e.g. for a trip.
+
+        Affects only that night; every other night is asked about separately.
+        """
+        body: dict = {"decision": "decline"}
+        if note:
+            body["note"] = note
+        return _with_nudge(client.post(
+            f"/me/nodes/{encode_path(node_id)}/nights/{encode_path(date)}", body),
+            when=f"on {date}")
 
     @server.tool()
     def stand_down(node_id: str, reason: str = "", nights: int = 0) -> dict:

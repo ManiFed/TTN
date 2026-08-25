@@ -55,11 +55,12 @@ AUTO_ACCEPT_LEAD_MINUTES = 60
 #: Cloud cover above this fraction means there is nothing to observe.
 CLOUD_COVER_HOLD = 0.85
 
-#: Any non-zero precipitation holds the night. A wet telescope is a broken one.
-PRECIPITATION_HOLD = 0.0
-
 #: Default length of a research run when nobody says otherwise.
 DEFAULT_RESEARCH_HOURS = 4.0
+
+#: How far ahead a member may schedule a night. Forecasts and node conditions
+#: aren't meaningful further out than this, so the endpoint refuses beyond it.
+MAX_FUTURE_NIGHT_DAYS = 30
 
 
 def _now() -> datetime:
@@ -81,6 +82,25 @@ def tonight_date(node: dict) -> str:
     if local.hour < 12:          # after midnight, still last evening's night
         local -= timedelta(days=1)
     return local.date().isoformat()
+
+
+def validate_night(node: dict, night: str) -> str:
+    """Check a member-supplied date is a real, schedulable night.
+
+    Raises ValueError with a message safe to show the member. Returns the
+    same date back, normalized to ISO form, so callers can use it directly.
+    """
+    try:
+        parsed = datetime.fromisoformat(night).date()
+    except (TypeError, ValueError):
+        raise ValueError("night must be a date in YYYY-MM-DD form")
+
+    today = datetime.fromisoformat(tonight_date(node)).date()
+    if parsed < today:
+        raise ValueError("night is in the past")
+    if (parsed - today).days > MAX_FUTURE_NIGHT_DAYS:
+        raise ValueError(f"night is more than {MAX_FUTURE_NIGHT_DAYS} days out")
+    return parsed.isoformat()
 
 
 # ── proposals ────────────────────────────────────────────────────────────────
@@ -133,10 +153,13 @@ def weather_verdict(node: dict, forecast: Optional[dict] = None) -> dict:
         return {"observable": True, "reason": "No forecast available; "
                 "deferring to the node's own safety checks.", "source": "none"}
 
-    cloud = forecast.get("cloud_cover")
-    precip = forecast.get("precipitation")
+    # cloud_cover and precip_type are hourly series, not single values --
+    # take the slot nearest now, same as scoring.py and network_planner.py do.
+    from .conditions import astro_cloud_cover_at, astro_precip_at
+    cloud = astro_cloud_cover_at(forecast, _now())
+    precip = astro_precip_at(forecast, _now())
 
-    if precip is not None and float(precip) > PRECIPITATION_HOLD:
+    if precip is not None and precip != "none":
         return {"observable": False,
                 "reason": f"Precipitation forecast ({precip}). Staying closed.",
                 "source": "forecast"}
@@ -160,26 +183,30 @@ def _row(node_id: str, night: str) -> Optional[dict]:
     )
 
 
-def _respond_by(node: dict) -> str:
+def _respond_by(node: dict, night: str) -> str:
     """When silence becomes consent: roughly an hour before local dusk.
 
     Dusk is approximated from the node's UTC offset rather than computed
     astronomically -- the node itself gates on real sun position, so this only
-    has to be close enough to be a sensible deadline to show a member.
+    has to be close enough to be a sensible deadline to show a member. Works
+    for any target night, not just tonight: the deadline is anchored to that
+    night's own calendar date rather than to "now".
     """
     offset = float(node.get("utc_offset_hours") or 0.0)
-    local = _now() + timedelta(hours=offset)
-    dusk_local = local.replace(hour=20, minute=0, second=0, microsecond=0)
-    if local.hour >= 20:
-        dusk_local = local.replace(hour=23, minute=59, second=0, microsecond=0)
+    dusk_local = datetime.fromisoformat(night).replace(
+        hour=20, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
     deadline = dusk_local - timedelta(minutes=AUTO_ACCEPT_LEAD_MINUTES)
     return _iso(deadline - timedelta(hours=offset))
 
 
-def get_or_create(node: dict) -> dict:
-    """Tonight's intent for one node, proposing one if none exists yet."""
+def get_or_create(node: dict, night: str | None = None) -> dict:
+    """One night's intent for a node, proposing one if none exists yet.
+
+    Defaults to tonight; pass `night` (YYYY-MM-DD, already validated by the
+    caller) to get or create the intent for a future night instead.
+    """
     node_id = node["node_id"]
-    night = tonight_date(node)
+    night = night or tonight_date(node)
     row = _row(node_id, night)
     if row:
         return _hydrate(row)
@@ -191,7 +218,7 @@ def get_or_create(node: dict) -> dict:
            VALUES (%s,%s,%s,%s,%s,%s)
            ON CONFLICT (node_id, night) DO NOTHING""",
         (node_id, night, PROPOSED, json.dumps(proposal),
-         _respond_by(node), _iso(_now())),
+         _respond_by(node, night), _iso(_now())),
     )
     return _hydrate(_row(node_id, night))
 
@@ -208,13 +235,16 @@ def _hydrate(row: Optional[dict]) -> dict:
 # ── decisions ────────────────────────────────────────────────────────────────
 
 def respond(node: dict, decision: str, research_hours: float | None = None,
-            imaging_after: bool | None = None, note: str = "") -> dict:
-    """Record a member's answer for tonight.
+            imaging_after: bool | None = None, note: str = "",
+            night: str | None = None) -> dict:
+    """Record a member's answer for a night.
 
     `decision` is 'accept' or 'decline'. Accepting may adjust the shape of the
-    run; declining is for tonight only, and does not touch later nights.
+    run; declining affects only the target night (tonight by default), and
+    does not touch other nights. Pass `night` (already validated by the
+    caller) to answer for a future night instead of tonight.
     """
-    intent = get_or_create(node)
+    intent = get_or_create(node, night)
     night = intent["night"]
 
     if decision not in ("accept", "decline"):
@@ -282,16 +312,22 @@ def hold_for_weather(node: dict, verdict: dict) -> dict:
 
 # ── resolution ───────────────────────────────────────────────────────────────
 
-def resolve(node: dict, check_weather: bool = True) -> dict:
-    """What this node should actually do tonight, right now.
+def resolve(node: dict, check_weather: bool = True, night: str | None = None) -> dict:
+    """What this node should actually do on a night, right now.
 
-    Called by the planner and by the node itself. Applies, in order:
+    Called by the planner and by the node itself, always for tonight. Called
+    by a member checking on or answering a future night, in which case the
+    weather step is skipped -- a forecast days out is not a forecast, and
+    re-checking it here would just misreport it as a hold. Applies, in order:
       1. a member override, which nothing else may overturn
       2. the weather, which overrules an acceptance but not a stand-down
+         (tonight only)
       3. the deadline, after which silence becomes consent
     """
-    intent = get_or_create(node)
+    is_tonight = night is None or night == tonight_date(node)
+    intent = get_or_create(node, night)
     status = intent.get("status")
+    check_weather = check_weather and is_tonight
 
     # 1. A member's own decision to stop is final for tonight.
     if status == STOOD_DOWN:
