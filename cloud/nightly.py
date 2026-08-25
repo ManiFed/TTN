@@ -55,6 +55,9 @@ AUTO_ACCEPT_LEAD_MINUTES = 60
 #: Cloud cover above this fraction means there is nothing to observe.
 CLOUD_COVER_HOLD = 0.85
 
+#: Any non-zero precipitation holds the night. A wet telescope is a broken one.
+PRECIPITATION_HOLD = 0.0
+
 #: Default length of a research run when nobody says otherwise.
 DEFAULT_RESEARCH_HOURS = 4.0
 
@@ -153,13 +156,10 @@ def weather_verdict(node: dict, forecast: Optional[dict] = None) -> dict:
         return {"observable": True, "reason": "No forecast available; "
                 "deferring to the node's own safety checks.", "source": "none"}
 
-    # cloud_cover and precip_type are hourly series, not single values --
-    # take the slot nearest now, same as scoring.py and network_planner.py do.
-    from .conditions import astro_cloud_cover_at, astro_precip_at
-    cloud = astro_cloud_cover_at(forecast, _now())
-    precip = astro_precip_at(forecast, _now())
+    cloud = forecast.get("cloud_cover")
+    precip = forecast.get("precipitation")
 
-    if precip is not None and precip != "none":
+    if precip is not None and float(precip) > PRECIPITATION_HOLD:
         return {"observable": False,
                 "reason": f"Precipitation forecast ({precip}). Staying closed.",
                 "source": "forecast"}
