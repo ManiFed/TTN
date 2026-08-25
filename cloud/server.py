@@ -53,7 +53,7 @@ from flask import Flask, Response, jsonify, redirect as _redirect, request, send
 from werkzeug.exceptions import HTTPException as _HTTPException
 from werkzeug.routing import IntegerConverter as _IntegerConverter
 from werkzeug.routing import ValidationError as _ValidationError
-from werkzeug.utils import safe_join
+from werkzeug.utils import safe_join, secure_filename
 
 from cloud import alerts, auth, autonomy, browser_auth, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
@@ -2904,8 +2904,7 @@ def api_me_contribute(user):
 
     from pathlib import Path
     import os as _os
-    import re as _re
-    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", _os.path.basename(f.filename or "frame.fits"))
+    safe_name = secure_filename(f.filename or "frame.fits") or "frame.fits"
     if not safe_name.lower().endswith((".fits", ".fit")):
         safe_name += ".fits"
     contrib_root = Path((_config.get("survey") or {})
