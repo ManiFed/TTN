@@ -66,6 +66,13 @@ jobs:
           fi
           sed -i.bak -E 's/MACOSX_DEPLOYMENT_TARGET = [0-9.]+/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
           sed -i.bak 's/com.example.boundlessSkies/org.telescopenet.app/g' macos/Runner.xcodeproj/project.pbxproj
+          # This job only verifies the app builds (release signing/notarization
+          # is a separate workflow), so ad-hoc-sign instead of automatic-signing
+          # with the maintainer's real team, which has no cert on this runner.
+          # xcodebuild reads these from the project file, not the environment,
+          # so they have to be patched here rather than passed as build env vars.
+          sed -i.bak '/DEVELOPMENT_TEAM = QTAM997KMW;/d' macos/Runner.xcodeproj/project.pbxproj
+          sed -i.bak 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;\n\t\t\t\tCODE_SIGN_IDENTITY = "-";/' macos/Runner.xcodeproj/project.pbxproj
       - working-directory: app
         run: flutter pub get
       # Dart tests were unreachable until app/test/ came out of .gitignore.
@@ -77,13 +84,6 @@ jobs:
         run: flutter build ${{ matrix.target }} --release --dart-define=API_BASE=https://api.thetelescope.net
         env:
           CMAKE_GENERATOR: ${{ matrix.target == 'windows' && 'Visual Studio 17 2022' || '' }}
-          # This job verifies the app builds; it doesn't produce a release
-          # artifact, so it has no business signing with the maintainer's real
-          # team (committed in Runner.xcodeproj for local/notarized builds).
-          # Ad-hoc-sign instead of failing on a cert CI will never have.
-          CODE_SIGNING_ALLOWED: ${{ matrix.target == 'macos' && 'NO' || '' }}
-          CODE_SIGNING_REQUIRED: ${{ matrix.target == 'macos' && 'NO' || '' }}
-          CODE_SIGN_IDENTITY: ${{ matrix.target == 'macos' && '-' || '' }}
       - if: matrix.target == 'macos'
         name: Stage macOS .app
         run: |
