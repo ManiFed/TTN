@@ -819,12 +819,19 @@ def api_aavso_files_upload(node):
     if aavso_root != date_dir.parent:
         return jsonify({"error": "invalid destination"}), 400
     date_dir.mkdir(parents=True, exist_ok=True)
-    dest = (date_dir / safe_name).resolve()
+    joined = safe_join(str(date_dir), safe_name)
+    if joined is None:
+        return jsonify({"error": "invalid destination"}), 400
+    dest = Path(joined).resolve()
     # Append a counter suffix if a file with that name already exists
     counter = 1
     while dest.exists():
         stem = Path(safe_name).stem
-        dest = (date_dir / f"{stem}_{counter}.txt").resolve()
+        candidate_name = f"{stem}_{counter}.txt"
+        joined = safe_join(str(date_dir), candidate_name)
+        if joined is None:
+            return jsonify({"error": "invalid destination"}), 400
+        dest = Path(joined).resolve()
         counter += 1
     if date_dir != dest.parent:
         return jsonify({"error": "invalid destination"}), 400
