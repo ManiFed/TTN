@@ -59,6 +59,16 @@ jobs:
                 railway logs "${deployment_id}" --deployment --lines 200 || true
                 exit 1
                 ;;
+              SKIPPED)
+                # A later push raced this one and Railway dropped this
+                # deployment in favor of the newer one - not a failure of
+                # this code. That other deployment owns its own health
+                # check; here just confirm the service is up at all.
+                echo "Deployment ${deployment_id} was superseded by a newer one; checking service health instead"
+                curl --fail --silent --show-error \
+                  https://api.thetelescope.net/api/v1/health
+                exit 0
+                ;;
             esac
             sleep 10
           done
