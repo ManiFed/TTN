@@ -5052,11 +5052,13 @@ def api_history_image(img_id: str):
         b64 = _img_full.get(safe_img_id)
     if not b64:
         # Lazy-load from disk if not in memory cache. safe_img_id is strictly
-        # allowlisted above and the resolved-path parent check below ensures
-        # the final path remains inside _IMAGES_DIR.
+        # allowlisted above; relative_to() below is the containment check that
+        # rejects anything CodeQL can't already rule out from the regex alone.
         images_root = _IMAGES_DIR.resolve()
         disk_path = (images_root / f"{safe_img_id}.png").resolve()
-        if images_root != disk_path.parent:
+        try:
+            disk_path.relative_to(images_root)
+        except ValueError:
             return jsonify({"error": "Image not found"}), 404
         if disk_path.exists():
             with open(disk_path, "rb") as _f:

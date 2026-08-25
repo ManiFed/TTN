@@ -77,6 +77,13 @@ jobs:
         run: flutter build ${{ matrix.target }} --release --dart-define=API_BASE=https://api.thetelescope.net
         env:
           CMAKE_GENERATOR: ${{ matrix.target == 'windows' && 'Visual Studio 17 2022' || '' }}
+          # This job verifies the app builds; it doesn't produce a release
+          # artifact, so it has no business signing with the maintainer's real
+          # team (committed in Runner.xcodeproj for local/notarized builds).
+          # Ad-hoc-sign instead of failing on a cert CI will never have.
+          CODE_SIGNING_ALLOWED: ${{ matrix.target == 'macos' && 'NO' || '' }}
+          CODE_SIGNING_REQUIRED: ${{ matrix.target == 'macos' && 'NO' || '' }}
+          CODE_SIGN_IDENTITY: ${{ matrix.target == 'macos' && '-' || '' }}
       - if: matrix.target == 'macos'
         name: Stage macOS .app
         run: |
