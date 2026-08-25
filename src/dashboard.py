@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
+from werkzeug.utils import safe_join
 
 from pyongc.ongc import listObjects as _ongc_list
 from alpaca.discovery import discover_servers
@@ -5052,14 +5053,13 @@ def api_history_image(img_id: str):
         b64 = _img_full.get(safe_img_id)
     if not b64:
         # Lazy-load from disk if not in memory cache. safe_img_id is strictly
-        # allowlisted above; relative_to() below is the containment check that
-        # rejects anything CodeQL can't already rule out from the regex alone.
+        # allowlisted above; safe_join is the recognized containment check
+        # that keeps the resolved path inside _IMAGES_DIR.
         images_root = _IMAGES_DIR.resolve()
-        disk_path = (images_root / f"{safe_img_id}.png").resolve()
-        try:
-            disk_path.relative_to(images_root)
-        except ValueError:
+        joined = safe_join(str(images_root), f"{safe_img_id}.png")
+        if joined is None:
             return jsonify({"error": "Image not found"}), 404
+        disk_path = pathlib.Path(joined)
         if disk_path.exists():
             with open(disk_path, "rb") as _f:
                 b64 = base64.b64encode(_f.read()).decode()
