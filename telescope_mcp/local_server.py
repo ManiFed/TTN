@@ -33,7 +33,7 @@ from mcp.server import MCPServer
 
 from .client import AgentClient, CloudClient
 from .tools import (admin, hardware, images, integrity, member, network,
-                    setup, star_catalog, tonight)
+                    setup, sky_tour, star_catalog, tonight)
 
 STANDALONE_INSTRUCTIONS = """\
 Tools for the telescope attached to this computer.
@@ -129,6 +129,7 @@ def build_server(agent: AgentClient | None = None,
     )
     hardware.register(server, agent)
     images.register(server, agent)
+    sky_tour.register(server, agent)
     star_catalog.register(server)
     if not with_cloud:
         setup.register_standalone(server, agent)
