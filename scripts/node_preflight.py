@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -38,10 +39,13 @@ def _check_cloud_auth(url: str, node_id: str, api_key: str) -> tuple[bool, str]:
             headers={"X-Node-Id": node_id, "X-Api-Key": api_key},
             timeout=10,
         )
-    except requests.RequestException as exc:
-        return False, f"request failed: {exc}"
+    except requests.RequestException:
+        # Don't echo the exception text back to the report: it can carry the
+        # request object (including the X-Api-Key header) in its repr, and
+        # this credential must never end up in printed/logged output.
+        return False, "request failed — could not reach cloud API"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        return False, f"HTTP {resp.status_code}"
     return True, "authenticated"
 
 
@@ -54,7 +58,9 @@ def _check_writable(path: Path, must_exist: bool = False) -> tuple[bool, str]:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return False, f"could not create {path}: {exc}"
-    probe = path / f".preflight_write_test_{tempfile.mktemp(dir='').split('/')[-1]}"
+    fd, tmp_name = tempfile.mkstemp(prefix=".preflight_write_test_", dir=str(path))
+    os.close(fd)
+    probe = Path(tmp_name)
     try:
         probe.write_text("preflight")
         probe.unlink()

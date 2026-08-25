@@ -196,6 +196,13 @@ class NodeHarness:
             node_id, api_key = "node_test01", "key_test01"
         self.obs = FakeObservatory(self.plan).start()
 
+        # Not a real secret: `api_key` here is either a hardcoded fuzz-test
+        # placeholder ("key_test01", FakeCloud path) or freshly minted by an
+        # ephemeral in-process cloud + throwaway Postgres instance that is
+        # torn down at the end of this test run (RealCloud path). It never
+        # authenticates against production and has no value outside this
+        # sandboxed workdir, so writing it to the scratch config.yaml below
+        # carries none of the exposure that flags this pattern normally.
         creds = (f"  node_id: {node_id}\n  api_key: {api_key}\n"
                  if self.registered else "")
         (self.workdir / "config.yaml").write_text(_CONFIG_TEMPLATE.format(

@@ -53,7 +53,7 @@ from flask import Flask, Response, jsonify, redirect as _redirect, request, send
 from werkzeug.exceptions import HTTPException as _HTTPException
 from werkzeug.routing import IntegerConverter as _IntegerConverter
 from werkzeug.routing import ValidationError as _ValidationError
-from werkzeug.utils import safe_join
+from werkzeug.utils import safe_join, secure_filename
 
 from cloud import alerts, auth, autonomy, browser_auth, calibration, data_pipeline, db, gcn_events, help_chat, incidents, integrity, live, nightly, nights, registry, scheduler, scoring, survey, tuning
 from src.shared_models import science_program_for_type
@@ -465,7 +465,8 @@ def api_register():
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("Node registration failed: %s", exc)
+        return jsonify({"error": "could not register node — check the submitted details"}), 400
 
     return jsonify(creds)
 
@@ -607,7 +608,8 @@ def api_autonomy_bundle(node):
             scheduler.generate_plan(node, _config)
         bundle = autonomy.build_for_node(node["node_id"], _config)
     except (RuntimeError, ValueError) as exc:
-        return jsonify({"error": str(exc), "bundle": None}), 503
+        logger.warning("Autonomy bundle build failed for node %s: %s", node["node_id"], exc)
+        return jsonify({"error": "could not build autonomy bundle", "bundle": None}), 503
     return jsonify({"bundle": bundle,
                     "public_key": autonomy.public_key_b64(_config) if bundle else ""})
 
@@ -807,19 +809,32 @@ def api_aavso_files_upload(node):
         return jsonify({"error": "file too large"}), 400
     # Sanitise filename and place under cloud_data/aavso_files/<date>/
     from pathlib import Path
+    import os as _os
     import re as _re
-    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", f.filename or "obs.txt")
+    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", _os.path.basename(f.filename or "obs.txt"))
     if not safe_name.endswith(".txt"):
         safe_name += ".txt"
-    date_dir = _aavso_file_dir() / datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    aavso_root = _aavso_file_dir().resolve()
+    date_dir = (aavso_root / datetime.now(timezone.utc).strftime("%Y-%m-%d")).resolve()
+    if aavso_root != date_dir.parent:
+        return jsonify({"error": "invalid destination"}), 400
     date_dir.mkdir(parents=True, exist_ok=True)
-    dest = date_dir / safe_name
+    joined = safe_join(str(date_dir), safe_name)
+    if joined is None:
+        return jsonify({"error": "invalid destination"}), 400
+    dest = Path(joined).resolve()
     # Append a counter suffix if a file with that name already exists
     counter = 1
     while dest.exists():
         stem = Path(safe_name).stem
-        dest = date_dir / f"{stem}_{counter}.txt"
+        candidate_name = f"{stem}_{counter}.txt"
+        joined = safe_join(str(date_dir), candidate_name)
+        if joined is None:
+            return jsonify({"error": "invalid destination"}), 400
+        dest = Path(joined).resolve()
         counter += 1
+    if date_dir != dest.parent:
+        return jsonify({"error": "invalid destination"}), 400
     dest.write_bytes(raw)
     rel = str(dest.relative_to(_aavso_file_dir()))
     logger.info("AAVSO file stored: %s (node=%s)", rel, node["node_id"])
@@ -1894,7 +1909,8 @@ def api_auth_register():
             body.get("display_name", ""),
         )
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.info("Registration rejected: %s", exc)
+        return jsonify({"error": "registration failed — check email and password"}), 400
     return jsonify(result)
 
 
@@ -2048,7 +2064,8 @@ def api_auth_login():
     try:
         result = auth.login(body.get("email", ""), body.get("password", ""))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 401
+        logger.info("Login rejected: %s", exc)
+        return jsonify({"error": "invalid email or password"}), 401
     return jsonify(result)
 
 
@@ -2379,7 +2396,8 @@ def api_me_attach_node(user):
         creds = registry.register_node(
             info, _config.get("light_pollution", {}).get("api_key", ""))
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("Node link failed for member %s: %s", user["user_id"], exc)
+        return jsonify({"error": "could not link telescope — check the details and try again"}), 400
 
     if ghost:
         logger.info("Member %s re-linked never-online node %s instead of "
@@ -2430,7 +2448,8 @@ def api_me_start_session(user, node_id):
             _config.get("light_pollution", {}).get("api_key", ""),
         )
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.info("start_session failed for node %s: %s", node_id, exc)
+        return jsonify({"error": "could not start session — check the location details"}), 400
     return jsonify({"ok": True, **result})
 
 
@@ -2884,14 +2903,17 @@ def api_me_contribute(user):
         return jsonify({"error": "this frame was already contributed"}), 409
 
     from pathlib import Path
-    import re as _re
-    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", f.filename or "frame.fits")
+    import os as _os
+    safe_name = secure_filename(f.filename or "frame.fits") or "frame.fits"
     if not safe_name.lower().endswith((".fits", ".fit")):
         safe_name += ".fits"
-    dest_dir = Path((_config.get("survey") or {})
-                    .get("contrib_dir", "cloud_data/contrib")) / user["user_id"] / today
+    contrib_root = Path((_config.get("survey") or {})
+                        .get("contrib_dir", "cloud_data/contrib")).resolve()
+    dest_dir = (contrib_root / _os.path.basename(str(user["user_id"])) / today).resolve()
+    dest = (dest_dir / f"{sha256[:12]}_{safe_name}").resolve()
+    if contrib_root != dest.parent and contrib_root not in dest.parents:
+        return jsonify({"error": "invalid contribution path"}), 400
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"{sha256[:12]}_{safe_name}"
     dest.write_bytes(raw)
 
     node_id = _ensure_contributor_node(user)
@@ -3075,11 +3097,14 @@ def api_me_help_chat(user):
             _config,
         )
     except PermissionError as exc:
-        return jsonify({"error": str(exc)}), 429
+        logger.info("Help chat rate-limited for member %s: %s", user["user_id"], exc)
+        return jsonify({"error": "weekly help quota reached — try again next week"}), 429
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.info("Help chat rejected for member %s: %s", user["user_id"], exc)
+        return jsonify({"error": "could not process that message"}), 400
     except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 503
+        logger.error("Help chat backend error for member %s: %s", user["user_id"], exc)
+        return jsonify({"error": "help assistant is temporarily unavailable"}), 503
     return jsonify(result)
 
 

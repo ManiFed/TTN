@@ -11,6 +11,9 @@ on:
       - '.github/workflows/build-desktop-app.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.target }}
@@ -63,6 +66,13 @@ jobs:
           fi
           sed -i.bak -E 's/MACOSX_DEPLOYMENT_TARGET = [0-9.]+/MACOSX_DEPLOYMENT_TARGET = 10.15/g' macos/Runner.xcodeproj/project.pbxproj
           sed -i.bak 's/com.example.boundlessSkies/org.telescopenet.app/g' macos/Runner.xcodeproj/project.pbxproj
+          # This job only verifies the app builds (release signing/notarization
+          # is a separate workflow), so ad-hoc-sign instead of automatic-signing
+          # with the maintainer's real team, which has no cert on this runner.
+          # xcodebuild reads these from the project file, not the environment,
+          # so they have to be patched here rather than passed as build env vars.
+          sed -i.bak '/DEVELOPMENT_TEAM = QTAM997KMW;/d' macos/Runner.xcodeproj/project.pbxproj
+          sed -i.bak 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;\n\t\t\t\tCODE_SIGN_IDENTITY = "-";/' macos/Runner.xcodeproj/project.pbxproj
       - working-directory: app
         run: flutter pub get
       # Dart tests were unreachable until app/test/ came out of .gitignore.
