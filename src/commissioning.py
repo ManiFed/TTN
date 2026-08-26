@@ -167,6 +167,14 @@ class CommissioningManager:
             "image_ingest": self._check(
                 watch_path.is_dir(), str(watch_path)
             ),
+            "credential_store": self._check(
+                bool(runtime.get("credential_store_ok", True)),
+                "System keychain rejected cloud credentials this session — "
+                "a restart will orphan this node's history instead of "
+                "self-healing" if not runtime.get("credential_store_ok", True)
+                else "Cloud credentials persisted to system keychain",
+                blocking=False,
+            ),
             "science_frame": self._check(
                 bool(self._state.get("evidence")), "Waiting for first science FITS",
                 blocking=False,

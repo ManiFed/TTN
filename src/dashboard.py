@@ -580,11 +580,11 @@ def _try_mount_seestar_smb(host: str) -> Optional[str]:
     """
     system = platform.system()
     if system == "Darwin":
-        mount_point = "/Volumes/Seestar"
+        mount_point = str(_DATA_DIR / "mounts" / "seestar")
         smb_url     = f"//guest:@{host}/{_SEESTAR_SMB_SHARE}"
         cmd         = ["mount_smbfs", "-N", smb_url, mount_point]
     elif system == "Linux":
-        mount_point = "/mnt/seestar"
+        mount_point = str(_DATA_DIR / "mounts" / "seestar")
         smb_url     = f"//{host}/{_SEESTAR_SMB_SHARE}"
         cmd         = ["mount", "-t", "cifs", smb_url, mount_point, "-o", "guest,uid=0,gid=0"]
     else:
@@ -5185,15 +5185,13 @@ def launch(port: int = 5173) -> None:
     iw_cfg = cfg.get("image_watcher", {})
     if iw_cfg.get("enabled", False):
         configured_path = iw_cfg.get("watch_path", "")
-        # The configured path is a Linux CIFS default; on macOS the Seestar
-        # share always mounts at /Volumes/Seestar (_try_mount_seestar_smb), so
-        # an unmodified Linux-style default would never exist on this platform.
+        # The Seestar SMB share always mounts under the node's own data dir
+        # (_try_mount_seestar_smb), so fall back to that same path — /Volumes
+        # and /mnt are root-owned and were never writable by the node process.
         if configured_path and os.path.isdir(configured_path):
             watch_path = configured_path
-        elif platform.system() == "Darwin":
-            watch_path = "/Volumes/Seestar"
         else:
-            watch_path = configured_path or "/mnt/seestar"
+            watch_path = str(_DATA_DIR / "mounts" / "seestar")
         debounce_delay = float(iw_cfg.get("debounce_delay", 2.0))
         _image_watcher = ImageWatcher(watch_path, _on_new_fits, debounce_delay)
         _image_watcher.start()
@@ -5255,6 +5253,9 @@ def launch(port: int = 5173) -> None:
                 "telescope_connected": _state["telescope"].get("connected", False),
                 "camera_connected": _state["camera"].get("connected", False),
                 "image_watcher": dict(_state["image_watcher"]),
+                "credential_store_ok": bool(
+                    _cloud and _cloud.status.get("credential_store_ok", True)
+                ),
             }
 
     _commissioning = CommissioningManager(

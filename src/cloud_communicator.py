@@ -186,6 +186,7 @@ class CloudCommunicator:
             "clock_skew_s": None,
             "clock_qualified": self._clock_qualified,
             "autonomy_bundle_id": "",
+            "credential_store_ok": True,
             "error": None,
         }
 
@@ -404,6 +405,12 @@ class CloudCommunicator:
                 logger.warning(
                     "Could not persist cloud API key to the system keyring; "
                     "it will not survive a restart: %s", exc)
+                # Latched, not reset on a later success: once the recovery
+                # token has failed to persist even once, this run can no
+                # longer self-heal a credential rejection via rekey, so the
+                # operator needs to see this for the rest of the session even
+                # if a subsequent keychain write happens to succeed.
+                self.status["credential_store_ok"] = False
         if self._recovery_token:
             try:
                 keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY,
@@ -412,6 +419,7 @@ class CloudCommunicator:
                 logger.warning(
                     "Could not persist cloud recovery token to the system keyring; "
                     "a future revoked api_key won't self-heal without it: %s", exc)
+                self.status["credential_store_ok"] = False
         payload = {"node_id": self._node_id, "pair_token": self._pair_token}
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)

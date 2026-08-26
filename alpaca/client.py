@@ -24,6 +24,15 @@ def _next_transaction_id() -> int:
 class AlpacaError(Exception):
     """Raised when the ALPACA server returns a non-zero ErrorNumber."""
 
+    def __init__(self, message: str, code: int = 0):
+        super().__init__(message)
+        self.code = code
+
+# ASCOM/ALPACA standard error number for "this member is not implemented in
+# this driver" -- e.g. Seestar's Park, which several callers need to treat as
+# "no such capability" rather than a transient fault.
+NOT_IMPLEMENTED = 1024
+
 
 class AlpacaClient:
     """
@@ -66,7 +75,9 @@ class AlpacaClient:
     def _check_error(endpoint: str, body: dict) -> None:
         code = body.get("ErrorNumber", 0)
         if code != 0:
-            raise AlpacaError(f"{endpoint} → ErrorNumber {code}: {body.get('ErrorMessage', '')}")
+            raise AlpacaError(
+                f"{endpoint} → ErrorNumber {code}: {body.get('ErrorMessage', '')}", code=code
+            )
 
     def connected(self) -> bool:
         return self._get("connected")

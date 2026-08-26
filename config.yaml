@@ -68,7 +68,7 @@ devices:
 image_watcher:
   debounce_delay: 2
   enabled: true
-  watch_path: /mnt/seestar
+  watch_path: ''
 logging:
   format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
   level: INFO
