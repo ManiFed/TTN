@@ -169,6 +169,7 @@ class CloudCommunicator:
         self._threads: list[threading.Thread] = []
         self._register_failures = 0
         self._register_next_attempt = 0.0  # monotonic
+        self._credential_rejections = 0
 
         # Status surface for the dashboard
         self.status: dict = {
@@ -350,15 +351,30 @@ class CloudCommunicator:
         return self._node_id, self._api_key
 
     def install_credentials(self, node_id: str, api_key: str,
-                             recovery_token: Optional[str] = None) -> None:
+                             recovery_token: Optional[str] = None,
+                             allow_identity_change: bool = False) -> None:
         """Install cloud credentials from the signed-in member app (or register).
 
         recovery_token is omitted (not cleared) when the caller doesn't have
         one to offer -- e.g. the app pushing credentials for an existing node
         doesn't know its recovery_token, and dropping a good one here would
-        break self-recovery for no reason."""
-        self._node_id = str(node_id or "").strip()
-        self._api_key = str(api_key or "").strip()
+        break self-recovery for no reason.
+
+        Refuses to switch this node to a different node_id unless
+        allow_identity_change is set. Without this guard, a caller that
+        thinks it's repairing this node's own credentials but actually got
+        handed a different node_id back (e.g. from a cloud-side bug) would
+        silently rename this instrument's identity to someone else's --
+        subsequent heartbeats/observations would be misattributed."""
+        node_id = str(node_id or "").strip()
+        api_key = str(api_key or "").strip()
+        if (self._node_id and node_id and node_id != self._node_id
+                and not allow_identity_change):
+            raise ValueError(
+                f"refusing to install credentials for node_id {node_id!r}: "
+                f"this node is already identified as {self._node_id!r}")
+        self._node_id = node_id
+        self._api_key = api_key
         if recovery_token:
             self._recovery_token = str(recovery_token).strip()
         self._save_state()
@@ -547,8 +563,17 @@ class CloudCommunicator:
         return True
 
     def _clear_credentials(self, reason: str) -> None:
+        # Back off before the next re-registration attempt (same schedule as
+        # a failed /register call). Without this, a credential that gets
+        # rejected again right after a fresh registration -- e.g. because the
+        # keychain can't persist it and something keeps invalidating the
+        # in-memory copy -- retries every heartbeat tick, hammering the API
+        # in a tight wipe/re-register loop instead of backing off.
+        self._credential_rejections += 1
+        backoff = min(60.0 * (2 ** min(self._credential_rejections - 1, 4)), 900.0)
+        self._register_next_attempt = time.monotonic() + backoff
         logger.warning("Cloud rejected stored node credentials (%s) — "
-                       "clearing and re-registering", reason)
+                       "clearing and re-registering in %.0fs", reason, backoff)
         self._node_id = ""
         self._api_key = ""
         self._recovery_token = ""
@@ -628,6 +653,7 @@ class CloudCommunicator:
                         if was_ok is False:
                             self._telemetry_event("cloud_heartbeat_restored", "info", {})
                         was_ok = True
+                        self._credential_rejections = 0
                         self._flush_queue()
                         self._flush_survey_queue()
                         self._flush_telemetry_queue()

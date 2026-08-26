@@ -2783,6 +2783,16 @@ def api_status():
         snapshot = copy.deepcopy(_state)
     if _commissioning is not None:
         snapshot["commissioning"] = _commissioning.status()
+    # _state["error"] is written once by _on_safety_unsafe() at the moment a
+    # safety stop trips and is never itself updated again -- there's no
+    # "became safe again" callback to clear it. Re-check live safety state
+    # here so a resolved safety stop (e.g. dawn latch auto-cleared once the
+    # sun drops back below threshold) doesn't keep reporting itself as an
+    # active error forever.
+    if (_safety_mgr is not None
+            and str(snapshot.get("error") or "").startswith("Safety stop:")
+            and _safety_mgr.status()["safe"]):
+        snapshot["error"] = None
     return jsonify(snapshot)
 
 
@@ -3545,10 +3555,15 @@ def api_cloud_credentials():
     body = request.get_json(force=True, silent=True) or {}
     node_id = str(body.get("node_id") or "").strip()
     api_key = str(body.get("api_key") or "").strip()
+    allow_identity_change = bool(body.get("allow_identity_change"))
     if not node_id or not api_key:
         return jsonify({"ok": False, "error": "node_id and api_key required"}), 400
     try:
-        _cloud.install_credentials(node_id, api_key)
+        _cloud.install_credentials(node_id, api_key,
+                                    allow_identity_change=allow_identity_change)
+    except ValueError as exc:
+        logger.warning("install_credentials refused: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 409
     except Exception:
         logger.exception("install_credentials failed")
         return jsonify({"ok": False, "error": "could not install credentials"}), 500
@@ -5031,7 +5046,23 @@ def api_events():
 @app.route("/api/schedule/status", methods=["GET"])
 def api_schedule_status():
     with _sched_lock:
-        return jsonify(dict(_sched_state))
+        snapshot = dict(_sched_state)
+    # "waiting_for_dark" looks the same whether the schedule is genuinely
+    # waiting on the sun or stuck behind a blocking commissioning failure
+    # (e.g. image ingest not mounted, credentials rejected) that's silently
+    # preventing real progress. Surface the actual blocker here so a stalled
+    # run at 0/0 frames doesn't look indistinguishable from one just waiting
+    # for dusk.
+    if (snapshot.get("current_phase") == "waiting_for_dark"
+            and snapshot.get("running") and _commissioning is not None):
+        blocking = [
+            f"{name}: {check.get('detail') or 'failing'}"
+            for name, check in (_commissioning.status().get("checks") or {}).items()
+            if check.get("blocking") and not check.get("ok")
+        ]
+        if blocking:
+            snapshot["blocked_by"] = blocking
+    return jsonify(snapshot)
 
 
 @app.route("/api/schedule/abort", methods=["DELETE"])

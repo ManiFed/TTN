@@ -228,6 +228,24 @@ def rekey_node(node_id: str, recovery_token: str) -> Optional[dict]:
 
 # ── Heartbeats ─────────────────────────────────────────────────────────────────
 
+def reissue_api_key(node_id: str) -> Optional[str]:
+    """Issue a fresh api_key for node_id on behalf of a member who owns it
+    but lost the key -- e.g. the local keychain never persisted it -- and
+    has no recovery_token handy either. The caller (an authenticated member
+    session) is responsible for verifying ownership before calling this;
+    unlike authenticate()/rekey_node() it doesn't itself require proving
+    possession of the old key or a recovery_token. Returns the new api_key,
+    or None if the node doesn't exist."""
+    row = db.query_one("SELECT 1 FROM nodes WHERE node_id = %s", (node_id,))
+    if row is None:
+        return None
+    new_api_key = secrets.token_urlsafe(32)
+    db.execute("UPDATE nodes SET api_key = %s WHERE node_id = %s",
+               (new_api_key, node_id))
+    logger.info("Node %s api_key reissued via member credential repair", node_id)
+    return new_api_key
+
+
 def heartbeat(node_id: str, conditions: Optional[dict] = None) -> None:
     """Record a heartbeat, optionally with current local conditions
     (sky temperature, detected cloud, safety state, utc_offset_hours, ...).

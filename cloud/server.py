@@ -2378,6 +2378,26 @@ def api_me_attach_node(user):
         logger.info("Member %s attached existing node %s", user["user_id"], existing_id)
         return jsonify({"node_id": existing_id, "api_key": existing_key, "linked": True})
 
+    if existing_id and not existing_key:
+        # Repair path: the caller knows its own node_id but lost the api_key
+        # entirely (e.g. the local keychain never persisted it) and has no
+        # recovery_token to self-heal with either. Reissue credentials for
+        # that exact node -- do NOT fall through to the ghost-node matcher
+        # below, which ignores existing_id and matches purely on
+        # telescope_model/lat/lon, so it can (and has) returned a completely
+        # different node that merely happens to share those fields.
+        if not db.query_one(
+            "SELECT 1 FROM node_members WHERE node_id = %s AND user_id = %s",
+            (existing_id, user["user_id"]),
+        ):
+            return jsonify({"error": "node not found or not owned by this member"}), 404
+        new_key = registry.reissue_api_key(existing_id)
+        if new_key is None:
+            return jsonify({"error": "node not found or not owned by this member"}), 404
+        logger.info("Member %s repaired credentials for node %s",
+                    user["user_id"], existing_id)
+        return jsonify({"node_id": existing_id, "api_key": new_key, "linked": True})
+
     try:
         lat = float(body.get("latitude"))
         lon = float(body.get("longitude"))

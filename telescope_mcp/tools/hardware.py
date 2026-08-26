@@ -128,7 +128,11 @@ def register(server, agent: AgentClient) -> None:
         """Install cloud credentials on this node, from member_attach_node.
 
         Repairs a node whose credentials the cloud rejected without changing
-        its node_id, so its observation history survives.
+        its node_id, so its observation history survives. Refuses (HTTP 409)
+        if node_id doesn't match the identity this node already has -- e.g.
+        member_attach_node was called with a different node's existing_node_id,
+        or the cloud handed back credentials for the wrong node -- rather than
+        silently re-identifying this instrument as a different node.
         """
         agent.post("/api/cloud/credentials", {"node_id": node_id, "api_key": api_key})
         return {"installed": True, "node_id": node_id}

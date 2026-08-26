@@ -650,23 +650,27 @@ class SafetyManager:
                 tel.park()
                 logger.info("SafetyManager: telescope parked successfully")
             except Exception as exc:
-                logger.error("SafetyManager: park command failed: %s", exc)
                 if getattr(exc, "code", None) == NOT_IMPLEMENTED:
                     # This driver has no Park (e.g. Seestar S50) -- doing
                     # nothing would leave the mount tracking straight through
                     # dawn. Stopping tracking is the closest thing to "safe"
-                    # this hardware can actually do.
+                    # this hardware can actually do. This is an expected,
+                    # handled case for this hardware, not a critical failure --
+                    # log at warning, not error, so it doesn't read as the
+                    # emergency-park safety feature being broken.
+                    logger.warning(
+                        "SafetyManager: Park unsupported by this driver — "
+                        "stopping tracking instead…"
+                    )
                     try:
-                        logger.info(
-                            "SafetyManager: Park unsupported by this driver — "
-                            "stopping tracking instead…"
-                        )
                         tel.set_tracking(False)
                         logger.info("SafetyManager: tracking stopped")
                     except Exception as exc2:
                         logger.error(
                             "SafetyManager: fallback stop-tracking also failed: %s", exc2
                         )
+                else:
+                    logger.error("SafetyManager: park command failed: %s", exc)
             try:
                 tel.disconnect()
             except Exception:

@@ -105,6 +105,31 @@ def validate_night(node: dict, night: str) -> str:
 
 # ── proposals ────────────────────────────────────────────────────────────────
 
+def _proposal_text(hours: float, imaging_after: bool) -> dict:
+    """summary/why for a given (research_hours, imaging_after) pair.
+
+    Kept as its own function so respond() can regenerate these fields after a
+    member overrides research_hours or imaging_after -- otherwise the
+    human-readable text keeps describing the original proposal's numbers
+    forever, even though the structured fields it's describing have changed.
+    """
+    summary = (
+        f"{hours:.0f} hours of network research photometry"
+        + (", then imaging on a target of your choosing for the rest of the night."
+           if imaging_after else ".")
+    )
+    return {
+        "summary": summary,
+        "why": (
+            "Research runs are what the network exists for — your telescope's "
+            "measurements go to AAVSO alongside everyone else's. Imaging after "
+            "the research block costs the science nothing." if imaging_after else
+            "Research runs are what the network exists for — your telescope's "
+            "measurements go to AAVSO alongside everyone else's."
+        ),
+    }
+
+
 def build_proposal(node: dict) -> dict:
     """The recommendation for one node tonight.
 
@@ -117,15 +142,7 @@ def build_proposal(node: dict) -> dict:
         "mode": "research",
         "research_hours": hours,
         "imaging_after": True,
-        "summary": (
-            f"{hours:.0f} hours of network research photometry, then imaging "
-            f"on a target of your choosing for the rest of the night."
-        ),
-        "why": (
-            "Research runs are what the network exists for — your telescope's "
-            "measurements go to AAVSO alongside everyone else's. Imaging after "
-            "the research block costs the science nothing."
-        ),
+        **_proposal_text(hours, True),
     }
 
 
@@ -256,6 +273,10 @@ def respond(node: dict, decision: str, research_hours: float | None = None,
         proposal["research_hours"] = max(0.0, float(research_hours))
     if imaging_after is not None:
         proposal["imaging_after"] = bool(imaging_after)
+    if research_hours is not None or imaging_after is not None:
+        proposal.update(_proposal_text(
+            proposal.get("research_hours", DEFAULT_RESEARCH_HOURS),
+            proposal.get("imaging_after", True)))
 
     db.execute(
         """UPDATE night_intents
