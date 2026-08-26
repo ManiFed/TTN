@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 
 from ..client import AgentClient, ApiError, CloudClient, encode_path
-from .star_catalog import CATALOG_CHOICES, catalog_installed, install_catalog
+from .star_catalog import CATALOG_CHOICES, catalog_installed
 
 
 #: Discovery is a UDP broadcast to 255.255.255.255:32227, which by construction
@@ -57,41 +57,6 @@ NETWORK_CHECKS = [
 #: Marks a section diagnose could not fetch at all. Deliberately not
 #: "error": the agent returns that key in healthy payloads.
 UNREACHABLE = "_unreachable"
-
-
-def _ensure_star_catalog(result: dict) -> None:
-    """Install the bundled D05 catalog now, in line with the connect flow.
-
-    There's no separate setup UI here -- this whole install is driven
-    through a live conversation with Claude. The one moment a macOS admin
-    password prompt might appear is right after reporting the telescope is
-    connected, since that's when the conversation already has the user's
-    attention to explain it -- not as a step someone has to remember to ask
-    for separately later.
-    """
-    if catalog_installed():
-        return
-    catalog_result = install_catalog("d05")
-    if catalog_result.get("installed"):
-        result["detail"] += (
-            "\n\nAlso installed the ASTAP star database (D05) needed for "
-            "accurate plate solving from a copy bundled in the app -- you "
-            "may have just seen a macOS admin password prompt for that, "
-            "which is expected. Denser catalogs (D20/D50/D80) are available "
-            "later via install_star_catalog if a narrow field of view needs "
-            "them."
-        )
-    else:
-        result["next_step"] = "install_star_catalog"
-        result["star_catalog_choice"] = CATALOG_CHOICES
-        result["detail"] += (
-            "\n\nOne more thing: tried to install the ASTAP star catalog "
-            "(D05) automatically but it didn't complete "
-            f"({catalog_result.get('detail', 'unknown reason')}). Plate "
-            "solving will fall back to a less accurate pointing-based fix "
-            "until it's installed -- ask which size to install, or retry "
-            "with install_star_catalog."
-        )
 
 
 def _step(name: str, ok: bool, detail: str = "", **extra) -> dict:
@@ -173,7 +138,11 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
 
         # 2. Point the agent at it.
         try:
-            agent.post("/api/connect", {"host": target.get("host"),
+            # discover_servers() (alpaca/discovery.py) keys the host as
+            # "address", not "host" -- fall back to "host" only for the
+            # explicit host/port-given case above, which builds that key itself.
+            discovered_host = target.get("host") or target.get("address")
+            agent.post("/api/connect", {"host": discovered_host,
                                         "port": int(target.get("port") or 0),
                                         "set_as_default": True}, timeout=25.0)
             steps.append(_step("connect", True, "Agent connected to the telescope."))
@@ -266,8 +235,18 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
                 "if it does not come up."
             ),
         }
-        if online:
-            _ensure_star_catalog(result)
+        if online and not catalog_installed():
+            result["next_step"] = "install_star_catalog"
+            result["star_catalog_choice"] = CATALOG_CHOICES
+            result["detail"] += (
+                "\n\nOne more thing: no ASTAP star catalog is installed yet, "
+                "so plate solving will fall back to a less accurate "
+                "pointing-based fix. Ask which size to install — D20 (~435 "
+                "MB, recommended default), D05 (~140 MB, very wide fields), "
+                "D50 (~940 MB, smaller fields), or D80 (~1.3 GB, "
+                "narrow-field) — then call install_star_catalog with that "
+                "choice."
+            )
         return result
 
     @server.tool()
@@ -443,7 +422,10 @@ def register_standalone(server, agent: AgentClient) -> None:
                                chosen=target, all_found=servers))
 
         try:
-            agent.post("/api/connect", {"host": target.get("host"),
+            # Same discover_servers() key mismatch as the member flow above:
+            # it returns "address", not "host".
+            discovered_host = target.get("host") or target.get("address")
+            agent.post("/api/connect", {"host": discovered_host,
                                         "port": int(target.get("port") or 0),
                                         "set_as_default": True}, timeout=25.0)
             steps.append(_step("connect", True, "Connected to the telescope."))
@@ -478,6 +460,16 @@ def register_standalone(server, agent: AgentClient) -> None:
                 "does not come up."
             ),
         }
-        if online:
-            _ensure_star_catalog(result)
+        if online and not catalog_installed():
+            result["next_step"] = "install_star_catalog"
+            result["star_catalog_choice"] = CATALOG_CHOICES
+            result["detail"] += (
+                "\n\nOne more thing: no ASTAP star catalog is installed yet, "
+                "so plate solving will fall back to a less accurate "
+                "pointing-based fix. Ask which size to install — D20 (~435 "
+                "MB, recommended default), D05 (~140 MB, very wide fields), "
+                "D50 (~940 MB, smaller fields), or D80 (~1.3 GB, "
+                "narrow-field) — then call install_star_catalog with that "
+                "choice."
+            )
         return result
