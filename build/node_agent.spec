@@ -17,7 +17,7 @@ import sys
 import glob as _glob
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 ROOT = Path(SPECPATH).parent          # repo root (build/ is one level down)
 ENTRY = ROOT / "src" / "main_service.py"
@@ -263,6 +263,17 @@ try:
 except Exception:
     _astroquery_datas = []
 
+# photutils.utils._optional_deps calls importlib.metadata.requires("photutils")
+# at import time (to compute its HAS_SKIMAGE / HAS_GWCS flags), which reads
+# photutils' own dist-info/METADATA file. PyInstaller bundles the compiled
+# package but not its dist-info by default, so the frozen app crashed on the
+# very first stacked frame with "No package metadata was found for
+# photutils" even though it worked fine when run from source.
+try:
+    _photutils_datas = copy_metadata("photutils")
+except Exception:
+    _photutils_datas = []
+
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
@@ -271,6 +282,7 @@ datas = (
     + _iers_datas
     + _certifi_datas
     + _astroquery_datas
+    + _photutils_datas
 )
 
 # ── ASTAP binary ──────────────────────────────────────────────────────────────
