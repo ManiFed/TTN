@@ -17,7 +17,7 @@ import sys
 import glob as _glob
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 ROOT = Path(SPECPATH).parent          # repo root (build/ is one level down)
 ENTRY = ROOT / "src" / "main_service.py"
@@ -264,6 +264,15 @@ try:
 except Exception:
     _astroquery_datas = []
 
+# photutils reads its own dist-info at runtime (importlib.metadata.version()),
+# which PyInstaller's import analysis doesn't pick up since it's not a normal
+# import — without this, live stacking crashes on the first frame with
+# "No package metadata was found for photutils".
+try:
+    _photutils_metadata = copy_metadata("photutils")
+except Exception:
+    _photutils_metadata = []
+
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
@@ -272,6 +281,7 @@ datas = (
     + _iers_datas
     + _certifi_datas
     + _astroquery_datas
+    + _photutils_metadata
 )
 
 # ── ASTAP binary ──────────────────────────────────────────────────────────────

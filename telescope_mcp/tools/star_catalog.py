@@ -25,11 +25,20 @@ instructions instead of a guessed, unverified silent-install path.
 from __future__ import annotations
 
 import platform
+import shutil
+import ssl
 import subprocess
 import tempfile
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    # certifi isn't installed — fall back to the platform's own trust store.
+    _SSL_CONTEXT = ssl.create_default_context()
 
 #: Where ASTAP looks for its star database, in search order, per platform.
 #: Used only to detect whether a catalog is already present.
@@ -139,7 +148,14 @@ def register(server) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pkg_path = Path(tmp) / f"{size}_star_database.pkg"
             try:
-                urllib.request.urlretrieve(url, pkg_path)  # nosec B310
+                # urlretrieve() can't take an SSL context, so open/copy by hand.
+                # The frozen app bundle has no OS trust store to fall back on,
+                # so this must use certifi's CA bundle explicitly (_SSL_CONTEXT
+                # above) or every download fails with CERTIFICATE_VERIFY_FAILED.
+                with urllib.request.urlopen(  # nosec B310
+                    url, context=_SSL_CONTEXT, timeout=120
+                ) as resp, open(pkg_path, "wb") as f:
+                    shutil.copyfileobj(resp, f)
             except Exception as exc:
                 return {"installed": False,
                         "detail": f"Download failed: {exc}", "url": url}

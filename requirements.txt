@@ -13,6 +13,7 @@
 # Without a solver the pipeline uses an approximate pointing-WCS fallback.
 
 requests>=2.31.0
+certifi
 pyyaml>=6.0
 flask>=3.0
 numpy>=1.24

@@ -42,7 +42,11 @@ class _Fixture(unittest.TestCase):
         self.client.base = "https://example.invalid"
         self.client.authenticated = True
 
-        self.discovered = {"servers": [{"host": "192.168.1.44", "port": 11111}]}
+        # Matches alpaca/discovery.py's discover_servers(), which keys the
+        # host as "address" -- not "host". A fake using "host" here would
+        # hide the bug where connect_my_telescope read the wrong key and
+        # connected to "None" instead of the discovered telescope.
+        self.discovered = {"servers": [{"address": "192.168.1.44", "port": 11111}]}
         self.identity = {"registered": False}
         self.status = {"telescope": {"connected": True},
                        "camera": {"connected": True},
@@ -70,6 +74,13 @@ class _Fixture(unittest.TestCase):
         """The body sent to /me/nodes/attach."""
         for args, _ in [c for c in self.client.post.call_args_list]:
             if args and args[0] == "/me/nodes/attach":
+                return args[1]
+        return None
+
+    def connect_body(self):
+        """The body sent to /api/connect."""
+        for args, _ in [c for c in self.agent.post.call_args_list]:
+            if args and args[0] == "/api/connect":
                 return args[1]
         return None
 
@@ -120,6 +131,16 @@ class FlowTest(_Fixture):
         self.assertTrue(ok, text)
         self.assertIn('"connected": true', text.lower())
         self.assertIn("Starfront", text)
+
+    def test_the_discovered_host_reaches_api_connect(self):
+        """The exact bug from tonight's session: discovery found the
+        telescope, but /api/connect was called with host=None because the
+        code read target["host"] when discover_servers() actually returns
+        target["address"]."""
+        ok, text, _ = call(self.server, "connect_my_telescope", {})
+        self.assertTrue(ok, text)
+        body = self.connect_body()
+        self.assertEqual(body.get("host"), "192.168.1.44")
 
     def test_credentials_are_written_back_to_the_agent(self):
         call(self.server, "connect_my_telescope", {})

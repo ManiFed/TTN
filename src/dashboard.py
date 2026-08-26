@@ -1499,7 +1499,12 @@ def _run_centering_bg(
 
     cfg      = _load_config()
     phot     = cfg.get("photometry", {}) or {}
-    astap    = phot.get("astap_path", "astap")
+    solver_type = str(phot.get("solver", "astap")).strip().lower()
+    solver_path = str(
+        phot.get("solve_field_path", "solve-field")
+        if solver_type == "astrometry"
+        else phot.get("astap_path", "astap")
+    )
     radius   = float(phot.get("astap_search_radius", 10))
 
     with _center_lock:
@@ -1532,7 +1537,8 @@ def _run_centering_bg(
                 tolerance_arcmin=tolerance_arcmin,
                 max_iterations=max_iterations,
                 settle_s=settle_s,
-                astap_path=astap,
+                solver=solver_type,
+                solver_path=solver_path,
                 search_radius=radius,
                 cancel_check=_cancelled,
                 progress_cb=_progress,
@@ -3770,6 +3776,8 @@ def api_horizon_mask_post():
     except OSError as exc:
         logger.exception("Writing horizon mask failed")
         return jsonify({"error": "Could not save horizon mask"}), 500
+    if _safety_mgr is not None:
+        _safety_mgr.set_horizon_mask(cfg["safety"].get("horizon_mask", []))
     logger.info("Horizon mask updated in config.yaml: %d vertices", len(polygon))
     return jsonify({"ok": True})
 
