@@ -264,10 +264,11 @@ try:
 except Exception:
     _astroquery_datas = []
 
-# photutils reads its own dist-info at runtime (importlib.metadata.version()),
+# photutils reads its own dist-info at runtime (importlib.metadata.version(),
+# and photutils.utils._optional_deps' importlib.metadata.requires() call),
 # which PyInstaller's import analysis doesn't pick up since it's not a normal
-# import — without this, live stacking crashes on the first frame with
-# "No package metadata was found for photutils".
+# import — without this, the frozen app crashes on the first stacked frame
+# with "No package metadata was found for photutils".
 try:
     _photutils_metadata = copy_metadata("photutils")
 except Exception:
