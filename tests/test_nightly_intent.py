@@ -103,9 +103,20 @@ class _FakeDb:
 NODE = {"node_id": "node_1", "utc_offset_hours": 0.0,
         "latitude": 51.5, "longitude": -0.1}
 
-CLEAR = {"cloud_cover": 0.1, "precipitation": 0.0}
-RAIN = {"cloud_cover": 0.9, "precipitation": 0.4}
-OVERCAST = {"cloud_cover": 0.95, "precipitation": 0.0}
+def _forecast(cloud_pct: float, precip: str = "none") -> dict:
+    """A minimal real-shaped 7timer ASTRO forecast: one hourly slot, now.
+
+    fetch_astronomy_weather returns hourly series keyed by "times", not a
+    single value -- this mirrors that shape so the mock matches what the
+    real function actually hands weather_verdict.
+    """
+    now = datetime.now(timezone.utc)
+    return {"times": [now], "cloud_cover": [cloud_pct], "precip_type": [precip]}
+
+
+CLEAR = _forecast(10)
+RAIN = _forecast(90, precip="rain")
+OVERCAST = _forecast(95)
 
 
 class _Base(unittest.TestCase):

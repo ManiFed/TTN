@@ -204,6 +204,7 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             "lifted_index": [float, ...],          # >0 = stable
             "wind_kmh":     [float, ...],
             "humidity":     [0..100, ...],
+            "precip_type":  ["none"|"rain"|"snow"|..., ...],
         }
     Returns None on any fetch failure.
     Cached for 1 hour per location.
@@ -238,7 +239,8 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             logger.warning("7timer unparseable init time: %s", init_str)
             return cached[1] if cached else None
 
-        times, cloud, seeing, transp, li, wind, humidity = [], [], [], [], [], [], []
+        times, cloud, seeing, transp, li, wind, humidity, precip = \
+            [], [], [], [], [], [], [], []
         for entry in dataseries:
             offset_h = int(entry.get("timepoint", 0))
             times.append(init_dt + timedelta(hours=offset_h))
@@ -249,6 +251,7 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             w = entry.get("wind10m", {})
             wind.append(float(w.get("speed", 0)) * 1.852 if isinstance(w, dict) else 0.0)
             humidity.append(float(entry.get("rh2m", 50)))
+            precip.append(str(entry.get("prec_type", "none")))
 
         # 7timer cloudcover: 1=0-6%, 2=6-19%, … 9=94-100%
         # Map to midpoint percentages
@@ -263,6 +266,7 @@ def fetch_astronomy_weather(lat: float, lon: float) -> Optional[dict]:
             "lifted_index": li,
             "wind_kmh":     wind,
             "humidity":     humidity,
+            "precip_type":  precip,
         }
         _astro_wx_cache[key] = (time.monotonic(), forecast)
         logger.info("7timer ASTRO fetched %d slots", len(times))
@@ -316,6 +320,19 @@ def astro_cloud_cover_at(forecast: Optional[dict], when_utc: datetime) -> Option
     try:
         return float(forecast["cloud_cover"][i]) / 100.0
     except (IndexError, TypeError, ValueError):
+        return None
+
+
+def astro_precip_at(forecast: Optional[dict], when_utc: datetime) -> Optional[str]:
+    """Precipitation type ('none', 'rain', 'snow', ...) at the nearest slot."""
+    if not forecast or not forecast.get("precip_type"):
+        return None
+    i = _nearest_astro_index(forecast, when_utc)
+    if i is None:
+        return None
+    try:
+        return str(forecast["precip_type"][i])
+    except IndexError:
         return None
 
 

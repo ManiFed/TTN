@@ -61,8 +61,11 @@ class EndToEndMcpTest(unittest.TestCase):
         # The forecast is the one thing that would reach the real internet.
         # Pin it clear so "accepted means observing" is a statement about the
         # intent logic rather than about tonight's weather in Texas.
-        cls._weather = patch("cloud.conditions.fetch_astronomy_weather",
-                             return_value={"cloud_cover": 0.05, "precipitation": 0.0})
+        from datetime import datetime, timezone
+        cls._weather = patch(
+            "cloud.conditions.fetch_astronomy_weather",
+            return_value={"times": [datetime.now(timezone.utc)],
+                          "cloud_cover": [5], "precip_type": ["none"]})
         cls._weather.start()
 
         cls._server = make_server("127.0.0.1", 0, app, threaded=True)
