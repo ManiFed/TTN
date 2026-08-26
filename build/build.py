@@ -28,9 +28,10 @@ ASTAP bundling:
     hnsky.org into build/binaries/ before running PyInstaller.  The binary
     is then bundled inside the installer so end users don't need to install
     anything separately.  The star database is NOT bundled — it's a separate,
-    much larger download (D50 ~200 MB, D80 ~1.25 GB) that the user picks and
-    installs themselves via ASTAP's own installer.  The dashboard's Settings
-    → Plate Solving panel explains the D50/D80 tradeoff and links there.
+    much larger download (D05 ~140 MB, D20 ~435 MB, D50 ~940 MB, D80 ~1.3 GB)
+    that the user picks and installs themselves via ASTAP's own installer.
+    The dashboard's Settings → Plate Solving panel explains the tradeoff
+    between sizes and links there.
 """
 
 import argparse

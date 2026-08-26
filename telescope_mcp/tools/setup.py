@@ -237,9 +237,11 @@ def register(server, agent: AgentClient, client: CloudClient) -> None:
             result["detail"] += (
                 "\n\nOne more thing: no ASTAP star catalog is installed yet, "
                 "so plate solving will fall back to a less accurate "
-                "pointing-based fix. Ask which size to install — D50 (~200 "
-                "MB, most setups) or D80 (~1.25 GB, narrow-field) — then call "
-                "install_star_catalog with that choice."
+                "pointing-based fix. Ask which size to install — D20 (~435 "
+                "MB, recommended default), D05 (~140 MB, very wide fields), "
+                "D50 (~940 MB, smaller fields), or D80 (~1.3 GB, "
+                "narrow-field) — then call install_star_catalog with that "
+                "choice."
             )
         return result
 
@@ -457,8 +459,10 @@ def register_standalone(server, agent: AgentClient) -> None:
             result["detail"] += (
                 "\n\nOne more thing: no ASTAP star catalog is installed yet, "
                 "so plate solving will fall back to a less accurate "
-                "pointing-based fix. Ask which size to install — D50 (~200 "
-                "MB, most setups) or D80 (~1.25 GB, narrow-field) — then call "
-                "install_star_catalog with that choice."
+                "pointing-based fix. Ask which size to install — D20 (~435 "
+                "MB, recommended default), D05 (~140 MB, very wide fields), "
+                "D50 (~940 MB, smaller fields), or D80 (~1.3 GB, "
+                "narrow-field) — then call install_star_catalog with that "
+                "choice."
             )
         return result

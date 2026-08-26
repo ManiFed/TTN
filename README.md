@@ -436,8 +436,9 @@ pip install flask pyyaml numpy astropy pillow requests watchdog photutils astroq
 
 # 2. Install ASTAP (required for plate-solving and photometry)
 #    https://www.hnsky.org/astap.htm — install the binary, then a star
-#    database: D50 (~200 MB, general purpose) or D80 (~1.25 GB, denser —
-#    use it for narrow-field/long-focal-length setups). See "Plate Solving"
+#    database: D20 (~435 MB, recommended default) is a good general-purpose
+#    choice; D05 (~140 MB) works for very wide fields, D50 (~940 MB) or D80
+#    (~1.3 GB) for narrow-field/long-focal-length setups. See "Plate Solving"
 #    in the Node Agent's Settings panel for the tradeoffs.
 
 # 3. Configure (for a dry run, only these are required)
@@ -1066,7 +1067,7 @@ safety:
 ```yaml
 image_watcher:
   enabled: false
-  watch_path: "/mnt/seestar"
+  watch_path: ""   # blank = auto-mount the Seestar's SMB share under the node's data dir
   debounce_delay: 2.0
 ```
 
@@ -1087,7 +1088,7 @@ The ALPACA server responded but the device isn't initialised inside the Seestar 
 
 ### Plate solve fails
 - ASTAP not in PATH — set `photometry.astap_path` to the full binary path
-- Star database not installed — download D50 or D80 from the ASTAP site (see the "Plate Solving" section of Settings for which to pick)
+- Star database not installed — download D05/D20/D50/D80 from the ASTAP site (see the "Plate Solving" section of Settings for which to pick)
 - Increase `astap_search_radius` if the image is very wide field
 
 ### AAVSO submission rejected
@@ -1141,7 +1142,7 @@ Non-fatal — no cover calibrator device is configured at ALPACA index 0. Suppre
 |-------|-----------|-------|
 | Node Agent | Python 3.10+ / Flask | Runs Windows, macOS, Linux; pip only |
 | Telescope control | ALPACA REST — Seestar's native server (Station mode) or [seestar_alp](https://github.com/smart-underworld/seestar_alp) | Vendor-neutral; node agent is a pure ALPACA client either way |
-| Plate solving | ASTAP + D50/D80 catalogue | Fast, offline, accurate on Seestar images |
+| Plate solving | ASTAP + D05/D20/D50/D80 catalogue | Fast, offline, accurate on Seestar images |
 | Image stacking | NumPy + RANSAC | Sub-pixel alignment, no external binaries |
 | Photometry | astropy + custom aperture code | Differential against AAVSO/Gaia comp stars |
 | Cloud server | Python / Flask | Upgrade to FastAPI + async at Phase 2 scale |

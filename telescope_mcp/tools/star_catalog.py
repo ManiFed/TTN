@@ -5,9 +5,12 @@ download the user has always had to fetch and install by hand from
 hnsky.org. This makes it a step someone can complete by asking, instead of
 finding the right link and running an installer themselves.
 
-Two sizes are offered, matching what ASTAP itself publishes:
-  D50 (~200 MB)  — enough for most setups, wide field of view.
-  D80 (~1.25 GB) — needed for narrow-field / long focal length imaging.
+Four sizes are offered, matching what ASTAP itself publishes (density of
+stars per square degree, not a magnitude cutoff):
+  D05 (~140 MB) — sparse, only for very wide fields (0.6°+).
+  D20 (~435 MB) — a lighter general-purpose default.
+  D50 (~940 MB) — denser, for smaller fields of view.
+  D80 (~1.3 GB)  — needed for narrow-field / long focal length imaging.
 
 Only macOS is automated end to end. ASTAP distributes the catalog as a
 platform installer, not a plain archive, and the macOS one is a signed .pkg
@@ -38,6 +41,16 @@ _CATALOG_DIRS: dict[str, list[Path]] = {
 #: Sourceforge redirect links — the same ones linked from hnsky.org/astap.htm.
 #: Update if hnsky.org reshuffles the star_databases folder.
 _CATALOG_URLS: dict[str, dict[str, str]] = {
+    "d05": {
+        "Darwin": "https://sourceforge.net/projects/astap-program/files/star_databases/d05_star_database.pkg/download",
+        "Linux": "https://sourceforge.net/projects/astap-program/files/star_databases/d05_star_database.deb/download",
+        "Windows": "https://sourceforge.net/projects/astap-program/files/star_databases/d05_star_database.exe/download",
+    },
+    "d20": {
+        "Darwin": "https://sourceforge.net/projects/astap-program/files/star_databases/d20_star_database.pkg/download",
+        "Linux": "https://sourceforge.net/projects/astap-program/files/star_databases/d20_star_database.deb/download",
+        "Windows": "https://sourceforge.net/projects/astap-program/files/star_databases/d20_star_database.exe/download",
+    },
     "d50": {
         "Darwin": "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg/download",
         "Linux": "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download",
@@ -51,8 +64,10 @@ _CATALOG_URLS: dict[str, dict[str, str]] = {
 }
 
 CATALOG_CHOICES = {
-    "d50": "~200 MB — recommended for most setups (wide field of view).",
-    "d80": "~1.25 GB — for narrow-field imaging (small FOV / long focal length).",
+    "d05": "~140 MB — sparse; only enough for very wide fields (0.6°+).",
+    "d20": "~435 MB — recommended default; lighter download, good for most setups.",
+    "d50": "~940 MB — denser, for smaller fields of view.",
+    "d80": "~1.3 GB — for narrow-field imaging (small FOV / long focal length).",
 }
 
 
@@ -74,12 +89,14 @@ def catalog_installed() -> bool:
 def register(server) -> None:
 
     @server.tool()
-    def install_star_catalog(size: str = "d50") -> dict:
-        """Download and install the ASTAP star database (D50 or D80).
+    def install_star_catalog(size: str = "d20") -> dict:
+        """Download and install the ASTAP star database (D05, D20, D50, or D80).
 
         ASTAP needs this to plate-solve; without it the pipeline falls back
-        to a less accurate pointing-based WCS. `size` is "d50" (~200 MB,
-        right for most setups) or "d80" (~1.25 GB, for narrow-field rigs).
+        to a less accurate pointing-based WCS. `size` is "d05" (~140 MB,
+        very wide fields only), "d20" (~435 MB, recommended default),
+        "d50" (~940 MB, denser/smaller fields), or "d80" (~1.3 GB,
+        for narrow-field rigs).
 
         On macOS this downloads the official .pkg from hnsky.org's
         distribution and installs it, which pops macOS's own admin
