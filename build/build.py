@@ -27,11 +27,17 @@ ASTAP bundling:
     The build automatically downloads the ASTAP plate-solver binary from
     hnsky.org into build/binaries/ before running PyInstaller.  The binary
     is then bundled inside the installer so end users don't need to install
-    anything separately.  The star database is NOT bundled — it's a separate,
-    much larger download (D05 ~140 MB, D20 ~435 MB, D50 ~940 MB, D80 ~1.3 GB)
-    that the user picks and installs themselves via ASTAP's own installer.
-    The dashboard's Settings → Plate Solving panel explains the tradeoff
-    between sizes and links there.
+    anything separately.
+
+    On macOS the smallest star database (D05, ~140 MB) is bundled the same
+    way: downloaded as hnsky.org's .pkg, expanded with `pkgutil --expand-full`
+    (no installer script ever runs — see telescope_mcp/tools/star_catalog.py
+    for why that matters for notarization) into
+    build/binaries/astap_db_d05/, and packaged into the app so
+    connect_my_telescope can copy it into place on first connect with no
+    network access needed. D20/D50/D80 (~435 MB–1.3 GB) stay runtime-only
+    downloads via install_star_catalog, since bundling those would bloat
+    every install for users who never need the denser catalogs.
 """
 
 import argparse
@@ -133,6 +139,62 @@ def download_astap_binaries() -> bool:
         if platform.system() != "Windows":
             dest.chmod(0o755)
         print(f"done → {dest.relative_to(ROOT)}")
+
+    return True
+
+
+def download_default_star_catalog() -> bool:
+    """Download and expand the D05 star database into build/binaries/ (macOS only).
+
+    Reuses the same URL and no-execution .pkg extraction the runtime tool
+    (telescope_mcp/tools/star_catalog.py) uses when installing on request --
+    this just does it once, at build time, so it ships inside the app
+    instead of being a separate download every user has to trigger.
+    """
+    if platform.system() != "Darwin":
+        print("  D05 star catalog bundling is macOS-only — skipping")
+        return False
+
+    dest = BINARIES_DIR / "astap_db_d05"
+    if dest.exists() and any(dest.iterdir()):
+        print(f"  D05 star catalog already at {dest.relative_to(ROOT)}")
+        return True
+
+    sys.path.insert(0, str(ROOT))
+    from telescope_mcp.tools.star_catalog import _CATALOG_URLS, _expand_pkg_payload
+
+    url = _CATALOG_URLS["d05"]["Darwin"]
+    print("\n=== Downloading D05 star catalog ===")
+    print(f"  URL: {url}")
+    if urlparse(url).scheme != "https":
+        print("  WARNING: refusing non-HTTPS star catalog download URL")
+        return False
+
+    BINARIES_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        pkg_path = Path(tmp) / "d05_star_database.pkg"
+        print("  Downloading (~140 MB)...", end=" ", flush=True)
+        try:
+            urllib.request.urlretrieve(url, pkg_path)  # nosec B310
+        except Exception as exc:
+            print(f"FAILED\n  {exc}")
+            return False
+        print("done")
+
+        print("  Expanding package (no code execution)...", end=" ", flush=True)
+        try:
+            expanded = _expand_pkg_payload(pkg_path, Path(tmp) / "expanded")
+        except Exception as exc:
+            print(f"FAILED\n  {exc}")
+            return False
+        if expanded is None:
+            print("FAILED\n  Could not read package contents")
+            return False
+        payload_dir, _install_location = expanded
+        print("done")
+
+        shutil.copytree(payload_dir, dest, dirs_exist_ok=True)
+        print(f"  D05 star catalog ready → {dest.relative_to(ROOT)}")
 
     return True
 
@@ -316,12 +378,21 @@ def main():
                         help="Download the ASTAP binary into build/binaries/ and exit")
     parser.add_argument("--skip-astap", action="store_true",
                         help="Skip ASTAP download (use pointing-WCS fallback in bundle)")
+    parser.add_argument("--download-star-catalog", action="store_true",
+                        help="Download+expand the D05 star catalog into build/binaries/ and exit")
+    parser.add_argument("--skip-star-catalog", action="store_true",
+                        help="Skip bundling D05 (connect_my_telescope falls back to a "
+                             "runtime download on first connect)")
     args = parser.parse_args()
 
     os.chdir(ROOT)
 
     if args.download_astap:
         ok = download_astap_binaries()
+        sys.exit(0 if ok else 1)
+
+    if args.download_star_catalog:
+        ok = download_default_star_catalog()
         sys.exit(0 if ok else 1)
 
     if args.clean:
@@ -334,6 +405,14 @@ def main():
         print("\n=== ASTAP binary ===")
         if not download_astap_binaries():
             print("  Continuing without ASTAP — bundle will use pointing-WCS fallback")
+
+    # Same idea for the D05 star catalog -- bundled so connect_my_telescope
+    # can install it with no network round-trip on first connect.
+    if not args.skip_star_catalog:
+        print("\n=== D05 star catalog ===")
+        if not download_default_star_catalog():
+            print("  Continuing without a bundled catalog — falls back to a "
+                  "runtime download via install_star_catalog")
 
     plat = args.platform
     if plat == "auto":

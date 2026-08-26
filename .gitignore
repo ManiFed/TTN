@@ -8,6 +8,7 @@ venv/
 data/
 dist/
 build/node_agent/
+build/binaries/
 cloud_data/*.db
 cloud_data/*.db-shm
 cloud_data/*.db-wal

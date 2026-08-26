@@ -273,6 +273,27 @@ try:
 except Exception:
     _photutils_metadata = []
 
+# D05 star catalog (macOS only) — build.py downloads and expands ASTAP's own
+# D05 .pkg into build/binaries/astap_db_d05/ before this spec runs (see
+# download_default_star_catalog()). Bundling it lets connect_my_telescope
+# (telescope_mcp/tools/star_catalog.py) copy it into ASTAP's system database
+# path on first connect with no network access needed — D20/D50/D80 stay
+# runtime-only downloads since they're too large to bundle. PyInstaller's
+# `datas` wants individual files, not a directory, so this walks the tree.
+_astap_db_d05 = ROOT / "build" / "binaries" / "astap_db_d05"
+_astap_db_datas = []
+if _astap_db_d05.is_dir():
+    for _f in _astap_db_d05.rglob("*"):
+        if _f.is_file():
+            _rel_dir = _f.parent.relative_to(_astap_db_d05)
+            _astap_db_datas.append((str(_f), str(Path("astap_db_d05") / _rel_dir)))
+else:
+    print(
+        f"\nNOTE: No bundled D05 star catalog at {_astap_db_d05}\n"
+        "  Run: python build/build.py --download-star-catalog\n"
+        "  connect_my_telescope will fall back to a runtime download.\n"
+    )
+
 datas = (
     # Config template — installer writes the real config; this is the fallback
     [(str(ROOT / "build" / "config.template.yaml"), ".")]
@@ -282,6 +303,7 @@ datas = (
     + _certifi_datas
     + _astroquery_datas
     + _photutils_metadata
+    + _astap_db_datas
 )
 
 # ── ASTAP binary ──────────────────────────────────────────────────────────────
