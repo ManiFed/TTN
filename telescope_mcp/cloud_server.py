@@ -67,7 +67,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8900)
     args = parser.parse_args()
 
-    server = build_server()
+    # HTTP is one process serving every connector. Restoring a host-local
+    # login would let every remote caller act as that member. Stdio is one
+    # client per process, which is the Claude Desktop case issue #36 is about.
+    client = CloudClient(persist=not args.http)
+    server = build_server(client)
     if args.http:
         server.run("streamable-http", host=args.host, port=args.port)
     else:

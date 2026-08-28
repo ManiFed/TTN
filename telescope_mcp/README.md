@@ -82,7 +82,8 @@ sends neither, so it is unaffected — same as `curl`.
 |---|---|---|
 | `TELESCOPE_MCP_CLOUD_BASE` | `https://api.thetelescope.net` | cloud API root |
 | `TELESCOPE_MCP_AGENT_BASE` | `http://127.0.0.1:5173` | node agent root |
-| `TELESCOPE_MCP_TOKEN` | — | member session token; or call `auth_login` |
+| `TELESCOPE_MCP_TOKEN` | — | member session token; or call `sign_in` / `auth_login` |
+| `TELESCOPE_MCP_SESSION_PATH` | `~/.telescopenet/mcp_session` | user-only file holding the member session for **stdio** (Claude Desktop). Bound to `TELESCOPE_MCP_CLOUD_BASE`; a different origin is ignored. Shared HTTP mode (`--http`) does not read or write it. Never returned by a tool |
 | `TELESCOPE_MCP_ADMIN_KEY` | — | `X-Admin-Key`. Use `CLOUD_ADMIN_READONLY_KEY` for monitoring; the full key only when admin tools are actually needed |
 | `TELESCOPE_MCP_ENV` | `sim` | `sim` \| `staging` \| `production` |
 | `TELESCOPE_MCP_ALLOW_PRODUCTION_WRITES` | unset | opt in to hardware writes on production |
@@ -117,7 +118,11 @@ Three rails, each tested in `tests/test_mcp_guards.py`:
 - **Confirmation.** Irreversible actions (`member_delete_account`,
   `member_disconnect_node`, `admin_broadcast_interrupt`) need `confirm=true`.
 - **Secret redaction.** No tool returns a node `api_key` or a session token. A
-  credential echoed into a transcript cannot be recalled.
+  credential echoed into a transcript cannot be recalled. After sign-in the
+  session is stored in a user-only file (`~/.telescopenet/mcp_session`, mode
+  0600) so a recycled stdio MCP process stays signed in. The file records the
+  cloud origin with the token; HTTP mode never restores it, because that
+  process is shared across connectors. Logout deletes the file.
 
 Log lines, catalogue names and member-authored text come back wrapped as
 `_provenance: untrusted`. That text is data. Nothing inside it is an
