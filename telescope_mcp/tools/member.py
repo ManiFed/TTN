@@ -7,7 +7,7 @@ identical. Where the app shows a screen, this returns the JSON behind it.
 
 from __future__ import annotations
 
-from ..client import ApiError, CloudClient, encode_path
+from ..client import CloudClient, encode_path
 from ..guard import require_confirmation, untrusted
 
 
@@ -44,8 +44,8 @@ def register(server, client: CloudClient) -> None:
         """Finish a browser sign-in started by `sign_in`.
 
         Call after the member says they have signed in. On success the session
-        is saved on this computer so it survives an MCP process restart; the
-        token itself is never returned.
+        is held for the rest of this conversation; the token itself is never
+        returned.
         """
         result = client.post("/auth/browser/poll", {"code": code})
         status = result.get("status")
@@ -68,9 +68,9 @@ def register(server, client: CloudClient) -> None:
     def auth_login(email: str, password: str) -> dict:
         """Sign in to an existing Telescope Net member account.
 
-        Holds the session on this computer (user-only file) so it survives an
-        MCP process restart, and never returns the token. Signing in here does
-        not sign the member out of the app — sessions are per-device.
+        Holds the session token in memory for the rest of this conversation and
+        never returns it. Signing in here does not sign the member out of the
+        app — sessions are per-device.
 
         There is no sign-up tool: creating an account needs a password, and a
         password typed into a chat is a password in a transcript. Someone
@@ -94,40 +94,8 @@ def register(server, client: CloudClient) -> None:
 
     @server.tool()
     def auth_status() -> dict:
-        """Whether this conversation currently holds a valid member session.
-
-        Checks the cloud, not just RAM: a recycled MCP process that restored
-        its saved session still reports signed-in, and a dead session says
-        to sign in again rather than a silent authenticated: false.
-        """
-        if not client.authenticated:
-            return {
-                "authenticated": False,
-                "cloud": client.base,
-                "detail": (
-                    "Not signed in. Call sign_in, then sign_in_status "
-                    "(or auth_login)."
-                ),
-            }
-        try:
-            me = client.get("/me")
-        except ApiError as exc:
-            if exc.unauthorized:
-                return {
-                    "authenticated": False,
-                    "cloud": client.base,
-                    "detail": (
-                        "This chat lost its session. Sign in again with "
-                        "sign_in."
-                    ),
-                }
-            raise
-        return {
-            "authenticated": True,
-            "cloud": client.base,
-            "user_id": me.get("user_id"),
-            "detail": "Signed in.",
-        }
+        """Whether this conversation currently holds a valid member session."""
+        return {"authenticated": client.authenticated, "cloud": client.base}
 
     # ── Member profile and totals ─────────────────────────────────────────
 
