@@ -38,7 +38,7 @@ class ImageWatcher:
         self._observer      = None
         self._running       = False
 
-    # ── Public API ───────────────────────────────────────────────────────────
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
         from watchdog.observers import Observer
@@ -83,7 +83,7 @@ class ImageWatcher:
             self._observer = None
         logger.info("Image watcher stopped")
 
-    # ── Internal ───────────────────────────────────────────────────────────
+    # ── Internal ───────────────────────────────────────────────────────────────
 
     def _schedule(self, path: str) -> None:
         ext = os.path.splitext(path)[1].lower()
