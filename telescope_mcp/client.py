@@ -12,12 +12,15 @@ from __future__ import annotations
 import json
 import os
 import threading
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
 import requests
 
 from mcp.server.mcpserver.exceptions import ToolError
+
+from . import session_store
 
 #: Matches AppConfig._productionBase / apiPrefix in app/lib/config.dart.
 DEFAULT_CLOUD_BASE = "https://api.thetelescope.net"
@@ -49,20 +52,30 @@ class ApiError(ToolError):
 class CloudClient:
     """Member/admin client for cloud/server.py.
 
-    The token is held in memory only. It is never written to disk and never
-    returned by a tool: a bearer token in a chat transcript is a credential
-    leak, so `auth_login` reports success and nothing else.
+    The token is never returned by a tool: a bearer token in a chat
+    transcript is a credential leak, so `auth_login` reports success and
+    nothing else. After sign-in it is also written to a user-only file
+    (see session_store) so an MCP process restart does not silently log
+    the member out. `TELESCOPE_MCP_TOKEN` still wins, and is not copied
+    to disk.
     """
 
-    def __init__(self, base: str | None = None, token: str | None = None):
+    def __init__(self, base: str | None = None, token: str | None = None, *,
+                 persist: bool = True, session_path=None):
         self.base = (base or os.environ.get("TELESCOPE_MCP_CLOUD_BASE")
                      or DEFAULT_CLOUD_BASE).rstrip("/")
-        self._token = token or os.environ.get("TELESCOPE_MCP_TOKEN") or None
+        self._persist = persist
+        self._session_path = Path(session_path) if session_path else None
+        env_token = os.environ.get("TELESCOPE_MCP_TOKEN") or None
+        stored = None
+        if persist and not token and not env_token:
+            stored = session_store.load(self._session_path)
+        self._token = token or env_token or stored
         self._admin_key = os.environ.get("TELESCOPE_MCP_ADMIN_KEY") or None
         self._lock = threading.Lock()
         self._session = requests.Session()
 
-    # ── auth state ────────────────────────────────────────────────────────
+    # ── auth state ────────────────────────────────────────────
     @property
     def authenticated(self) -> bool:
         return bool(self._token)
@@ -70,6 +83,12 @@ class CloudClient:
     def set_token(self, token: str | None) -> None:
         with self._lock:
             self._token = token
+            if not self._persist:
+                return
+            if token:
+                session_store.save(token, self._session_path)
+            else:
+                session_store.clear(self._session_path)
 
     def _headers(self, admin: bool = False) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -79,7 +98,7 @@ class CloudClient:
             headers["X-Admin-Key"] = self._admin_key
         return headers
 
-    # ── transport ─────────────────────────────────────────────────────────
+    # ── transport ─────────────────────────────────────────────
     def _request(self, method: str, path: str, *,
                  params: Optional[dict] = None,
                  body: Optional[dict] = None,
@@ -97,7 +116,18 @@ class CloudClient:
             raise ApiError(504, f"The cloud did not respond within {CLOUD_TIMEOUT:.0f}s.")
         except requests.RequestException as exc:
             raise ApiError(0, f"Could not reach the cloud API: {exc}")
-        return _decode(resp)
+        try:
+            return _decode(resp)
+        except ApiError as exc:
+            if exc.unauthorized and self._token:
+                self.set_token(None)
+                detail = (exc.message.rstrip(".") + ". "
+                          if exc.message else "")
+                raise ApiError(401, (
+                    f"{detail}This chat lost its session. "
+                    "Sign in again with sign_in."
+                )) from exc
+            raise
 
     def get(self, path: str, params: dict | None = None, admin: bool = False) -> dict:
         return self._request("GET", path, params=params, admin=admin)
