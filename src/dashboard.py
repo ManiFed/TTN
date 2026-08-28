@@ -1,1 +1,1 @@
-PLACEHOLDER_SEE_LOCAL
+LOAD_FROM:/workspace/dashboard-restored.py
