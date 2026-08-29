@@ -79,6 +79,18 @@ class LinkTest(_Base):
         """It is the whole secret; a guessable one is an open account."""
         self.assertGreaterEqual(len(self.start()["code"]), 40)
 
+
+    def test_production_http_origin_is_upgraded_to_https(self):
+        """Railway/nginx terminate TLS; Flask then reports http://url_root."""
+        result = browser_auth.start("http://api.thetelescope.net/")
+        self.assertTrue(result["url"].startswith("https://api.thetelescope.net/"))
+        self.assertIn("/auth/link?code=", result["url"])
+
+    def test_local_http_origin_is_left_alone(self):
+        result = browser_auth.start("http://127.0.0.1:8080/")
+        self.assertTrue(result["url"].startswith("http://127.0.0.1:8080/"))
+
+
     def test_two_links_never_collide(self):
         self.assertNotEqual(self.start()["code"], self.start()["code"])
 

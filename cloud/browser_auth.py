@@ -47,8 +47,21 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _public_origin(origin: str) -> str:
+    """The URL the member opens. TLS often terminates at the proxy, so Flask
+    sees http://api.thetelescope.net even though the public site is https.
+    A sign-in link on http is a password-adjacent credential on the wire.
+    Local/dev origins are left alone."""
+    origin = (origin or "").rstrip("/")
+    host = origin.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    if origin.startswith("http://") and host.endswith("thetelescope.net"):
+        origin = "https://" + origin[len("http://"):]
+    return origin
+
+
 def start(origin: str) -> dict:
     """Begin a browser sign-in. Returns the link for the member to open."""
+    origin = _public_origin(origin)
     code = secrets.token_urlsafe(_CODE_BYTES)
     now = _now()
     expires = now + timedelta(minutes=LINK_TTL_MINUTES)
@@ -60,7 +73,7 @@ def start(origin: str) -> dict:
     )
     return {
         "code": code,
-        "url": f"{origin.rstrip('/')}/auth/link?code={code}",
+        "url": f"{origin}/auth/link?code={code}",
         "expires_at": _iso(expires),
         "poll_interval_s": POLL_INTERVAL_S,
     }
