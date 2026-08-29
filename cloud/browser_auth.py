@@ -21,6 +21,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from . import db
 
@@ -53,9 +54,10 @@ def _public_origin(origin: str) -> str:
     A sign-in link on http is a password-adjacent credential on the wire.
     Local/dev origins are left alone."""
     origin = (origin or "").rstrip("/")
-    host = origin.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
-    if origin.startswith("http://") and host.endswith("thetelescope.net"):
-        origin = "https://" + origin[len("http://"):]
+    parts = urlsplit(origin)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "http" and (host == "thetelescope.net" or host.endswith(".thetelescope.net")):
+        origin = urlunsplit(("https", parts.netloc, parts.path, parts.query, parts.fragment))
     return origin
 
 
