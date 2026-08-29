@@ -64,7 +64,9 @@ class ImageWatcher:
                     watcher._schedule(event.dest_path)
 
         self._observer = Observer()
-        self._observer.schedule(_Handler(), self._path, recursive=False)
+        # Seestar lays FITS out as MyWorks/<target>_sub/*.fits; a
+        # non-recursive watch on the share root never sees them.
+        self._observer.schedule(_Handler(), self._path, recursive=True)
         self._observer.start()
         self._running = True
         logger.info("Image watcher started: %s  (debounce %.1f s)", self._path, self._debounce)

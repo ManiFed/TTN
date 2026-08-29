@@ -124,6 +124,10 @@ class CloudCommGauntletTest(TempCwdTestCase):
             # retrying the dead key forever.
             self.fake.mode = "ok"
             self.fake.clear()
+            # Wipe starts the same register backoff as a failed /register
+            # (60s). The next heartbeat cycle is when we actually re-register;
+            # skip the window the way a later cycle would.
+            comm._register_next_attempt = 0.0
             self.assertTrue(comm._ensure_registered())
             self.assertNotEqual(comm._node_id, "")
             self.assertEqual(len(self.fake.paths("/register")), 1)

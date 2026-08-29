@@ -52,6 +52,7 @@ from src.cloud_communicator import CloudCommunicator
 from src import telemetry as _telemetry
 from src.node_supervisor import NodeSupervisor
 from src.commissioning import CommissioningManager
+from src import seestar_smb
 
 
 app = Flask(__name__)
@@ -569,25 +570,22 @@ def _store_history_image(
 
 _image_watcher: Optional[ImageWatcher] = None
 
-_SEESTAR_SMB_SHARE = "seestar"
-
-
 def _try_mount_seestar_smb(host: str) -> Optional[str]:
-    """Mount the Seestar's SMB share from *host* and return the mount path.
+    """Mount the Seestar guest SMB share and return the mount path.
 
-    Uses mount_smbfs (macOS) or mount -t cifs (Linux).  Guest access, no
-    password.  Returns None if the mount fails or the platform is unsupported.
+    Prefers a volume Finder/USB already mounted (EMMC Images or Seestar),
+    because /Volumes is root-owned. Otherwise guest-mounts "EMMC Images"
+    under the node data dir. The old share name "seestar" is not exported.
     """
+    existing = seestar_smb.find_existing_share()
+    if existing:
+        logger.info("Using already-mounted Seestar share at %s", existing)
+        return existing
+
     system = platform.system()
-    if system == "Darwin":
-        mount_point = str(_DATA_DIR / "mounts" / "seestar")
-        smb_url     = f"//guest:@{host}/{_SEESTAR_SMB_SHARE}"
-        cmd         = ["mount_smbfs", "-N", smb_url, mount_point]
-    elif system == "Linux":
-        mount_point = str(_DATA_DIR / "mounts" / "seestar")
-        smb_url     = f"//{host}/{_SEESTAR_SMB_SHARE}"
-        cmd         = ["mount", "-t", "cifs", smb_url, mount_point, "-o", "guest,uid=0,gid=0"]
-    else:
+    mount_point = str(_DATA_DIR / "mounts" / "seestar")
+    cmd = seestar_smb.mount_cmd(host, mount_point, system)
+    if cmd is None:
         return None
 
     if os.path.ismount(mount_point):
@@ -635,10 +633,11 @@ def _auto_mount_and_watch(host: str) -> None:
     mount_path = _try_mount_seestar_smb(host)
     if mount_path is None:
         return
+    watch_path = seestar_smb.watch_dir(mount_path)
     current_path = iw_cfg.get("watch_path", "")
     watcher_running = _image_watcher is not None and os.path.isdir(current_path)
-    if not watcher_running or current_path != mount_path:
-        _start_image_watcher_at(mount_path)
+    if not watcher_running or current_path != watch_path:
+        _start_image_watcher_at(watch_path)
 
 
 def _fits_to_png_b64(path: str) -> Optional[str]:
@@ -3092,7 +3091,7 @@ def _revive_image_watcher() -> bool:
     if host:
         mount_path = _try_mount_seestar_smb(host)
         if mount_path:
-            _start_image_watcher_at(mount_path)
+            _start_image_watcher_at(seestar_smb.watch_dir(mount_path))
             return True
     path = iw_cfg.get("watch_path", "")
     if path and os.path.isdir(path):
@@ -5224,11 +5223,14 @@ def launch(port: int = 5173) -> None:
     iw_cfg = cfg.get("image_watcher", {})
     if iw_cfg.get("enabled", False):
         configured_path = iw_cfg.get("watch_path", "")
-        # The Seestar SMB share always mounts under the node's own data dir
-        # (_try_mount_seestar_smb), so fall back to that same path — /Volumes
-        # and /mnt are root-owned and were never writable by the node process.
+        # Prefer a Finder/USB volume if it is already there. /Volumes is
+        # root-owned so the node cannot create a mount point there; our own
+        # guest mount lives under the node data dir.
+        existing = seestar_smb.find_existing_share()
         if configured_path and os.path.isdir(configured_path):
-            watch_path = configured_path
+            watch_path = seestar_smb.watch_dir(configured_path)
+        elif existing:
+            watch_path = seestar_smb.watch_dir(existing)
         else:
             watch_path = str(_DATA_DIR / "mounts" / "seestar")
         debounce_delay = float(iw_cfg.get("debounce_delay", 2.0))
