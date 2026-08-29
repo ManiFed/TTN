@@ -90,6 +90,13 @@ class LinkTest(_Base):
         result = browser_auth.start("http://127.0.0.1:8080/")
         self.assertTrue(result["url"].startswith("http://127.0.0.1:8080/"))
 
+    def test_mixed_case_production_host_is_upgraded_to_https(self):
+        """DNS hosts are case-insensitive; Flask may pass API.THETELESCOPE.NET."""
+        result = browser_auth.start("http://API.THETELESCOPE.NET/")
+        self.assertTrue(
+            result["url"].lower().startswith("https://api.thetelescope.net/"))
+        self.assertTrue(result["url"].startswith("https://"))
+
 
     def test_two_links_never_collide(self):
         self.assertNotEqual(self.start()["code"], self.start()["code"])
