@@ -12,7 +12,7 @@ wants to image is not argued with, and declining is always one call away.
 
 from __future__ import annotations
 
-from ..client import ApiError, CloudClient, encode_path
+from ..client import AgentClient, ApiError, CloudClient, encode_path
 from ..guard import require_confirmation
 
 
@@ -45,7 +45,29 @@ def _with_nudge(verdict: dict, when: str = "tonight") -> dict:
     return out
 
 
-def register(server, client: CloudClient) -> None:
+def _this_computer_node_id(agent: AgentClient | None) -> str:
+    """The node this MCP is sitting on, if the local agent is registered.
+
+    Remote (cloud-only) MCP has no agent. A stale sibling on the member
+    account must not win just because it is first in /me/nodes.
+    """
+    if agent is None:
+        return ""
+    try:
+        identity = agent.get("/api/cloud/identity", timeout=8.0)
+    except ApiError:
+        return ""
+    if not isinstance(identity, dict) or not identity.get("registered"):
+        return ""
+    return str(identity.get("node_id") or "")
+
+
+def _resolve_node_id(node_id: str, agent: AgentClient | None) -> str:
+    node_id = (node_id or "").strip()
+    return node_id or _this_computer_node_id(agent)
+
+
+def register(server, client: CloudClient, agent: AgentClient | None = None) -> None:
 
     @server.tool()
     def tonight(node_id: str = "") -> dict:
@@ -70,15 +92,28 @@ def register(server, client: CloudClient) -> None:
         return {"nights": out, "count": len(out)}
 
     @server.tool()
-    def tonight_accept(node_id: str, research_hours: float | None = None,
+    def tonight_accept(node_id: str = "", research_hours: float | None = None,
                        imaging_after: bool | None = None, note: str = "") -> dict:
         """Confirm tonight's run, optionally reshaping it.
+
+        On the telescope computer, omit `node_id` to use this machine's node.
+        Do not pick another node on the same account (a stale registration
+        will silently take the night). Remote MCP still needs an explicit id.
 
         `research_hours` sets how long the research block lasts before imaging
         takes over. Accepting is not required — the recommendation runs anyway
         if nobody answers by the deadline — but it takes effect immediately
         rather than at dusk.
         """
+        node_id = _resolve_node_id(node_id, agent)
+        if not node_id:
+            return {
+                "accepted": False,
+                "detail": (
+                    "Say which node, or run this on the telescope computer "
+                    "so I can use this machine's node."
+                ),
+            }
         body: dict = {"decision": "accept"}
         if research_hours is not None:
             body["research_hours"] = float(research_hours)
@@ -90,8 +125,20 @@ def register(server, client: CloudClient) -> None:
             client.post(f"/me/nodes/{encode_path(node_id)}/tonight", body))
 
     @server.tool()
-    def tonight_decline(node_id: str, note: str = "") -> dict:
-        """Sit tonight out. Affects tonight only; tomorrow is asked again."""
+    def tonight_decline(node_id: str = "", note: str = "") -> dict:
+        """Sit tonight out. Affects tonight only; tomorrow is asked again.
+
+        Same default as `tonight_accept`: this computer's node when omitted.
+        """
+        node_id = _resolve_node_id(node_id, agent)
+        if not node_id:
+            return {
+                "declined": False,
+                "detail": (
+                    "Say which node, or run this on the telescope computer "
+                    "so I can use this machine's node."
+                ),
+            }
         body: dict = {"decision": "decline"}
         if note:
             body["note"] = note
