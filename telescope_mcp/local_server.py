@@ -138,7 +138,7 @@ def build_server(agent: AgentClient | None = None,
         member.register(server, client)
         network.register(server, client)
         integrity.register(server, client)
-        tonight.register(server, client)
+        tonight.register(server, client, agent)
         admin.register(server, client)
         # Composite tools need both backends at once, so they live only here.
         setup.register(server, agent, client)
