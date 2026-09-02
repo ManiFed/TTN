@@ -8,8 +8,10 @@ headless service restart at 2 a.m. left the telescope disconnected until a
 person intervened.  This supervisor closes those gaps with one periodic loop:
 
 * **Device connection** — when no telescope/camera is connected and a default
-  ALPACA server is saved in config, retry the connection with backoff.  This
-  makes "power blip → service restart → observing resumes" true headless.
+  ALPACA server is saved in config, retry the connection with backoff.  If the
+  saved host stays unreachable (common after a Seestar DHCP lease change),
+  optionally rediscover ALPACA servers on the LAN and promote a working one.
+  This makes "power blip → service restart → observing resumes" true headless.
 * **Image watcher** — re-mount the Seestar SMB share and restart the watcher
   if the watch path vanished (Seestar reboot, stale CIFS mount).
 * **Disk health** — emit telemetry when free space is low and prune old
@@ -56,6 +58,8 @@ class NodeSupervisor:
         watcher_ok: Callable[[], bool],
         restart_watcher: Callable[[], bool],
         interval_s: float = 30.0,
+        discover_servers: Optional[Callable[[], list]] = None,
+        persist_default_server: Optional[Callable[[str, int], None]] = None,
     ) -> None:
         self._load_config = load_config
         self._devices_connected = devices_connected
@@ -63,6 +67,10 @@ class NodeSupervisor:
         self._watcher_ok = watcher_ok
         self._restart_watcher = restart_watcher
         self._interval_s = interval_s
+        # Optional: when the saved ALPACA host is unreachable after a DHCP
+        # change / power cycle, rediscover on the LAN and try alternatives.
+        self._discover_servers = discover_servers
+        self._persist_default_server = persist_default_server
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -149,10 +157,44 @@ class NodeSupervisor:
         except Exception as exc:
             ok = False
             logger.warning("Supervisor: reconnect raised: %s", exc)
+
+        used_host, used_port = host, port
+        if not ok and self._discover_servers is not None:
+            try:
+                found = self._discover_servers() or []
+            except Exception as exc:
+                found = []
+                logger.warning("Supervisor: rediscovery raised: %s", exc)
+            for entry in found:
+                alt_host = str(entry.get("address") or "")
+                alt_port = int(entry.get("port") or 0)
+                if not alt_host or not alt_port:
+                    continue
+                if alt_host == host and alt_port == port:
+                    continue
+                logger.info(
+                    "Supervisor: saved server unreachable — trying discovered %s:%d",
+                    alt_host, alt_port)
+                try:
+                    ok = self._connect_default(alt_host, alt_port)
+                except Exception as exc:
+                    ok = False
+                    logger.warning("Supervisor: rediscovered reconnect raised: %s", exc)
+                if ok:
+                    used_host, used_port = alt_host, alt_port
+                    if self._persist_default_server is not None:
+                        try:
+                            self._persist_default_server(alt_host, alt_port)
+                        except Exception as exc:
+                            logger.warning(
+                                "Supervisor: could not persist rediscovered server: %s",
+                                exc)
+                    break
+
         if ok:
             self._reconnect_backoff_s = _RECONNECT_BASE_S
             telemetry.event("device_reconnected", severity="info",
-                            detail={"host": host, "port": port})
+                            detail={"host": used_host, "port": used_port})
         else:
             telemetry.event(
                 "device_connect_failed", severity="warning",
