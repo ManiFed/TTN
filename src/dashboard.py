@@ -3721,12 +3721,49 @@ def api_config_get():
 
 @app.route("/api/config", methods=["POST"])
 def api_config_post():
+    """Save node config.
+
+    Full YAML replace is allowed for text/yaml (dashboard editor).  JSON
+    bodies are treated as *patches* and deep-merged — posting
+    ``{"alpaca":{"default_server":{"address":"..."}}}`` used to pass
+    ``yaml.safe_load`` (JSON is valid YAML) and overwrite the whole file
+    with a one-line JSON blob (Starfront 2026-09-01).
+    """
+    ctype = (request.content_type or "").lower()
     raw = request.get_data(as_text=True)
+
+    if "application/json" in ctype:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON config patch must be an object"}), 400
+        try:
+            from src.config_patch import apply_config_patch
+            apply_config_patch(data)
+        except Exception as exc:
+            logger.exception("JSON config patch failed")
+            return jsonify({"error": f"Could not save configuration: {exc}"}), 500
+        logger.info("config.yaml patched via JSON POST: %s", list(data.keys()))
+        return jsonify({"ok": True, "mode": "patch"})
+
     try:
-        yaml.safe_load(raw)
+        parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
         logger.warning("config.yaml POST rejected — invalid YAML: %s", exc)
         return jsonify({"error": "invalid YAML — configuration was not saved"}), 400
+    if not isinstance(parsed, dict):
+        return jsonify({"error": "config.yaml root must be a mapping"}), 400
+    # Guardrail: refuse a "full replace" that looks like a tiny JSON patch
+    # sent without application/json (common curl mistake).
+    try:
+        current = _load_config()
+    except Exception:
+        current = {}
+    if current and "alpaca" in current and "alpaca" not in parsed:
+        return jsonify({
+            "error": "refusing to overwrite config.yaml — body is missing "
+                     "required top-level keys (did you mean a JSON patch "
+                     "with Content-Type: application/json?)"
+        }), 400
     try:
         with open("config.yaml", "w") as fh:
             fh.write(raw)
@@ -3734,7 +3771,7 @@ def api_config_post():
         logger.exception("Writing config.yaml failed")
         return jsonify({"error": "Could not save configuration"}), 500
     logger.info("config.yaml updated via dashboard")
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "mode": "replace"})
 
 
 @app.route("/api/config/parsed", methods=["GET"])
