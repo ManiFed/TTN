@@ -104,5 +104,45 @@ class LoadConfigResilienceTest(TempCwdTestCase):
         self.assertTrue(cfg["cloud"]["enabled"])
 
 
+class ConfigPostReplaceGuardTest(TempCwdTestCase):
+    """curl -d without application/json must not wipe config.yaml."""
+
+    FULL = (
+        "alpaca:\n  default_server:\n    address: 10.0.0.5\n"
+        "cloud:\n  enabled: true\n"
+        "safety:\n  enabled: true\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        dashboard._last_good_config = {}
+        dashboard._config_parse_error_reported = False
+        self.write("config.yaml", self.FULL)
+
+    def test_urlencoded_alpaca_patch_is_rejected_and_file_is_intact(self):
+        client = dashboard.app.test_client()
+        resp = client.post(
+            "/api/config",
+            data='{"alpaca":{"default_server":{"address":"1.2.3.4"}}}',
+            content_type="application/x-www-form-urlencoded",
+        )
+        self.assertEqual(resp.status_code, 400)
+        cfg = yaml.safe_load(pathlib.Path("config.yaml").read_text())
+        self.assertTrue(cfg["cloud"]["enabled"])
+        self.assertTrue(cfg["safety"]["enabled"])
+        self.assertEqual(cfg["alpaca"]["default_server"]["address"], "10.0.0.5")
+
+    def test_json_content_type_still_patches(self):
+        client = dashboard.app.test_client()
+        resp = client.post(
+            "/api/config",
+            data='{"alpaca":{"default_server":{"address":"1.2.3.4"}}}',
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        cfg = yaml.safe_load(pathlib.Path("config.yaml").read_text())
+        self.assertEqual(cfg["alpaca"]["default_server"]["address"], "1.2.3.4")
+        self.assertTrue(cfg["cloud"]["enabled"])
+
 if __name__ == "__main__":
     unittest.main()

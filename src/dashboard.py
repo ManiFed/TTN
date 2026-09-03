@@ -3721,12 +3721,54 @@ def api_config_get():
 
 @app.route("/api/config", methods=["POST"])
 def api_config_post():
+    """Save node config.
+
+    Full YAML replace is allowed for text/yaml (dashboard editor).  JSON
+    bodies are treated as *patches* and deep-merged — posting
+    ``{"alpaca":{"default_server":{"address":"..."}}}`` used to pass
+    ``yaml.safe_load`` (JSON is valid YAML) and overwrite the whole file
+    with a one-line JSON blob (Starfront 2026-09-01).
+    """
+    ctype = (request.content_type or "").lower()
     raw = request.get_data(as_text=True)
+
+    if "application/json" in ctype:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON config patch must be an object"}), 400
+        try:
+            from src.config_patch import apply_config_patch
+            apply_config_patch(data)
+        except Exception as exc:
+            logger.exception("JSON config patch failed")
+            return jsonify({"error": "Could not save configuration"}), 500
+        logger.info("config.yaml patched via JSON POST: %s", list(data.keys()))
+        return jsonify({"ok": True, "mode": "patch"})
+
     try:
-        yaml.safe_load(raw)
+        parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
         logger.warning("config.yaml POST rejected — invalid YAML: %s", exc)
         return jsonify({"error": "invalid YAML — configuration was not saved"}), 400
+    if not isinstance(parsed, dict):
+        return jsonify({"error": "config.yaml root must be a mapping"}), 400
+    # Guardrail: refuse a "full replace" that drops existing top-level
+    # sections. curl -d '{"alpaca":...}' without application/json is valid
+    # YAML (JSON is YAML) and used to wipe cloud/devices/safety even when
+    # the patch *contains* alpaca.
+    try:
+        current = _load_config()
+    except Exception:
+        current = {}
+    keep = ("alpaca", "cloud", "devices", "safety", "observatory",
+            "photometry", "image_watcher", "storage", "autonomy")
+    missing = [k for k in keep if k in current and k not in parsed]
+    if current and missing:
+        return jsonify({
+            "error": "refusing to overwrite config.yaml — body is missing "
+                     "top-level keys %s (did you mean a JSON patch "
+                     "with Content-Type: application/json?)" % missing
+        }), 400
     try:
         with open("config.yaml", "w") as fh:
             fh.write(raw)
@@ -3734,7 +3776,7 @@ def api_config_post():
         logger.exception("Writing config.yaml failed")
         return jsonify({"error": "Could not save configuration"}), 500
     logger.info("config.yaml updated via dashboard")
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "mode": "replace"})
 
 
 @app.route("/api/config/parsed", methods=["GET"])
