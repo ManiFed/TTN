@@ -158,7 +158,18 @@ def center_on_target(
 
         _check_cancel()
         image = capture_fn()
-        solved = solve_fn(image, commanded_ra, commanded_dec)
+        try:
+            solved = solve_fn(image, commanded_ra, commanded_dec)
+        except TypeError as exc:
+            # A bad/renamed keyword arg here means the caller and the solver
+            # module disagree on the plate-solve call signature (e.g. an
+            # installed build that predates a solver_path rename) — surface
+            # it as an actionable error instead of an opaque crash.
+            raise CenteringError(
+                f"Plate solver invocation failed ({exc}). This usually means "
+                "the installed NodeAgent build is out of sync with its solver "
+                "module — reinstall/update the app and try again."
+            ) from exc
 
         if solved is None:
             logger.warning("Centering iteration %d: plate solve failed", i)

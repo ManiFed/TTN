@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -569,7 +570,7 @@ def _store_history_image(
 
 _image_watcher: Optional[ImageWatcher] = None
 
-_SEESTAR_SMB_SHARE = "seestar"
+_SEESTAR_SMB_SHARE = "EMMC Images"
 
 
 def _try_mount_seestar_smb(host: str) -> Optional[str]:
@@ -578,14 +579,18 @@ def _try_mount_seestar_smb(host: str) -> Optional[str]:
     Uses mount_smbfs (macOS) or mount -t cifs (Linux).  Guest access, no
     password.  Returns None if the mount fails or the platform is unsupported.
     """
+    # The share name contains a space, which must be percent-encoded in the
+    # SMB URL (mount_smbfs/cifs both take a URL, not a raw share name).
+    share = urllib.parse.quote(_SEESTAR_SMB_SHARE)
+
     system = platform.system()
     if system == "Darwin":
         mount_point = str(_DATA_DIR / "mounts" / "seestar")
-        smb_url     = f"//guest:@{host}/{_SEESTAR_SMB_SHARE}"
+        smb_url     = f"//guest:@{host}/{share}"
         cmd         = ["mount_smbfs", "-N", smb_url, mount_point]
     elif system == "Linux":
         mount_point = str(_DATA_DIR / "mounts" / "seestar")
-        smb_url     = f"//{host}/{_SEESTAR_SMB_SHARE}"
+        smb_url     = f"//{host}/{share}"
         cmd         = ["mount", "-t", "cifs", smb_url, mount_point, "-o", "guest,uid=0,gid=0"]
     else:
         return None
@@ -1486,6 +1491,32 @@ _center_state: dict = {
 }
 
 
+class _LockedDeviceProxy:
+    """Wrap a device so ``_device_lock`` is held only for each individual call,
+    not for the whole (possibly minutes-long) centering session.
+
+    ``center_on_target_device`` interleaves brief device calls (slew, expose,
+    read) with an ASTAP/astrometry.net solve that can run for a long time and
+    touches no hardware. Holding ``_device_lock`` across the entire call
+    starves every other device-command route (park, slew, expose, schedule)
+    for the whole centering run — see issue #45.
+    """
+
+    def __init__(self, target):
+        self._target = target
+
+    def __getattr__(self, name):
+        attr = getattr(self._target, name)
+        if not callable(attr):
+            return attr
+
+        def _locked_call(*args, **kwargs):
+            with _device_lock:
+                return attr(*args, **kwargs)
+
+        return _locked_call
+
+
 def _run_centering_bg(
     target_ra_deg: float,
     target_dec_deg: float,
@@ -1530,19 +1561,19 @@ def _run_centering_bg(
             })
 
     try:
-        with _device_lock:
-            result = center_on_target_device(
-                _tel, _cam, target_ra_deg, target_dec_deg,
-                exposure_s=exposure_s,
-                tolerance_arcmin=tolerance_arcmin,
-                max_iterations=max_iterations,
-                settle_s=settle_s,
-                solver=solver_type,
-                solver_path=solver_path,
-                search_radius=radius,
-                cancel_check=_cancelled,
-                progress_cb=_progress,
-            )
+        result = center_on_target_device(
+            _LockedDeviceProxy(_tel), _LockedDeviceProxy(_cam),
+            target_ra_deg, target_dec_deg,
+            exposure_s=exposure_s,
+            tolerance_arcmin=tolerance_arcmin,
+            max_iterations=max_iterations,
+            settle_s=settle_s,
+            solver=solver_type,
+            solver_path=solver_path,
+            search_radius=radius,
+            cancel_check=_cancelled,
+            progress_cb=_progress,
+        )
         with _center_lock:
             _center_state["result"]  = result.as_dict()
             _center_state["running"] = False
@@ -3446,8 +3477,11 @@ def api_expose():
         if _state["camera"]["exposing"]:
             return jsonify({"error": "Exposure already in progress"}), 409
 
-    data     = request.get_json(force=True) or {}
-    duration = float(data.get("duration", 1.0))
+    data = request.get_json(force=True) or {}
+    # The MCP client posts "seconds" (see telescope_mcp/tools/hardware.py
+    # node_expose); accept both keys so a mismatch doesn't silently fall back
+    # to a 1s exposure (issue #48).
+    duration = float(data.get("duration", data.get("seconds", 1.0)))
     binning  = int(data.get("binning", 1))
 
     if duration <= 0:
