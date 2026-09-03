@@ -5368,12 +5368,27 @@ def launch(port: int = 5173) -> None:
 
     # Supervisor: headless device reconnect, image-watcher revival, disk
     # health/retention, host-sleep detection.
+    def _supervisor_discover():
+        alpaca_cfg = _load_config().get("alpaca") or {}
+        return discover_servers(
+            port=int(alpaca_cfg.get("discovery_port") or 32227),
+            timeout=float(alpaca_cfg.get("discovery_timeout") or 8),
+        )
+
+    def _supervisor_persist_default(host: str, port: int) -> None:
+        from src.config_patch import apply_config_patch
+        apply_config_patch(
+            {"alpaca": {"default_server": {"address": host, "port": port}}})
+        logger.info("Supervisor: default ALPACA server updated to %s:%d", host, port)
+
     _supervisor = NodeSupervisor(
         load_config=_load_config,
         devices_connected=_supervisor_devices_ok,
         connect_default=_supervisor_connect,
         watcher_ok=_supervisor_watcher_ok,
         restart_watcher=_revive_image_watcher,
+        discover_servers=_supervisor_discover,
+        persist_default_server=_supervisor_persist_default,
     )
     _supervisor.start()
 

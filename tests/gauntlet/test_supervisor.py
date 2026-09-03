@@ -27,9 +27,12 @@ class _Harness:
         self.connected = False
         self.connect_result = True
         self.connect_calls = []
+        self.connect_results_by_host = None  # optional {(host, port): bool}
         self.watcher_healthy = True
         self.restart_result = True
         self.restart_calls = 0
+        self.discovered = []
+        self.persisted = []
 
     def make(self, **kwargs) -> NodeSupervisor:
         return NodeSupervisor(
@@ -38,14 +41,30 @@ class _Harness:
             connect_default=self._connect,
             watcher_ok=lambda: self.watcher_healthy,
             restart_watcher=self._restart,
+            discover_servers=kwargs.pop("discover_servers", self._discover),
+            persist_default_server=kwargs.pop(
+                "persist_default_server", self._persist),
             **kwargs,
         )
 
+    def _discover(self):
+        return list(self.discovered)
+
+    def _persist(self, host, port):
+        self.persisted.append((host, port))
+        self.config.setdefault("alpaca", {}).setdefault("default_server", {})
+        self.config["alpaca"]["default_server"]["address"] = host
+        self.config["alpaca"]["default_server"]["port"] = port
+
     def _connect(self, host, port):
         self.connect_calls.append((host, port))
-        if self.connect_result:
+        if self.connect_results_by_host is not None:
+            ok = bool(self.connect_results_by_host.get((host, port), False))
+        else:
+            ok = bool(self.connect_result)
+        if ok:
             self.connected = True
-        return self.connect_result
+        return ok
 
     def _restart(self):
         self.restart_calls += 1
@@ -110,6 +129,50 @@ class SupervisorGauntletTest(TempCwdTestCase):
             restart_watcher=lambda: True,
         )
         sup.tick()  # must not raise
+        self.assertGreaterEqual(
+            telemetry.counters().get("device_connect_failed", 0), 1)
+
+    def test_unreachable_saved_ip_falls_back_to_discovery(self):
+        """Starfront 2026-09-01: Seestar DHCP moved 172.22.6.32 → .140."""
+        self.h.connect_results_by_host = {
+            ("10.0.0.5", 5555): False,
+            ("10.0.0.9", 5555): True,
+        }
+        self.h.discovered = [{"address": "10.0.0.9", "port": 5555,
+                              "device_name": "Seestar S30PROSF Telescope"}]
+        sup = self.h.make()
+        sup.tick()
+        self.assertEqual(
+            self.h.connect_calls, [("10.0.0.5", 5555), ("10.0.0.9", 5555)])
+        self.assertEqual(self.h.persisted, [("10.0.0.9", 5555)])
+        self.assertEqual(
+            self.h.config["alpaca"]["default_server"]["address"], "10.0.0.9")
+        self.assertEqual(telemetry.counters().get("device_reconnected"), 1)
+
+    def test_discovery_skips_a_server_with_the_wrong_serial(self):
+        """Two ALPACA servers on the LAN; only the saved UniqueID is ours."""
+        self.h.config["observatory"] = {"telescope_serial": "SEESTAR-OURS"}
+        self.h.connect_results_by_host = {
+            ("10.0.0.5", 5555): False,
+            ("10.0.0.8", 5555): True,   # simulator / neighbor
+            ("10.0.0.9", 5555): True,   # our Seestar, new DHCP
+        }
+        self.h.discovered = [
+            {"address": "10.0.0.8", "port": 5555, "serial": "OTHER-SCOPE"},
+            {"address": "10.0.0.9", "port": 5555, "serial": "SEESTAR-OURS"},
+        ]
+        sup = self.h.make()
+        sup.tick()
+        self.assertNotIn(("10.0.0.8", 5555), self.h.connect_calls)
+        self.assertEqual(self.h.persisted, [("10.0.0.9", 5555)])
+
+    def test_discovery_skips_same_dead_saved_host(self):
+        self.h.connect_result = False
+        self.h.discovered = [{"address": "10.0.0.5", "port": 5555}]
+        sup = self.h.make()
+        sup.tick()
+        self.assertEqual(self.h.connect_calls, [("10.0.0.5", 5555)])
+        self.assertEqual(self.h.persisted, [])
         self.assertGreaterEqual(
             telemetry.counters().get("device_connect_failed", 0), 1)
 
