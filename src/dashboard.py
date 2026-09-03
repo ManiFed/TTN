@@ -53,6 +53,7 @@ from src.cloud_communicator import CloudCommunicator
 from src import telemetry as _telemetry
 from src.node_supervisor import NodeSupervisor
 from src.commissioning import CommissioningManager
+from src import seestar_smb
 
 
 app = Flask(__name__)
@@ -574,10 +575,11 @@ _SEESTAR_SMB_SHARE = "EMMC Images"
 
 
 def _try_mount_seestar_smb(host: str) -> Optional[str]:
-    """Mount the Seestar's SMB share from *host* and return the mount path.
+    """Mount the Seestar guest SMB share and return the mount path.
 
-    Uses mount_smbfs (macOS) or mount -t cifs (Linux).  Guest access, no
-    password.  Returns None if the mount fails or the platform is unsupported.
+    Prefers a volume Finder/USB already mounted (EMMC Images or Seestar),
+    because /Volumes is root-owned. Otherwise guest-mounts "EMMC Images"
+    under the node data dir. The old share name "seestar" is not exported.
     """
     # The share name contains a space, which must be percent-encoded in the
     # SMB URL (mount_smbfs/cifs both take a URL, not a raw share name).
@@ -640,10 +642,11 @@ def _auto_mount_and_watch(host: str) -> None:
     mount_path = _try_mount_seestar_smb(host)
     if mount_path is None:
         return
+    watch_path = seestar_smb.watch_dir(mount_path)
     current_path = iw_cfg.get("watch_path", "")
     watcher_running = _image_watcher is not None and os.path.isdir(current_path)
-    if not watcher_running or current_path != mount_path:
-        _start_image_watcher_at(mount_path)
+    if not watcher_running or current_path != watch_path:
+        _start_image_watcher_at(watch_path)
 
 
 def _fits_to_png_b64(path: str) -> Optional[str]:
@@ -3123,7 +3126,7 @@ def _revive_image_watcher() -> bool:
     if host:
         mount_path = _try_mount_seestar_smb(host)
         if mount_path:
-            _start_image_watcher_at(mount_path)
+            _start_image_watcher_at(seestar_smb.watch_dir(mount_path))
             return True
     path = iw_cfg.get("watch_path", "")
     if path and os.path.isdir(path):
@@ -3756,12 +3759,54 @@ def api_config_get():
 
 @app.route("/api/config", methods=["POST"])
 def api_config_post():
+    """Save node config.
+
+    Full YAML replace is allowed for text/yaml (dashboard editor).  JSON
+    bodies are treated as *patches* and deep-merged — posting
+    ``{"alpaca":{"default_server":{"address":"..."}}}`` used to pass
+    ``yaml.safe_load`` (JSON is valid YAML) and overwrite the whole file
+    with a one-line JSON blob (Starfront 2026-09-01).
+    """
+    ctype = (request.content_type or "").lower()
     raw = request.get_data(as_text=True)
+
+    if "application/json" in ctype:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON config patch must be an object"}), 400
+        try:
+            from src.config_patch import apply_config_patch
+            apply_config_patch(data)
+        except Exception as exc:
+            logger.exception("JSON config patch failed")
+            return jsonify({"error": "Could not save configuration"}), 500
+        logger.info("config.yaml patched via JSON POST: %s", list(data.keys()))
+        return jsonify({"ok": True, "mode": "patch"})
+
     try:
-        yaml.safe_load(raw)
+        parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
         logger.warning("config.yaml POST rejected — invalid YAML: %s", exc)
         return jsonify({"error": "invalid YAML — configuration was not saved"}), 400
+    if not isinstance(parsed, dict):
+        return jsonify({"error": "config.yaml root must be a mapping"}), 400
+    # Guardrail: refuse a "full replace" that drops existing top-level
+    # sections. curl -d '{"alpaca":...}' without application/json is valid
+    # YAML (JSON is YAML) and used to wipe cloud/devices/safety even when
+    # the patch *contains* alpaca.
+    try:
+        current = _load_config()
+    except Exception:
+        current = {}
+    keep = ("alpaca", "cloud", "devices", "safety", "observatory",
+            "photometry", "image_watcher", "storage", "autonomy")
+    missing = [k for k in keep if k in current and k not in parsed]
+    if current and missing:
+        return jsonify({
+            "error": "refusing to overwrite config.yaml — body is missing "
+                     "top-level keys %s (did you mean a JSON patch "
+                     "with Content-Type: application/json?)" % missing
+        }), 400
     try:
         with open("config.yaml", "w") as fh:
             fh.write(raw)
@@ -3769,7 +3814,7 @@ def api_config_post():
         logger.exception("Writing config.yaml failed")
         return jsonify({"error": "Could not save configuration"}), 500
     logger.info("config.yaml updated via dashboard")
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "mode": "replace"})
 
 
 @app.route("/api/config/parsed", methods=["GET"])
@@ -5258,11 +5303,14 @@ def launch(port: int = 5173) -> None:
     iw_cfg = cfg.get("image_watcher", {})
     if iw_cfg.get("enabled", False):
         configured_path = iw_cfg.get("watch_path", "")
-        # The Seestar SMB share always mounts under the node's own data dir
-        # (_try_mount_seestar_smb), so fall back to that same path — /Volumes
-        # and /mnt are root-owned and were never writable by the node process.
+        # Prefer a Finder/USB volume if it is already there. /Volumes is
+        # root-owned so the node cannot create a mount point there; our own
+        # guest mount lives under the node data dir.
+        existing = seestar_smb.find_existing_share()
         if configured_path and os.path.isdir(configured_path):
-            watch_path = configured_path
+            watch_path = seestar_smb.watch_dir(configured_path)
+        elif existing:
+            watch_path = seestar_smb.watch_dir(existing)
         else:
             watch_path = str(_DATA_DIR / "mounts" / "seestar")
         debounce_delay = float(iw_cfg.get("debounce_delay", 2.0))
@@ -5358,12 +5406,27 @@ def launch(port: int = 5173) -> None:
 
     # Supervisor: headless device reconnect, image-watcher revival, disk
     # health/retention, host-sleep detection.
+    def _supervisor_discover():
+        alpaca_cfg = _load_config().get("alpaca") or {}
+        return discover_servers(
+            port=int(alpaca_cfg.get("discovery_port") or 32227),
+            timeout=float(alpaca_cfg.get("discovery_timeout") or 8),
+        )
+
+    def _supervisor_persist_default(host: str, port: int) -> None:
+        from src.config_patch import apply_config_patch
+        apply_config_patch(
+            {"alpaca": {"default_server": {"address": host, "port": port}}})
+        logger.info("Supervisor: default ALPACA server updated to %s:%d", host, port)
+
     _supervisor = NodeSupervisor(
         load_config=_load_config,
         devices_connected=_supervisor_devices_ok,
         connect_default=_supervisor_connect,
         watcher_ok=_supervisor_watcher_ok,
         restart_watcher=_revive_image_watcher,
+        discover_servers=_supervisor_discover,
+        persist_default_server=_supervisor_persist_default,
     )
     _supervisor.start()
 
