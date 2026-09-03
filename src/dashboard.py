@@ -3741,7 +3741,7 @@ def api_config_post():
             apply_config_patch(data)
         except Exception as exc:
             logger.exception("JSON config patch failed")
-            return jsonify({"error": f"Could not save configuration: {exc}"}), 500
+            return jsonify({"error": "Could not save configuration"}), 500
         logger.info("config.yaml patched via JSON POST: %s", list(data.keys()))
         return jsonify({"ok": True, "mode": "patch"})
 
