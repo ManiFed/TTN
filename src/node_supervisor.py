@@ -165,12 +165,21 @@ class NodeSupervisor:
             except Exception as exc:
                 found = []
                 logger.warning("Supervisor: rediscovery raised: %s", exc)
+            want_serial = str(
+                (cfg.get("observatory") or {}).get("telescope_serial") or ""
+            ).strip().lower()
             for entry in found:
                 alt_host = str(entry.get("address") or "")
                 alt_port = int(entry.get("port") or 0)
                 if not alt_host or not alt_port:
                     continue
                 if alt_host == host and alt_port == port:
+                    continue
+                got_serial = str(entry.get("serial") or "").strip().lower()
+                if want_serial and got_serial != want_serial:
+                    logger.info(
+                        "Supervisor: skipping discovered %s:%d serial %s (want %s)",
+                        alt_host, alt_port, got_serial or "(none)", want_serial)
                     continue
                 logger.info(
                     "Supervisor: saved server unreachable — trying discovered %s:%d",
