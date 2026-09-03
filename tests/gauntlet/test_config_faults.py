@@ -104,10 +104,6 @@ class LoadConfigResilienceTest(TempCwdTestCase):
         self.assertTrue(cfg["cloud"]["enabled"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ConfigPostReplaceGuardTest(TempCwdTestCase):
     """curl -d without application/json must not wipe config.yaml."""
 
@@ -147,3 +143,6 @@ class ConfigPostReplaceGuardTest(TempCwdTestCase):
         cfg = yaml.safe_load(pathlib.Path("config.yaml").read_text())
         self.assertEqual(cfg["alpaca"]["default_server"]["address"], "1.2.3.4")
         self.assertTrue(cfg["cloud"]["enabled"])
+
+if __name__ == "__main__":
+    unittest.main()
