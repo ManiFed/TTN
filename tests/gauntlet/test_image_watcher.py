@@ -69,6 +69,16 @@ class ImageWatcherGauntletTest(TempCwdTestCase):
         time.sleep(0.5)
         self.assertEqual(len(self.events), 1)
 
+    def test_fits_in_subdirectory_is_detected(self):
+        # Seestar lays frames out as MyWorks/<target>_sub/*.fits, not flat at
+        # the share root — the watch must be recursive (issue #48).
+        self.watcher.start()
+        os.makedirs(os.path.join("watch", "MyWorks", "ZCam_sub"), exist_ok=True)
+        self._write(os.path.join("MyWorks", "ZCam_sub", "frame1.fits"))
+        self.assertTrue(self.fired.wait(timeout=5))
+        self.assertTrue(self.events[0]["path"].endswith(
+            os.path.join("MyWorks", "ZCam_sub", "frame1.fits")))
+
     def test_non_fits_files_are_ignored(self):
         self.watcher.start()
         self._write("thumbnail.jpg")
