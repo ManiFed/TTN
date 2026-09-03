@@ -3752,17 +3752,22 @@ def api_config_post():
         return jsonify({"error": "invalid YAML — configuration was not saved"}), 400
     if not isinstance(parsed, dict):
         return jsonify({"error": "config.yaml root must be a mapping"}), 400
-    # Guardrail: refuse a "full replace" that looks like a tiny JSON patch
-    # sent without application/json (common curl mistake).
+    # Guardrail: refuse a "full replace" that drops existing top-level
+    # sections. curl -d '{"alpaca":...}' without application/json is valid
+    # YAML (JSON is YAML) and used to wipe cloud/devices/safety even when
+    # the patch *contains* alpaca.
     try:
         current = _load_config()
     except Exception:
         current = {}
-    if current and "alpaca" in current and "alpaca" not in parsed:
+    keep = ("alpaca", "cloud", "devices", "safety", "observatory",
+            "photometry", "image_watcher", "storage", "autonomy")
+    missing = [k for k in keep if k in current and k not in parsed]
+    if current and missing:
         return jsonify({
             "error": "refusing to overwrite config.yaml — body is missing "
-                     "required top-level keys (did you mean a JSON patch "
-                     "with Content-Type: application/json?)"
+                     "top-level keys %s (did you mean a JSON patch "
+                     "with Content-Type: application/json?)" % missing
         }), 400
     try:
         with open("config.yaml", "w") as fh:
