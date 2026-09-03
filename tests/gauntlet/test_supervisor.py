@@ -149,6 +149,23 @@ class SupervisorGauntletTest(TempCwdTestCase):
             self.h.config["alpaca"]["default_server"]["address"], "10.0.0.9")
         self.assertEqual(telemetry.counters().get("device_reconnected"), 1)
 
+    def test_discovery_skips_a_server_with_the_wrong_serial(self):
+        """Two ALPACA servers on the LAN; only the saved UniqueID is ours."""
+        self.h.config["observatory"] = {"telescope_serial": "SEESTAR-OURS"}
+        self.h.connect_results_by_host = {
+            ("10.0.0.5", 5555): False,
+            ("10.0.0.8", 5555): True,   # simulator / neighbor
+            ("10.0.0.9", 5555): True,   # our Seestar, new DHCP
+        }
+        self.h.discovered = [
+            {"address": "10.0.0.8", "port": 5555, "serial": "OTHER-SCOPE"},
+            {"address": "10.0.0.9", "port": 5555, "serial": "SEESTAR-OURS"},
+        ]
+        sup = self.h.make()
+        sup.tick()
+        self.assertNotIn(("10.0.0.8", 5555), self.h.connect_calls)
+        self.assertEqual(self.h.persisted, [("10.0.0.9", 5555)])
+
     def test_discovery_skips_same_dead_saved_host(self):
         self.h.connect_result = False
         self.h.discovered = [{"address": "10.0.0.5", "port": 5555}]
