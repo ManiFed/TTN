@@ -2031,10 +2031,18 @@ def auth_link_page():
     return Response(_AUTH_LINK_PAGE, mimetype="text/html")
 
 
+def _no_store(resp):
+    """Browser-auth responses must never be cached (CDN/proxy) — a sticky
+    pending poll is exactly the #50 failure mode."""
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.route("/api/v1/auth/browser/start", methods=["POST"])
 def api_auth_browser_start():
     """Begin a browser sign-in; returns the link for the member to open."""
-    return jsonify(browser_auth.start(request.url_root))
+    return _no_store(jsonify(browser_auth.start(request.url_root)))
 
 
 @app.route("/api/v1/auth/browser/approve", methods=["POST"])
@@ -2047,15 +2055,17 @@ def api_auth_browser_approve():
         str(body.get("token") or ""),
     )
     if not ok:
-        return jsonify({"error": "That sign-in link is no longer valid. "
-                                 "Ask your assistant for a new one."}), 400
-    return jsonify({"ok": True})
+        resp = _no_store(jsonify({"error": "That sign-in link is no longer valid. "
+                                 "Ask your assistant for a new one."}))
+        resp.status_code = 400
+        return resp
+    return _no_store(jsonify({"ok": True}))
 
 
 @app.route("/api/v1/auth/browser/poll", methods=["POST"])
 def api_auth_browser_poll():
     """Has the member finished? Hands the session over exactly once."""
-    return jsonify(browser_auth.poll(str(_json_body().get("code") or "")))
+    return _no_store(jsonify(browser_auth.poll(str(_json_body().get("code") or ""))))
 
 
 @app.route("/api/v1/auth/login", methods=["POST"])
