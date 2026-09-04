@@ -29,6 +29,14 @@ class ExposeDurationKeyTest(unittest.TestCase):
     def setUp(self):
         dashboard.app.testing = True
         self.client = dashboard.app.test_client()
+        # dashboard._cam is a process-wide singleton other test modules may
+        # have already connected — force the "not connected" branch so this
+        # test's outcome doesn't depend on suite run order.
+        self._orig_cam = dashboard._cam
+        dashboard._cam = None
+
+    def tearDown(self):
+        dashboard._cam = self._orig_cam
 
     def test_expose_rejects_when_camera_not_connected_but_reads_seconds_key(self):
         # No camera is wired up in this unit test, so the request 400s before
