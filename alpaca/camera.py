@@ -139,6 +139,11 @@ class Camera:
         # some drivers set imageready while still in STATE_DOWNLOAD (4), and
         # requiring IDLE would miss that window entirely.
         deadline = time.monotonic() + duration + readout_timeout
+        # If the camera returns to IDLE without ImageReady after the exposure
+        # window, fail fast — waiting out a long readout_timeout with an empty
+        # buffer is what left node_expose hanging after a failed center (#52).
+        idle_grace = max(5.0, min(15.0, duration + 5.0))
+        idle_since: Optional[float] = None
         while time.monotonic() < deadline:
             if cancel_check is not None and cancel_check():
                 self.abort_exposure()
@@ -149,6 +154,18 @@ class Camera:
             if self.image_ready():
                 logger.info("Exposure complete — image ready for download (camera state=%d)", state)
                 return
+            now = time.monotonic()
+            if state == _STATE_IDLE and now >= (deadline - readout_timeout) + idle_grace:
+                if idle_since is None:
+                    idle_since = now
+                elif now - idle_since >= 2.0:
+                    raise TimeoutError(
+                        f"Camera returned to Idle without ImageReady after "
+                        f"{duration:.1f}s exposure (fail-fast; not waiting full "
+                        f"{readout_timeout:.0f}s readout budget)"
+                    )
+            else:
+                idle_since = None
             time.sleep(0.5)
 
         raise TimeoutError(
