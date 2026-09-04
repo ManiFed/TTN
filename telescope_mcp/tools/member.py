@@ -46,8 +46,27 @@ def register(server, client: CloudClient) -> None:
         Call after the member says they have signed in. On success the session
         is saved on this computer so it survives an MCP process restart; the
         token itself is never returned.
+
+        `code` may be the raw code from `sign_in`, or the full auth-link URL —
+        the code is extracted either way so a pasted link still binds.
         """
-        result = client.post("/auth/browser/poll", {"code": code})
+        raw = (code or "").strip()
+        # Agents sometimes paste the whole open_this URL; bind must still work.
+        if "code=" in raw:
+            from urllib.parse import parse_qs, urlparse
+            try:
+                qs = parse_qs(urlparse(raw).query)
+                extracted = (qs.get("code") or [None])[0]
+                if extracted:
+                    raw = extracted.strip()
+            except Exception:
+                pass
+        if not raw:
+            return {"signed_in": False, "status": "expired",
+                    "detail": "No sign-in code was provided. Call sign_in for a fresh link.",
+                    "next_step": "Call sign_in for a fresh link."}
+
+        result = client.post("/auth/browser/poll", {"code": raw})
         status = result.get("status")
         if status == "approved":
             token = result.get("token")
@@ -56,7 +75,20 @@ def register(server, client: CloudClient) -> None:
                         "detail": "The link was approved but carried no session. "
                                   "Start again with sign_in."}
             client.set_token(token)
-            return {"signed_in": True, "user_id": result.get("user_id"),
+            # Refresh/verify the bound session against /me so a successful
+            # browser Done cannot leave member tools still auth-required (#50).
+            try:
+                me = client.get("/me")
+            except ApiError as exc:
+                client.set_token(None)
+                return {"signed_in": False,
+                        "detail": (
+                            "The link completed but this chat could not bind the "
+                            f"session ({exc.message}). Call sign_in again."
+                        ),
+                        "next_step": "Call sign_in for a fresh link."}
+            return {"signed_in": True,
+                    "user_id": me.get("user_id") or result.get("user_id"),
                     "detail": "Signed in. Everything on this account is available now."}
         return {"signed_in": False, "status": status,
                 "detail": result.get("detail", ""),
