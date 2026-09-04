@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -444,8 +445,6 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdr["NAXIS"]    = 2
                 hdr["NAXIS1"]   = sci.shape[1]
                 hdr["NAXIS2"]   = sci.shape[0]
-                if target:
-                    hdr["OBJECT"] = target
                 # Pull what we can from the camera device
                 if exp_dur is None:
                     with _state_lock:
@@ -470,13 +469,25 @@ def _capture_image(fits_path: Optional[str] = None,
                     hdr["DEC"] = round(float(dec), 6)
                 # Durable execution provenance follows the frame into the
                 # photometry and cloud payloads without changing camera APIs.
+                # Gate on an actively running schedule so completed runs' stale
+                # current_* fields cannot overwrite a manual OBJECT label.
                 with _sched_lock:
-                    item_id = str(_sched_state.get("current_item_id") or "")
-                    bundle_id = str(_sched_state.get("current_bundle_id") or "")
-                    target = str(_sched_state.get("current_target") or "")
-                    filt = str(_sched_state.get("current_filter") or "")
-                if target:
-                    hdr["OBJECT"] = target[:68]
+                    sched_running = bool(_sched_state.get("running"))
+                    item_id = (
+                        str(_sched_state.get("current_item_id") or "")
+                        if sched_running else "")
+                    bundle_id = (
+                        str(_sched_state.get("current_bundle_id") or "")
+                        if sched_running else "")
+                    sched_target = (
+                        str(_sched_state.get("current_target") or "")
+                        if sched_running else "")
+                    filt = (
+                        str(_sched_state.get("current_filter") or "")
+                        if sched_running else "")
+                object_name = (target or sched_target or "").strip()
+                if object_name:
+                    hdr["OBJECT"] = object_name[:68]
                 if filt:
                     hdr["FILTER"] = filt[:8]
                 if item_id:
@@ -2514,11 +2525,17 @@ def _poll_loop() -> None:
                 state     = _cam.camera_state()
                 img_ready = _cam.image_ready()
                 with _state_lock:
+                    was_connected = bool(_state["camera"].get("connected"))
                     _state["camera"].update(
-                        connected=True, error=None, state=state,
+                        connected=True, state=state,
                         state_name=_CAMERA_STATES.get(state, "Unknown"),
                         image_ready=img_ready,
                     )
+                    # Only clear error on reconnect. Successful ~1s status
+                    # polls must not wipe expose operation failures that MCP
+                    # callers need to observe after exposing goes false.
+                    if not was_connected:
+                        _state["camera"]["error"] = None
                 if _cam_connected_prev is False:
                     logger.info("Camera connection restored")
                 _cam_connected_prev = True
@@ -3511,9 +3528,6 @@ def api_move_axis():
 def api_expose():
     if _cam is None:
         return jsonify({"error": "Camera not connected"}), 400
-    with _state_lock:
-        if _state["camera"]["exposing"]:
-            return jsonify({"error": "Exposure already in progress"}), 409
 
     data = request.get_json(force=True) or {}
     # The MCP client posts "seconds" (see telescope_mcp/tools/hardware.py
@@ -3521,48 +3535,117 @@ def api_expose():
     # to a 1s exposure (issue #48).
     duration = float(data.get("duration", data.get("seconds", 1.0)))
     binning  = int(data.get("binning", 1))
+    count    = int(data.get("count", 1))
 
     if duration <= 0:
         return jsonify({"error": "Duration must be > 0"}), 400
     if binning < 1:
         return jsonify({"error": "Binning must be >= 1"}), 400
+    if count < 1:
+        return jsonify({"error": "count must be >= 1"}), 400
+    if count > 50:
+        return jsonify({"error": "count must be <= 50"}), 400
+
+    # Fail-fast budget: exposure + modest readout, not the camera's 120 s
+    # default which left MCP callers watching exposing:true for minutes with
+    # an empty fits list after a bad center (issue #52).
+    readout_timeout = float(data.get("readout_timeout", max(20.0, min(45.0, duration + 15.0))))
+
+    # Reserve exposing atomically so concurrent requests cannot both pass the
+    # in-progress check before either worker starts (and then collide on paths).
+    with _state_lock:
+        if _state["camera"]["exposing"]:
+            return jsonify({"error": "Exposure already in progress"}), 409
+        _state["camera"]["exposing"]           = True
+        _state["camera"]["exposure_start_ts"]  = time.time()
+        _state["camera"]["exposure_duration"]  = duration
+        _state["camera"]["error"]              = None
+        _state["image_captured"]               = False
+
+    req_id = uuid.uuid4().hex[:10]
 
     def _do():
-        with _state_lock:
-            _state["camera"]["exposing"]           = True
-            _state["camera"]["exposure_start_ts"]  = time.time()
-            _state["camera"]["exposure_duration"]  = duration
-            _state["image_captured"]               = False
         _pier_cam_pause.set()
         _expose_cancel.clear()
         time.sleep(0.15)
+        fits_written: list[str] = []
+        last_error: Optional[str] = None
         try:
-            with _device_lock:
-                _cam.set_binning(binning)
-                _cam.expose(duration=duration, light=True,
-                            cancel_check=_expose_cancel.is_set)
-                b64 = _capture_image()
-            if b64:
-                # Grab current telescope position as target label
+            with _state_lock:
+                ra = _state["telescope"].get("ra")
+            target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
+            safe_tgt = "".join(
+                c if c.isalnum() or c in "-_ " else "_" for c in target
+            ).strip() or "Manual"
+
+            cfg = _load_config()
+            export_dir = (cfg.get("photometry", {}) or {}).get("fits_export", {}).get(
+                "export_dir", "fits_export")
+            date_dir = pathlib.Path(export_dir) / time.strftime("%Y-%m-%d", time.gmtime())
+
+            for frame in range(1, count + 1):
+                if _expose_cancel.is_set():
+                    raise ExposureCancelled("Exposure cancelled")
                 with _state_lock:
-                    ra  = _state["telescope"].get("ra")
-                target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
-                logger.info("Exposure complete — image captured (%.2f s  bin%d)", duration, binning)
-                _store_history_image(target, duration, binning, 1, 1, b64)
+                    _state["camera"]["exposure_start_ts"] = time.time()
+                    _state["camera"]["exposure_duration"] = duration
+                # Request id + ns timestamp: frame counters restart at 1 and
+                # 1s resolution alone is not unique under concurrent callers.
+                fits_save_path = str(
+                    date_dir / f"{safe_tgt}_{frame:02d}_{req_id}_{time.time_ns()}.fits"
+                )
+                with _device_lock:
+                    _cam.set_binning(binning)
+                    _cam.expose(
+                        duration=duration, light=True,
+                        readout_timeout=readout_timeout,
+                        cancel_check=_expose_cancel.is_set,
+                    )
+                    b64 = _capture_image(
+                        fits_path=fits_save_path, exp_dur=duration, target=target)
+                if b64:
+                    _store_history_image(target, duration, binning, frame, count, b64)
+                    with _state_lock:
+                        _state["image_captured"] = True
+                if pathlib.Path(fits_save_path).exists():
+                    fits_written.append(fits_save_path)
+                    logger.info(
+                        "Manual exposure %d/%d complete — FITS %s",
+                        frame, count, fits_save_path)
+                else:
+                    last_error = (
+                        f"Exposure {frame}/{count} finished but FITS was not written "
+                        f"({fits_save_path})"
+                    )
+                    logger.error(last_error)
+                    break
         except ExposureCancelled:
             logger.warning("Manual exposure aborted")
+            last_error = "cancelled"
         except Exception as exc:
+            last_error = str(exc)
             logger.error("Exposure failed: %s", exc)
         finally:
             with _state_lock:
                 _state["camera"]["exposing"]          = False
                 _state["camera"]["exposure_start_ts"] = None
                 _state["camera"]["exposure_duration"] = None
+                if last_error and last_error != "cancelled":
+                    _state["camera"]["error"] = last_error[:500]
+                elif fits_written:
+                    _state["camera"]["error"] = None
             _pier_cam_pause.clear()
 
     threading.Thread(target=_do, daemon=True, name="cam-expose").start()
-    logger.info("Exposure started: %.2f s  binning %dx%d", duration, binning, binning)
-    return jsonify({"ok": True})
+    logger.info(
+        "Exposure started: %.2f s  binning %dx%d  count=%d  readout_timeout=%.0fs",
+        duration, binning, binning, count, readout_timeout)
+    return jsonify({
+        "ok": True,
+        "duration": duration,
+        "count": count,
+        "readout_timeout": readout_timeout,
+    })
 
 
 @app.route("/api/camera/abort", methods=["POST"])
