@@ -69,5 +69,39 @@ class ExposeFailFastTest(unittest.TestCase):
         self.assertIn("Idle without ImageReady", src)
 
 
+
+class ManualExposeReviewFixesTest(unittest.TestCase):
+    """Codex review on #56: stale schedule OBJECT, error wipe, FITS uniqueness."""
+
+    def test_capture_image_gates_schedule_metadata_on_running(self):
+        import inspect
+        src = inspect.getsource(dashboard._capture_image)
+        self.assertIn("sched_running", src)
+        self.assertIn('bool(_sched_state.get("running"))', src)
+        # Must not blindly overwrite OBJECT from stale current_target.
+        self.assertIn("object_name = (target or sched_target", src)
+
+    def test_poll_loop_preserves_camera_op_errors(self):
+        import inspect
+        src = inspect.getsource(dashboard._poll_loop)
+        self.assertIn("was_connected", src)
+        # Successful status polls must not unconditionally assign error=None.
+        self.assertNotIn("connected=True, error=None, state=state", src)
+        self.assertIn("if not was_connected:", src)
+
+    def test_api_expose_reserves_atomically_and_uses_unique_fits_paths(self):
+        import inspect
+        src = inspect.getsource(dashboard.api_expose)
+        self.assertIn("req_id", src)
+        self.assertIn("time.time_ns()", src)
+        self.assertIn("uuid.uuid4()", src)
+        # Reserve exposing under the same lock as the in-progress check.
+        self.assertIn('return jsonify({"error": "Exposure already in progress"}), 409', src)
+        # Path must include req_id, not only int(time.time()).
+        self.assertIn("req_id", src)
+        self.assertNotIn('f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"', src)
+
+
+
 if __name__ == "__main__":
     unittest.main()
