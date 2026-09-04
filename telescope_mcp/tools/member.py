@@ -80,13 +80,25 @@ def register(server, client: CloudClient) -> None:
             try:
                 me = client.get("/me")
             except ApiError as exc:
-                client.set_token(None)
+                # Only a 401 proves the token is invalid. Timeouts / connection
+                # errors / 5xx leave the one-time poll token already consumed,
+                # so clearing here would force a full browser re-signin.
+                if exc.unauthorized:
+                    client.set_token(None)
+                    return {"signed_in": False,
+                            "detail": (
+                                "The link completed but this chat could not bind the "
+                                f"session ({exc.message}). Call sign_in again."
+                            ),
+                            "next_step": "Call sign_in for a fresh link."}
                 return {"signed_in": False,
                         "detail": (
-                            "The link completed but this chat could not bind the "
-                            f"session ({exc.message}). Call sign_in again."
+                            "The link completed and a session was saved, but "
+                            f"verification against /me failed ({exc.message}). "
+                            "Retry sign_in_status — do not start a new link."
                         ),
-                        "next_step": "Call sign_in for a fresh link."}
+                        "next_step": "Retry sign_in_status with the same code, "
+                                     "or call auth_status."}
             return {"signed_in": True,
                     "user_id": me.get("user_id") or result.get("user_id"),
                     "detail": "Signed in. Everything on this account is available now."}
