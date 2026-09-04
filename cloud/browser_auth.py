@@ -95,6 +95,8 @@ def _expired(row: dict) -> bool:
 
 def approve(code: str, user_id: str, token: str) -> bool:
     """Attach a freshly-issued session to a pending link. Called by the page."""
+    if not code or not token:
+        return False
     row = _row(code)
     if row is None or row.get("status") != PENDING or _expired(row):
         return False
