@@ -68,5 +68,54 @@ class SolverSignatureMismatchTest(unittest.TestCase):
         self.assertIn("out of sync", str(ctx.exception))
 
 
+
+class AstapPathAliasTest(unittest.TestCase):
+    """Issue #51: older callers still pass astap_path=; must not TypeError."""
+
+    def test_center_on_target_device_accepts_astap_path_alias(self):
+        from alpaca.platesolve import center_on_target_device, solve_image_array
+        import inspect
+        sig = inspect.signature(center_on_target_device)
+        self.assertIn("astap_path", sig.parameters)
+        sig2 = inspect.signature(solve_image_array)
+        self.assertIn("astap_path", sig2.parameters)
+
+    def test_calling_with_only_astap_path_does_not_typeerror(self):
+        from alpaca import platesolve
+
+        calls = {}
+
+        def fake_solve(image, ra_deg, dec_deg, solver="astrometry",
+                       solver_path=None, search_radius=10.0, pixel_scale=None,
+                       *, astap_path=None):
+            calls["solver_path"] = solver_path
+            calls["astap_path"] = astap_path
+            return (ra_deg, dec_deg)
+
+        class Tel:
+            def slew_to_coordinates(self, ra_hours, dec_deg):
+                pass
+
+        class Cam:
+            def expose(self, *a, **k):
+                pass
+            def image_array(self):
+                return [[1.0]]
+
+        real = platesolve.solve_image_array
+        platesolve.solve_image_array = fake_solve
+        try:
+            result = platesolve.center_on_target_device(
+                Tel(), Cam(), 10.0, 20.0,
+                exposure_s=0.01, settle_s=0, max_iterations=1,
+                solver="astap", astap_path="/opt/Astap.app/Contents/MacOS/astap",
+            )
+        finally:
+            platesolve.solve_image_array = real
+        self.assertTrue(result.success)
+        self.assertEqual(calls["solver_path"],
+                         "/opt/Astap.app/Contents/MacOS/astap")
+
+
 if __name__ == "__main__":
     unittest.main()
