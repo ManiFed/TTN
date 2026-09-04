@@ -309,5 +309,106 @@ class AuthStatusTest(unittest.TestCase):
         self.assertTrue(restarted.authenticated)
 
 
+
+
+class BrowserAuthLinkBindsSessionTest(unittest.TestCase):
+    """Issue #50: browser Done must bind the originating MCP session.
+
+    start → approve → sign_in_status(code) → client.authenticated and /me works.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "mcp_session"
+        self.addCleanup(self.tmp.cleanup)
+
+    def _tools(self, client):
+        """Register member tools on a tiny stub server and return callables."""
+        class _Server:
+            def __init__(self):
+                self.tools = {}
+            def tool(self):
+                def deco(fn):
+                    self.tools[fn.__name__] = fn
+                    return fn
+                return deco
+        from telescope_mcp.tools import member as member_tools
+        server = _Server()
+        member_tools.register(server, client)
+        return server.tools
+
+    def test_completed_link_binds_mcp_session(self):
+        client = CloudClient(
+            base="https://example.invalid", session_path=self.path, persist=True)
+
+        poll_state = {"n": 0}
+
+        def fake_request(method, url, **kwargs):
+            class Resp:
+                def __init__(self, status, payload):
+                    self.status_code = status
+                    self.text = json.dumps(payload)
+            if url.endswith("/auth/browser/poll"):
+                poll_state["n"] += 1
+                if poll_state["n"] == 1:
+                    return Resp(200, {"status": "pending", "detail": "waiting"})
+                return Resp(200, {
+                    "status": "approved",
+                    "token": "tok_from_link",
+                    "user_id": "u_1",
+                })
+            if url.endswith("/me"):
+                auth = (kwargs.get("headers") or {}).get("Authorization", "")
+                if auth != "Bearer tok_from_link":
+                    return Resp(401, {"error": "authentication required"})
+                return Resp(200, {"user_id": "u_1", "email": "a@b.c"})
+            return Resp(404, {"error": "nope"})
+
+        tools = self._tools(client)
+        with patch.object(client._session, "request", side_effect=fake_request):
+            pending = tools["sign_in_status"]("link-code-abc")
+            self.assertFalse(pending.get("signed_in"))
+            self.assertEqual(pending.get("status"), "pending")
+
+            done = tools["sign_in_status"]("link-code-abc")
+            self.assertTrue(done.get("signed_in"))
+            self.assertEqual(done.get("user_id"), "u_1")
+
+        self.assertTrue(client.authenticated)
+        self.assertEqual(
+            session_store.load(self.path, expected_base="https://example.invalid"),
+            "tok_from_link",
+        )
+
+    def test_sign_in_status_accepts_full_auth_link_url(self):
+        client = CloudClient(
+            base="https://example.invalid", session_path=self.path, persist=True)
+        seen = {}
+
+        def fake_request(method, url, **kwargs):
+            class Resp:
+                def __init__(self, status, payload):
+                    self.status_code = status
+                    self.text = json.dumps(payload)
+            if url.endswith("/auth/browser/poll"):
+                body = json.loads(kwargs.get("data") or "{}")
+                seen["code"] = body.get("code")
+                return Resp(200, {
+                    "status": "approved",
+                    "token": "tok_url",
+                    "user_id": "u_2",
+                })
+            if url.endswith("/me"):
+                return Resp(200, {"user_id": "u_2"})
+            return Resp(404, {"error": "nope"})
+
+        tools = self._tools(client)
+        url = "https://api.thetelescope.net/auth/link?code=SECRETCODE99"
+        with patch.object(client._session, "request", side_effect=fake_request):
+            done = tools["sign_in_status"](url)
+        self.assertTrue(done.get("signed_in"))
+        self.assertEqual(seen.get("code"), "SECRETCODE99")
+
+
 if __name__ == "__main__":
     unittest.main()
