@@ -46,5 +46,28 @@ class ExposeDurationKeyTest(unittest.TestCase):
             float(data.get("duration", data.get("seconds", 1.0))), 30.0)
 
 
+
+
+class ExposeFailFastTest(unittest.TestCase):
+    """Issue #52: manual expose must not hang forever with an empty fits list."""
+
+    def test_api_expose_source_writes_fits_and_bounds_readout(self):
+        import inspect
+        from src import dashboard
+        src = inspect.getsource(dashboard.api_expose)
+        self.assertIn("readout_timeout", src)
+        self.assertIn("fits_save_path", src)
+        self.assertIn("count", src)
+        self.assertIn("exposing", src)
+        self.assertIn("fits_export", src)
+
+    def test_camera_expose_failfast_on_idle_without_ready(self):
+        import inspect
+        from alpaca.camera import Camera
+        src = inspect.getsource(Camera.expose)
+        self.assertIn("fail-fast", src)
+        self.assertIn("Idle without ImageReady", src)
+
+
 if __name__ == "__main__":
     unittest.main()
