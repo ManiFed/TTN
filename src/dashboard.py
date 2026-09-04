@@ -1368,7 +1368,30 @@ def _interrupt_dispatcher_loop() -> None:
 _safety_mgr: Optional[SafetyManager] = None
 
 
+# Generation for Safety stop banners written into _state["error"].
+# Incremented on each trip so a stale safe snapshot cannot clear a newer stop
+# that landed between status() and acquiring _state_lock (Codex review #57).
+_safety_error_gen = 0
+
+
+def _clear_safety_stop_if_current(safety_snap: dict, *, gen_at_check: int) -> None:
+    """Clear a Safety stop banner only if no newer trip landed since gen_at_check.
+
+    Caller must hold _state_lock. ``safety_snap`` is a prior status() result;
+    we still refuse to clear when ``_safety_error_gen`` advanced, because that
+    means `_on_safety_unsafe` wrote a fresher stop after the snapshot was taken.
+    """
+    if not safety_snap.get("safe"):
+        return
+    if _safety_error_gen != gen_at_check:
+        return
+    err = str(_state.get("error") or "")
+    if err.startswith("Safety stop:"):
+        _state["error"] = None
+
+
 def _on_safety_unsafe() -> None:
+    global _safety_error_gen
     reason = _safety_mgr.status()["reason"] if _safety_mgr else "unknown"
     # Wind down any in-flight work so the emergency park (which runs lock-free)
     # isn't fighting a scheduled slew/exposure for the device.
@@ -1377,6 +1400,7 @@ def _on_safety_unsafe() -> None:
         if _sched_state["running"]:
             _sched_state["cancelled"] = True
     with _state_lock:
+        _safety_error_gen += 1
         _state["error"] = f"Safety stop: {reason}"
     logger.critical("Safety manager triggered: %s", reason)
     # Dawn parks are routine; anything else is an emergency worth flagging.
@@ -2531,9 +2555,16 @@ def _poll_loop() -> None:
 
         if _safety_mgr is not None:
             try:
+                with _state_lock:
+                    gen_at_check = _safety_error_gen
                 safety_snap = _safety_mgr.status()
                 with _state_lock:
                     _state["safety"].update(safety_snap)
+                    # Persistently clear a latched "Safety stop: …" banner once
+                    # the live evaluation is safe again (issue #53) — but only
+                    # when no fresher trip landed after this snapshot.
+                    _clear_safety_stop_if_current(
+                        safety_snap, gen_at_check=gen_at_check)
             except Exception:
                 pass
 
@@ -2815,18 +2846,22 @@ def setup_page():
 def api_status():
     with _state_lock:
         snapshot = copy.deepcopy(_state)
+        gen_at_check = _safety_error_gen
     if _commissioning is not None:
         snapshot["commissioning"] = _commissioning.status()
-    # _state["error"] is written once by _on_safety_unsafe() at the moment a
-    # safety stop trips and is never itself updated again -- there's no
-    # "became safe again" callback to clear it. Re-check live safety state
-    # here so a resolved safety stop (e.g. dawn latch auto-cleared once the
-    # sun drops back below threshold) doesn't keep reporting itself as an
-    # active error forever.
+    # _state["error"] is written by _on_safety_unsafe() when a stop trips.
+    # The poller clears it once safety.safe is true again; also clear here
+    # (and persist) so a status read right after dawn-clear cannot race the
+    # poller and still return the stale "Safety stop: dawn…" string (#53).
+    # Generation-guard: a fresher emergency trip after this snapshot must not
+    # be wiped by a stale safe reading.
     if (_safety_mgr is not None
-            and str(snapshot.get("error") or "").startswith("Safety stop:")
-            and _safety_mgr.status()["safe"]):
-        snapshot["error"] = None
+            and str(snapshot.get("error") or "").startswith("Safety stop:")):
+        live = _safety_mgr.status()
+        if live.get("safe"):
+            with _state_lock:
+                _clear_safety_stop_if_current(live, gen_at_check=gen_at_check)
+                snapshot["error"] = _state.get("error")
     return jsonify(snapshot)
 
 
