@@ -242,18 +242,27 @@ def solve_image_array(
     ra_deg: float,
     dec_deg: float,
     solver: str = "astrometry",
-    solver_path: str = "solve-field",
+    solver_path: Optional[str] = None,
     search_radius: float = 10.0,
     pixel_scale: Optional[float] = None,
+    *,
+    astap_path: Optional[str] = None,
 ) -> Optional[tuple]:
     """
     Plate-solve an ALPACA image array and return its frame-centre (ra_deg, dec_deg).
 
     solver        – "astrometry" (Astrometry.net) or "astap"
     solver_path   – path to solve-field or astap binary
+    astap_path    – deprecated alias for solver_path; accepted so mixed
+                    NodeAgent / platesolve builds cannot raise TypeError
+                    (issue #51 / unexpected keyword argument astap_path)
     search_radius – search radius in degrees
     pixel_scale   – arcsec/px hint (speeds up astrometry.net solve)
     """
+    if solver_path is None:
+        solver_path = astap_path or ("astap" if solver != "astrometry" else "solve-field")
+    elif astap_path and solver_path == "solve-field" and solver != "astrometry":
+        solver_path = astap_path
     import numpy as np
     from astropy.io import fits
     from astropy.wcs import WCS
@@ -312,19 +321,26 @@ def center_on_target_device(
     max_iterations: int = 4,
     settle_s: float = 2.0,
     solver: str = "astrometry",
-    solver_path: str = "solve-field",
+    solver_path: Optional[str] = None,
     search_radius: float = 10.0,
     pixel_scale: Optional[float] = None,
     readout_timeout: float = 60.0,
     cancel_check: Optional[Callable[[], bool]] = None,
     progress_cb: Optional[Callable[[CenterIteration], None]] = None,
+    astap_path: Optional[str] = None,
 ) -> CenterResult:
     """
     Run the auto-centering loop against live ALPACA Telescope + Camera wrappers.
 
     target_ra / target_dec are in **degrees**.
     solver / solver_path – passed through to solve_image_array.
+    astap_path – deprecated alias for solver_path (issue #51).
     """
+    if solver_path is None:
+        solver_path = astap_path or ("astap" if solver != "astrometry" else "solve-field")
+    elif astap_path and solver_path == "solve-field" and solver != "astrometry":
+        solver_path = astap_path
+
     def slew_fn(ra_hours: float, dec_deg: float) -> None:
         telescope.slew_to_coordinates(ra_hours, dec_deg)
 
