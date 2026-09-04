@@ -2534,6 +2534,14 @@ def _poll_loop() -> None:
                 safety_snap = _safety_mgr.status()
                 with _state_lock:
                     _state["safety"].update(safety_snap)
+                    # Persistently clear a latched "Safety stop: …" banner once
+                    # the live evaluation is safe again (issue #53). api_status
+                    # also masks it, but other readers of _state["error"] must
+                    # not keep seeing dawn text overnight.
+                    if safety_snap.get("safe"):
+                        err = str(_state.get("error") or "")
+                        if err.startswith("Safety stop:"):
+                            _state["error"] = None
             except Exception:
                 pass
 
@@ -2817,16 +2825,17 @@ def api_status():
         snapshot = copy.deepcopy(_state)
     if _commissioning is not None:
         snapshot["commissioning"] = _commissioning.status()
-    # _state["error"] is written once by _on_safety_unsafe() at the moment a
-    # safety stop trips and is never itself updated again -- there's no
-    # "became safe again" callback to clear it. Re-check live safety state
-    # here so a resolved safety stop (e.g. dawn latch auto-cleared once the
-    # sun drops back below threshold) doesn't keep reporting itself as an
-    # active error forever.
+    # _state["error"] is written by _on_safety_unsafe() when a stop trips.
+    # The poller clears it once safety.safe is true again; also clear here
+    # (and persist) so a status read right after dawn-clear cannot race the
+    # poller and still return the stale "Safety stop: dawn…" string (#53).
     if (_safety_mgr is not None
             and str(snapshot.get("error") or "").startswith("Safety stop:")
             and _safety_mgr.status()["safe"]):
         snapshot["error"] = None
+        with _state_lock:
+            if str(_state.get("error") or "").startswith("Safety stop:"):
+                _state["error"] = None
     return jsonify(snapshot)
 
 
