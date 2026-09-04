@@ -410,5 +410,66 @@ class BrowserAuthLinkBindsSessionTest(unittest.TestCase):
         self.assertEqual(seen.get("code"), "SECRETCODE99")
 
 
+    def test_post_bind_me_401_clears_session(self):
+        """Only unauthorized /me after bind proves the token is bad."""
+        client = CloudClient(
+            base="https://example.invalid", session_path=self.path, persist=True)
+
+        def fake_request(method, url, **kwargs):
+            class Resp:
+                def __init__(self, status, payload):
+                    self.status_code = status
+                    self.text = json.dumps(payload)
+            if url.endswith("/auth/browser/poll"):
+                return Resp(200, {
+                    "status": "approved",
+                    "token": "tok_bad",
+                    "user_id": "u_1",
+                })
+            if url.endswith("/me"):
+                return Resp(401, {"error": "authentication required"})
+            return Resp(404, {"error": "nope"})
+
+        tools = self._tools(client)
+        with patch.object(client._session, "request", side_effect=fake_request):
+            done = tools["sign_in_status"]("link-code-abc")
+        self.assertFalse(done.get("signed_in"))
+        self.assertFalse(client.authenticated)
+        self.assertIsNone(
+            session_store.load(self.path, expected_base="https://example.invalid"))
+
+    def test_post_bind_me_transient_error_keeps_session(self):
+        """Timeouts / 5xx must not wipe the newly bound one-time token."""
+        client = CloudClient(
+            base="https://example.invalid", session_path=self.path, persist=True)
+
+        def fake_request(method, url, **kwargs):
+            class Resp:
+                def __init__(self, status, payload):
+                    self.status_code = status
+                    self.text = json.dumps(payload)
+            if url.endswith("/auth/browser/poll"):
+                return Resp(200, {
+                    "status": "approved",
+                    "token": "tok_keep",
+                    "user_id": "u_1",
+                })
+            if url.endswith("/me"):
+                return Resp(503, {"error": "temporarily unavailable"})
+            return Resp(404, {"error": "nope"})
+
+        tools = self._tools(client)
+        with patch.object(client._session, "request", side_effect=fake_request):
+            done = tools["sign_in_status"]("link-code-abc")
+        self.assertFalse(done.get("signed_in"))
+        self.assertIn("Retry sign_in_status", done.get("detail", "") + done.get("next_step", ""))
+        self.assertTrue(client.authenticated)
+        self.assertEqual(
+            session_store.load(self.path, expected_base="https://example.invalid"),
+            "tok_keep",
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
