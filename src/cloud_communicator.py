@@ -16,7 +16,8 @@ Reads config["cloud"]:
 Behaviour:
     • registers automatically when no credentials exist; the node ID and
       pairing token live in data/cloud_state.json, while the API key lives in
-      the operating system credential store
+      the OS credential store (with encrypted-file fallback for headless Mac
+      keychain -61 failures — see src/credential_store.py)
     • sends heartbeats with optional local conditions from a callback
     • polls for the current observation plan; when the plan_id changes,
       invokes on_plan(items, contingencies) with node-schedule-format items
@@ -44,6 +45,7 @@ from typing import Callable, Optional
 from src.shared_models import expand_env
 from src.autonomy import AutonomyStore
 from src.durable_outbox import DurableOutbox
+from src import credential_store
 
 _PAIR_WORDS = [
     "NOVA","STAR","MOON","LENS","DOME","VEGA","LYRA","ORYX","CRAB","HALO",
@@ -188,6 +190,8 @@ class CloudCommunicator:
             "clock_qualified": self._clock_qualified,
             "autonomy_bundle_id": "",
             "credential_store_ok": True,
+            "credential_store_backend": "keyring",
+            "credential_store_error": None,
             "error": None,
         }
 
@@ -392,50 +396,83 @@ class CloudCommunicator:
             state = json.loads(_STATE_FILE.read_text())
             if not (self._node_id and self._api_key):
                 self._node_id = state.get("node_id", "")
-                self._api_key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT) or ""
+                self._api_key = credential_store.get_password(_KEYRING_ACCOUNT) or ""
                 # Migrate credentials written by earlier releases, then remove
                 # the clear-text key from the state file on the next save.
                 if not self._api_key and state.get("api_key"):
-                    keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, state["api_key"])
+                    credential_store.set_password(_KEYRING_ACCOUNT, state["api_key"])
                     self._api_key = state["api_key"]
                     migrated_legacy_secret = True
-                self._recovery_token = keyring.get_password(
-                    _KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY) or ""
+                self._recovery_token = credential_store.get_password(
+                    _KEYRING_ACCOUNT_RECOVERY) or ""
             self._pair_token = state.get("pair_token", "")
         except (OSError, ValueError, keyring.errors.KeyringError) as exc:
-            logger.warning("Could not load cloud credentials from the system keyring: %s", exc)
+            logger.warning("Could not load cloud credentials from the credential store: %s", exc)
+            self.status["credential_store_error"] = str(exc)
+            self.status["credential_store_ok"] = False
+        self._sync_credential_store_status()
         if migrated_legacy_secret:
             self._save_state()
         if not self._pair_token:
             self._pair_token = _make_pair_token()
             self._save_state()
 
+    def _sync_credential_store_status(self) -> None:
+        """Refresh status fields from credential_store (keyring / file / memory)."""
+        snap = credential_store.status_snapshot()
+        # Latched failure: once persistence is memory-only this session, keep
+        # credential_store_ok False even if a later write appears to succeed.
+        if snap.get("credential_store_ok"):
+            if self.status.get("credential_store_ok", True):
+                self.status["credential_store_ok"] = True
+        else:
+            self.status["credential_store_ok"] = False
+        self.status["credential_store_backend"] = snap.get(
+            "credential_store_backend", self.status.get("credential_store_backend")
+        )
+        err = snap.get("credential_store_error")
+        if err:
+            self.status["credential_store_error"] = err
+        elif self.status.get("credential_store_ok", True):
+            self.status["credential_store_error"] = None
+
     def _save_state(self) -> None:
-        # API keys must never be written to cloud_state.json.  A node without
-        # a usable system credential store has to pair/register again after a
-        # restart rather than leave a reusable credential on disk.
+        # API keys must never be written plaintext to cloud_state.json.
+        # Prefer the OS keyring; on headless Mac -61 (and similar) fall back
+        # to an encrypted file under data/ so restart keeps the same node id.
         if self._api_key:
             try:
-                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, self._api_key)
+                backend = credential_store.set_password(
+                    _KEYRING_ACCOUNT, self._api_key)
+                if backend != "keyring":
+                    logger.warning(
+                        "Cloud API key persisted via %s fallback after keyring "
+                        "failure — node identity will survive restart, but fix "
+                        "keychain access for this LaunchAgent/user if possible "
+                        "(%s)",
+                        backend,
+                        credential_store.last_error() or "keyring unavailable",
+                    )
             except keyring.errors.KeyringError as exc:
-                logger.warning(
-                    "Could not persist cloud API key to the system keyring; "
-                    "it will not survive a restart: %s", exc)
-                # Latched, not reset on a later success: once the recovery
-                # token has failed to persist even once, this run can no
-                # longer self-heal a credential rejection via rekey, so the
-                # operator needs to see this for the rest of the session even
-                # if a subsequent keychain write happens to succeed.
+                logger.error(
+                    "Could not persist cloud API key to keyring or encrypted "
+                    "file fallback; it will not survive a restart and a new "
+                    "node id may be minted: %s", exc)
                 self.status["credential_store_ok"] = False
+                self.status["credential_store_backend"] = "memory"
+                self.status["credential_store_error"] = str(exc)
         if self._recovery_token:
             try:
-                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY,
-                                      self._recovery_token)
+                credential_store.set_password(
+                    _KEYRING_ACCOUNT_RECOVERY, self._recovery_token)
             except keyring.errors.KeyringError as exc:
-                logger.warning(
-                    "Could not persist cloud recovery token to the system keyring; "
-                    "a future revoked api_key won't self-heal without it: %s", exc)
+                logger.error(
+                    "Could not persist cloud recovery token to keyring or "
+                    "encrypted file fallback; a future revoked api_key won't "
+                    "self-heal without it: %s", exc)
                 self.status["credential_store_ok"] = False
+                self.status["credential_store_error"] = str(exc)
+        self._sync_credential_store_status()
         payload = {"node_id": self._node_id, "pair_token": self._pair_token}
         try:
             _STATE_FILE.parent.mkdir(exist_ok=True)
@@ -577,14 +614,8 @@ class CloudCommunicator:
         self._node_id = ""
         self._api_key = ""
         self._recovery_token = ""
-        try:
-            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
-        except keyring.errors.KeyringError:
-            pass
-        try:
-            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT_RECOVERY)
-        except keyring.errors.KeyringError:
-            pass
+        credential_store.delete_password(_KEYRING_ACCOUNT)
+        credential_store.delete_password(_KEYRING_ACCOUNT_RECOVERY)
         self._save_state()
         self.status["registered"] = False
         self.status["node_id"] = ""
