@@ -18,6 +18,7 @@ All sky coordinates are handled in **degrees** internally; the telescope slew
 callback receives RA in **hours** (the ALPACA convention) and Dec in degrees.
 """
 
+import json
 import logging
 import math
 import os
@@ -36,6 +37,28 @@ class CenteringError(Exception):
 class CenteringCancelled(Exception):
     """Raised when auto-centering is aborted via its cancel_check callback."""
 
+
+
+def _is_empty_or_non_json_error(exc: BaseException) -> bool:
+    """True for raw json.loads empty-body errors and structured AlpacaError forms."""
+    if isinstance(exc, json.JSONDecodeError):
+        return True
+    msg = str(exc)
+    if "Expecting value: line 1 column 1" in msg:
+        return True
+    low = msg.lower()
+    return ("empty alpaca http body" in low
+            or "non-json alpaca http body" in low
+            or "empty or non-json" in low)
+
+
+def _centering_json_error(step: str, exc: BaseException) -> "CenteringError":
+    """Structured CenteringError for empty/non-JSON device or platesolve bodies."""
+    return CenteringError(
+        f"{step} failed: empty or non-JSON response at platesolve/ASTAP/ALPACA "
+        f"boundary ({exc}). Check ALPACA HTTP bodies (empty replies after slew/"
+        f"expose) and ASTAP exit code/stderr — not a raw json.loads message."
+    )
 
 @dataclass
 class CenterIteration:
@@ -152,12 +175,22 @@ def center_on_target(
         _check_cancel()
         logger.info("Centering iteration %d/%d — slewing to RA=%.5f° Dec=%.5f°",
                     i, max_iterations, commanded_ra, commanded_dec)
-        slew_fn(commanded_ra / 15.0, commanded_dec)  # RA deg → hours for ALPACA
+        try:
+            slew_fn(commanded_ra / 15.0, commanded_dec)  # RA deg → hours for ALPACA
+        except Exception as exc:
+            if _is_empty_or_non_json_error(exc):
+                raise _centering_json_error("Slew", exc) from exc
+            raise
         if settle_s > 0:
             time.sleep(settle_s)
 
         _check_cancel()
-        image = capture_fn()
+        try:
+            image = capture_fn()
+        except Exception as exc:
+            if _is_empty_or_non_json_error(exc):
+                raise _centering_json_error("Capture", exc) from exc
+            raise
         try:
             solved = solve_fn(image, commanded_ra, commanded_dec)
         except TypeError as exc:
@@ -170,6 +203,12 @@ def center_on_target(
                 "the installed NodeAgent build is out of sync with its solver "
                 "module — reinstall/update the app and try again."
             ) from exc
+        except Exception as exc:
+            # Empty ASTAP stdout / non-JSON platesolve output / HTTP empty body
+            # must not surface as raw json.loads "Expecting value..." (issue #59).
+            if _is_empty_or_non_json_error(exc):
+                raise _centering_json_error("Plate solve/ASTAP", exc) from exc
+            raise
 
         if solved is None:
             logger.warning("Centering iteration %d: plate solve failed", i)
@@ -297,6 +336,13 @@ def solve_image_array(
             wcs = WCS(hdr, naxis=2)
             sky = wcs.pixel_to_world((nx + 1) / 2.0 - 1.0, (ny + 1) / 2.0 - 1.0)
             return float(sky.ra.deg), float(sky.dec.deg)
+    except json.JSONDecodeError as exc:
+        # Should be rare (ASTAP is not JSON), but if a solver/helper parses JSON
+        # and gets an empty body, raise so center_on_target can wrap CenteringError.
+        logger.error(
+            "solve_image_array: empty/non-JSON platesolve body (json: %s)", exc
+        )
+        raise
     except Exception as exc:
         logger.error("solve_image_array failed: %s", exc)
         return None
