@@ -119,3 +119,63 @@ class AstapPathAliasTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyJsonCenteringErrorTest(unittest.TestCase):
+    """Issue #59: empty/non-JSON bodies must raise CenteringError, not raw json.loads."""
+
+    def test_slew_json_decode_becomes_centering_error(self):
+        import json
+        from alpaca.platesolve import CenteringError, center_on_target
+
+        def slew_fn(ra_hours, dec_deg):
+            raise json.JSONDecodeError("Expecting value", "", 0)
+
+        with self.assertRaises(CenteringError) as ctx:
+            center_on_target(
+                target_ra=10.0, target_dec=20.0,
+                slew_fn=slew_fn,
+                capture_fn=lambda: [[1.0]],
+                solve_fn=lambda *a, **k: (10.0, 20.0),
+                settle_s=0, max_iterations=1,
+            )
+        msg = str(ctx.exception)
+        self.assertIn("empty or non-JSON", msg)
+        self.assertNotEqual(msg, "Expecting value: line 1 column 1 (char 0)")
+        self.assertIn("Slew", msg)
+
+    def test_solve_expecting_value_string_becomes_centering_error(self):
+        from alpaca.platesolve import CenteringError, center_on_target
+
+        def solve_fn(image, ra_deg, dec_deg):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        with self.assertRaises(CenteringError) as ctx:
+            center_on_target(
+                target_ra=10.0, target_dec=20.0,
+                slew_fn=lambda *a, **k: None,
+                capture_fn=lambda: [[1.0]],
+                solve_fn=solve_fn,
+                settle_s=0, max_iterations=1,
+            )
+        msg = str(ctx.exception)
+        self.assertIn("Plate solve/ASTAP", msg)
+        self.assertIn("empty or non-JSON", msg)
+
+    def test_alpaca_client_empty_body_raises_structured_alpaca_error(self):
+        from unittest.mock import MagicMock
+        from alpaca.client import AlpacaClient, AlpacaError
+
+        client = AlpacaClient("127.0.0.1", 11111, "telescope", 0)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b""
+        resp.headers = {"Content-Length": "0"}
+        resp.raise_for_status = MagicMock()
+        client.session.get = MagicMock(return_value=resp)
+
+        with self.assertRaises(AlpacaError) as ctx:
+            client._get("slewing")
+        msg = str(ctx.exception)
+        self.assertIn("empty ALPACA HTTP body", msg)
+        self.assertNotIn("Expecting value", msg)
