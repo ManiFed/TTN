@@ -6,6 +6,7 @@ never deal with raw HTTP or JSON parsing.
 """
 
 import itertools
+import json
 import logging
 import time
 from typing import Any
@@ -34,6 +35,41 @@ class AlpacaError(Exception):
 NOT_IMPLEMENTED = 1024
 
 
+def _parse_json_body(response: requests.Response, endpoint: str) -> dict:
+    """Parse an ALPACA JSON body, or raise AlpacaError for empty/non-JSON.
+
+    ``requests.Response.json()`` surfaces empty bodies as the raw
+    ``json.loads`` message ``Expecting value: line 1 column 1 (char 0)``.
+    Auto-centering and MCP callers need a structured device/endpoint error
+    instead (issue #59).
+    """
+    raw = response.content or b""
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    if not text.strip():
+        raise AlpacaError(
+            f"{endpoint}: empty ALPACA HTTP body "
+            f"(HTTP {response.status_code}, Content-Length="
+            f"{response.headers.get('Content-Length', 'missing')})",
+            code=0,
+        )
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:120].replace("\n", "\\n")
+        raise AlpacaError(
+            f"{endpoint}: non-JSON ALPACA HTTP body "
+            f"(HTTP {response.status_code}, {len(text)} bytes, "
+            f"json error: {exc}; preview={preview!r})",
+            code=0,
+        ) from exc
+    if not isinstance(body, dict):
+        raise AlpacaError(
+            f"{endpoint}: ALPACA JSON body was {type(body).__name__}, expected object",
+            code=0,
+        )
+    return body
+
+
 class AlpacaClient:
     """
     Thin HTTP wrapper around a single ALPACA device endpoint.
@@ -58,7 +94,7 @@ class AlpacaClient:
         params["ClientTransactionID"] = _next_transaction_id()
         response = self.session.get(url, params=params, timeout=timeout)
         response.raise_for_status()
-        body = response.json()
+        body = _parse_json_body(response, attribute)
         self._check_error(attribute, body)
         return body["Value"]
 
@@ -68,7 +104,7 @@ class AlpacaClient:
         data["ClientTransactionID"] = _next_transaction_id()
         response = self.session.put(url, data=data, timeout=timeout)
         response.raise_for_status()
-        body = response.json()
+        body = _parse_json_body(response, action)
         self._check_error(action, body)
 
     @staticmethod
@@ -98,7 +134,7 @@ class AlpacaClient:
         }
         response = sess.get(f"{self.base_url}/connected", params=params, timeout=timeout)
         response.raise_for_status()
-        body = response.json()
+        body = _parse_json_body(response, "connected")
         self._check_error("connected", body)
         return bool(body["Value"])
 
