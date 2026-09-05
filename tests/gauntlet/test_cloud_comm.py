@@ -64,13 +64,34 @@ class CloudCommGauntletTest(TempCwdTestCase):
     def test_keyring_failure_never_writes_api_key_to_state_file(self):
         comm = self._comm()
         with patch.object(
-            keyring, "set_password", side_effect=keyring.errors.KeyringError("unavailable")
+            keyring, "set_password",
+            side_effect=keyring.errors.KeyringError(
+                "Can't store password on keychain: (-61, 'Unknown Error')"
+            ),
         ):
             comm.install_credentials("node_test01", "secret-api-key")
 
         state = json.loads(pathlib.Path("data", "cloud_state.json").read_text())
         self.assertEqual(state["node_id"], "node_test01")
         self.assertNotIn("api_key", state)
+        # Encrypted-file fallback must keep identity across restart (issue #58).
+        self.assertTrue(pathlib.Path("data", "credentials.enc").exists())
+        self.assertEqual(comm.status.get("credential_store_backend"), "encrypted_file")
+        self.assertTrue(comm.status.get("credential_store_ok"))
+        self.assertIsNotNone(comm.status.get("credential_store_error"))
+        self.assertIn("-61", str(comm.status.get("credential_store_error")))
+
+        with patch.object(
+            keyring, "get_password", return_value=None,
+        ), patch.object(
+            keyring, "set_password",
+            side_effect=keyring.errors.KeyringError(
+                "Can't store password on keychain: (-61, 'Unknown Error')"
+            ),
+        ):
+            comm2 = self._comm()
+        self.assertEqual(comm2.credentials()[0], "node_test01")
+        self.assertEqual(comm2.credentials()[1], "secret-api-key")
 
     def test_registration_failure_backs_off_instead_of_hammering(self):
         self.fake.mode = "reject"
@@ -316,3 +337,45 @@ class CloudCommGauntletTest(TempCwdTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CredentialStoreFallbackTest(TempCwdTestCase):
+    """Issue #58: headless Mac keychain -61 must not orphan node identity."""
+
+    def setUp(self):
+        super().setUp()
+        telemetry.reset_for_tests()
+        # Reset module latches between tests.
+        from src import credential_store as cs
+        cs._backend = "keyring"
+        cs._last_error = None
+
+    def tearDown(self):
+        telemetry.reset_for_tests()
+        super().tearDown()
+
+    def test_minus_61_falls_back_to_encrypted_file(self):
+        from src import credential_store as cs
+        with patch.object(
+            keyring, "set_password",
+            side_effect=keyring.errors.KeyringError(
+                "Can't store password on keychain: (-61, 'Unknown Error')"
+            ),
+        ):
+            backend = cs.set_password("cloud-api-key", "sekret")
+        self.assertEqual(backend, "encrypted_file")
+        with patch.object(keyring, "get_password", return_value=None):
+            self.assertEqual(cs.get_password("cloud-api-key"), "sekret")
+        snap = cs.status_snapshot()
+        self.assertEqual(snap["credential_store_backend"], "encrypted_file")
+        self.assertTrue(snap["credential_store_ok"])
+        self.assertIn("-61", snap["credential_store_error"] or "")
+
+    def test_is_keychain_denied_detects_minus_61(self):
+        from src.credential_store import is_keychain_denied
+        self.assertTrue(is_keychain_denied(
+            keyring.errors.KeyringError("(-61, 'Unknown Error')")))
+        self.assertTrue(is_keychain_denied(
+            keyring.errors.KeyringError("errSecInvalidOwnerEdit")))
+        self.assertFalse(is_keychain_denied(
+            keyring.errors.KeyringError("temporary glitch")))
