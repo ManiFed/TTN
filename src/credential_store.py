@@ -145,19 +145,29 @@ def _file_delete(account: str) -> None:
 
 
 def get_password(account: str, *, service: str = _SERVICE) -> Optional[str]:
-    """Load a secret: OS keyring first, then encrypted file fallback."""
+    """Load a secret: OS keyring first, then encrypted file fallback.
+
+    If keychain still holds a stale value after a failed rotation that wrote
+    the new secret to the encrypted fallback, prefer the fallback copy.
+    """
+    keyring_val: Optional[str] = None
     try:
-        val = keyring.get_password(service, account)
-        if val:
-            _set_backend("keyring")
-            return val
+        keyring_val = keyring.get_password(service, account)
     except keyring.errors.KeyringError as exc:
         logger.warning("Keyring read failed for %s: %s", account, exc)
         _set_error(str(exc))
-    val = _file_get(account)
-    if val:
+    file_val = _file_get(account)
+    if file_val and keyring_val and file_val != keyring_val:
+        # Keychain readable but not updated — fallback has the newer credential.
         _set_backend("encrypted_file")
-    return val
+        return file_val
+    if keyring_val:
+        _set_backend("keyring")
+        return keyring_val
+    if file_val:
+        _set_backend("encrypted_file")
+        return file_val
+    return None
 
 
 def set_password(account: str, password: str, *, service: str = _SERVICE) -> str:
@@ -175,7 +185,9 @@ def set_password(account: str, password: str, *, service: str = _SERVICE) -> str
         # survives restart (best-effort; ignore mirror failures).
         try:
             _file_set(account, password)
-        except OSError as exc:
+        except (OSError, ValueError, InvalidToken) as exc:
+            # Malformed .node_credential_key raises ValueError from Fernet;
+            # mirror is best-effort and must not fail a successful keyring write.
             logger.debug("Could not mirror credential to encrypted file: %s", exc)
         return "keyring"
     except keyring.errors.KeyringError as exc:
@@ -202,7 +214,7 @@ def set_password(account: str, password: str, *, service: str = _SERVICE) -> str
                 account,
             )
             return "encrypted_file"
-        except OSError as file_exc:
+        except (OSError, ValueError, InvalidToken) as file_exc:
             _set_backend("memory")
             msg = (
                 f"{detail} Encrypted-file fallback also failed: {file_exc}. "

@@ -371,6 +371,31 @@ class CredentialStoreFallbackTest(TempCwdTestCase):
         self.assertTrue(snap["credential_store_ok"])
         self.assertIn("-61", snap["credential_store_error"] or "")
 
+    def test_get_password_prefers_fallback_when_keychain_is_stale(self):
+        """Failed keychain rotation leaves old keychain value; prefer file copy."""
+        from src import credential_store as cs
+        with patch.object(
+            keyring, "set_password",
+            side_effect=keyring.errors.KeyringError(
+                "Can't store password on keychain: (-61, 'Unknown Error')"
+            ),
+        ):
+            self.assertEqual(cs.set_password("cloud-api-key", "new-sekret"), "encrypted_file")
+        with patch.object(keyring, "get_password", return_value="old-sekret"):
+            self.assertEqual(cs.get_password("cloud-api-key"), "new-sekret")
+        self.assertEqual(cs.backend(), "encrypted_file")
+
+    def test_malformed_credential_key_does_not_fail_keyring_write(self):
+        """Best-effort encrypted mirror must swallow Fernet ValueError."""
+        from src import credential_store as cs
+        from pathlib import Path
+        key_path = Path("data/.node_credential_key")
+        key_path.parent.mkdir(exist_ok=True)
+        key_path.write_bytes(b"not-a-valid-fernet-key\n")
+        with patch.object(keyring, "set_password", return_value=None):
+            backend = cs.set_password("cloud-api-key", "sekret")
+        self.assertEqual(backend, "keyring")
+
     def test_is_keychain_denied_detects_minus_61(self):
         from src.credential_store import is_keychain_denied
         self.assertTrue(is_keychain_denied(

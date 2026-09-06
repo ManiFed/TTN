@@ -136,6 +136,13 @@ class CloudCommunicator:
         self._api_key = str(expand_env(cloud_cfg.get("api_key", "")) or "")
         self._recovery_token: str = ""
         self._pair_token: str = ""
+        # Credential sync in _load_state() writes credential_store_* into status;
+        # initialize those fields (and a dict) before loading persisted state.
+        self.status: dict = {
+            "credential_store_ok": True,
+            "credential_store_backend": "keyring",
+            "credential_store_error": None,
+        }
         self._load_state()
 
         self._stop = threading.Event()
@@ -173,8 +180,8 @@ class CloudCommunicator:
         self._register_next_attempt = 0.0  # monotonic
         self._credential_rejections = 0
 
-        # Status surface for the dashboard
-        self.status: dict = {
+        # Status surface for the dashboard (keep credential_store_* from _load_state)
+        self.status.update({
             "registered": bool(self._node_id and self._api_key),
             "node_id": self._node_id,
             "pair_token": self._pair_token,
@@ -189,11 +196,9 @@ class CloudCommunicator:
             "clock_skew_s": None,
             "clock_qualified": self._clock_qualified,
             "autonomy_bundle_id": "",
-            "credential_store_ok": True,
-            "credential_store_backend": "keyring",
-            "credential_store_error": None,
             "error": None,
-        }
+        })
+        self._sync_credential_store_status()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
