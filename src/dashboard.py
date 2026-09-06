@@ -5495,6 +5495,14 @@ def launch(port: int = 5173) -> None:
                 "credential_store_ok": bool(
                     _cloud and _cloud.status.get("credential_store_ok", True)
                 ),
+                "credential_store_backend": (
+                    _cloud.status.get("credential_store_backend")
+                    if _cloud else None
+                ),
+                "credential_store_error": (
+                    _cloud.status.get("credential_store_error")
+                    if _cloud else None
+                ),
             }
 
     _commissioning = CommissioningManager(
