@@ -45,7 +45,7 @@ from alpaca.covercalibrator import CoverCalibrator
 from src.image_watcher import ImageWatcher
 from src.photometry import run_pipeline as _run_photometry
 from src.photometry import run_survey_pipeline as _run_survey_pipeline
-from src.aavso_submission import submit as _aavso_submit
+from src.aavso_submission import submit as _aavso_submit, preflight as _aavso_preflight
 from src.fits_export import export_enhanced_fits as _export_fits
 from src.geolocation import enrich_config_with_location
 from src.telescope_specs import enrich_config_with_telescope
@@ -1205,6 +1205,22 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
         logger.warning("Cloud plan rejected by validator: %s", err)
         _telemetry.event("plan_rejected", severity="error",
                          detail={"reason": err, "items": len(items)})
+        return
+    blocked = _aavso_research_block_reason("cloud")
+    if blocked:
+        logger.error("Cloud plan refused — AAVSO not ready: %s", blocked)
+        _telemetry.event("plan_rejected", severity="error",
+                         detail={"reason": blocked[:300], "items": len(valid),
+                                 "aavso_preflight": True})
+        # Surface on schedule status so MCP/node_aavso/dashboard see it without
+        # starting a runner that immediately exits.
+        with _sched_lock:
+            if not _sched_state["running"]:
+                _sched_state["error"] = blocked
+                _sched_state["current_phase"] = "blocked_aavso"
+                _sched_state["source"] = "cloud"
+                _sched_state["total"] = len(valid)
+                _sched_state["completed"] = 0
         return
     _store_alternates(contingencies or {})
     _work_starved.clear()
@@ -3861,8 +3877,23 @@ def api_fits_download(filename: str):
 
 @app.route("/api/aavso")
 def api_aavso():
+    """AAVSO export status plus early preflight for research nights.
+
+    Exposes dry_run / credential readiness so MCP and the owner can refuse a
+    research night *before* it burns clear sky (issue #65).
+    """
     with _state_lock:
         snap = dict(_state["aavso"])
+    try:
+        snap.update(_aavso_preflight(_load_config()))
+    except Exception as exc:
+        logger.warning("AAVSO preflight failed while serving /api/aavso: %s", exc)
+        snap.setdefault("ok", False)
+        snap.setdefault("problems", ["aavso.preflight_error"])
+        snap.setdefault(
+            "message",
+            "AAVSO research blocked — could not read aavso config. Check config.yaml.",
+        )
     return jsonify(snap)
 
 
@@ -4896,9 +4927,50 @@ def _wait_for_darkness(max_wait_s: float = 16 * 3600) -> bool:
     return False
 
 
+
+def _aavso_research_block_reason(source: str = "manual") -> Optional[str]:
+    """Refuse AAVSO-aimed schedules when dry_run or credentials/code are unset.
+
+    Interrupts (GRB / time-critical) are not gated — losing one of those is
+    worse than a dry-run submission. Cloud plans and manual runs are research
+    photometry aimed at AAVSO, so they must be ready first (issue #65).
+    """
+    if source == "interrupt":
+        return None
+    try:
+        pf = _aavso_preflight(_load_config())
+    except Exception as exc:
+        logger.error("AAVSO preflight raised — refusing schedule: %s", exc)
+        return ("AAVSO research blocked — could not read aavso config. "
+                "Check config.yaml (aavso.observer_code, aavso.username/password, "
+                "aavso.dry_run).")
+    if pf.get("ok"):
+        return None
+    return str(pf.get("message") or "AAVSO research blocked — fix aavso config.")
+
+
 def _run_schedule_bg(items: list, source: str = "manual",
                      wait_for_dark: bool = False) -> None:
     """Background thread: slew + expose for each scheduled observation."""
+    blocked = _aavso_research_block_reason(source)
+    if blocked:
+        logger.error("Schedule refused (%s): %s", source, blocked)
+        with _sched_lock:
+            _sched_state.update({
+                "running": False, "cancelled": False,
+                "current_idx": -1, "current_target": "",
+                "current_phase": "blocked_aavso",
+                "current_frame": 0, "total_frames": 0,
+                "completed": 0, "total": len(items), "error": blocked,
+                "source": source,
+                "started_at": None,
+                "items": [],
+            })
+        _telemetry.event("schedule_blocked_aavso", severity="error",
+                         detail={"source": source, "reason": blocked[:300],
+                                 "items": len(items)})
+        return
+
     with _sched_lock:
         _sched_state.update({
             "running": True, "cancelled": False,
@@ -5143,6 +5215,9 @@ def api_schedule_run():
     with _sched_lock:
         if _sched_state["running"]:
             return jsonify({"error": "Schedule already running"}), 409
+    blocked = _aavso_research_block_reason("manual")
+    if blocked:
+        return jsonify({"ok": False, "error": blocked, "aavso_ready": False}), 409
     data  = request.get_json(force=True) or {}
     items = data.get("items", [])
     if not items:

@@ -8,8 +8,9 @@ audit trail to disk.
 
 Public API
 ----------
-    from aavso_submission import submit
+    from aavso_submission import submit, preflight
     result = submit(measurement, config)   # returns dict
+    ready  = preflight(config)             # gate research nights early
 
 Result dict
 -----------
@@ -48,6 +49,64 @@ logger = logging.getLogger("aavso_submission")
 
 _WEBOBS_URL  = "https://www.aavso.org/apps/webobs/submit/"
 _SOFTWARE_ID = "The Telescope Net Node v1"
+
+
+# ── Preflight (gate research nights before they burn clear sky) ────────────────
+
+def preflight(config: dict) -> dict:
+    """
+    Whether AAVSO submission is configured for a real research night.
+
+    Call this *before* accepting a research programme or starting a photometry
+    schedule. ``submit()`` still dry-runs / skips at POST time; this refuses
+    earlier so a non-technical owner is not surprised at dawn.
+
+    Problems are named after the config keys so the owner knows what to set:
+    ``aavso.dry_run: true``, ``aavso.observer_code``, ``aavso.username``/``password``.
+
+    Username/password are required only when this node would POST to WebObs
+    (``aavso.submit_from_node``, defaulting to True when the cloud is off).
+    ``dry_run`` and ``observer_code`` are always required for AAVSO-aimed runs.
+    """
+    aavso_cfg = config.get("aavso") or {}
+    if not isinstance(aavso_cfg, dict):
+        aavso_cfg = {}
+
+    observer_code = str(aavso_cfg.get("observer_code") or "").strip()
+    username = str(expand_env(aavso_cfg.get("username", "")) or "").strip()
+    password = str(expand_env(aavso_cfg.get("password", "")) or "").strip()
+    dry_run = bool(aavso_cfg.get("dry_run", False))
+    cloud_enabled = bool((config.get("cloud") or {}).get("enabled", False))
+    submit_from_node = bool(aavso_cfg.get("submit_from_node", not cloud_enabled))
+
+    problems: list[str] = []
+    if dry_run:
+        problems.append("aavso.dry_run: true")
+    if not observer_code:
+        problems.append("aavso.observer_code")
+    if submit_from_node and (not username or not password):
+        problems.append("aavso.username/password")
+
+    how = (
+        "Set aavso.observer_code to your AAVSO OBSCODE, set aavso.username and "
+        "aavso.password (or export AAVSO_USERNAME / AAVSO_PASSWORD), and set "
+        "aavso.dry_run: false in config.yaml — then accept or start again."
+    )
+    if problems:
+        named = "; ".join(problems)
+        message = f"AAVSO research blocked — {named}. {how}"
+    else:
+        message = "AAVSO submission ready."
+
+    return {
+        "ok": not problems,
+        "dry_run": dry_run,
+        "observer_code_set": bool(observer_code),
+        "credentials_set": bool(username and password),
+        "submit_from_node": submit_from_node,
+        "problems": problems,
+        "message": message,
+    }
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
