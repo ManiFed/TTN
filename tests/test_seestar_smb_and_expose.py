@@ -28,7 +28,14 @@ class SeestarShareNameTest(unittest.TestCase):
 class ExposeDurationKeyTest(unittest.TestCase):
     def setUp(self):
         dashboard.app.testing = True
+        # Other tests may leave a connected camera on the module; this case
+        # specifically asserts the not-connected path, so clear it first.
+        self._prev_cam = dashboard._cam
+        dashboard._cam = None
         self.client = dashboard.app.test_client()
+
+    def tearDown(self):
+        dashboard._cam = self._prev_cam
 
     def test_expose_rejects_when_camera_not_connected_but_reads_seconds_key(self):
         # No camera is wired up in this unit test, so the request 400s before
