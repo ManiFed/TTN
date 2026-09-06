@@ -411,7 +411,10 @@ class CloudCommunicator:
                 self._recovery_token = credential_store.get_password(
                     _KEYRING_ACCOUNT_RECOVERY) or ""
             self._pair_token = state.get("pair_token", "")
-        except (OSError, ValueError, keyring.errors.KeyringError) as exc:
+        except (OSError, ValueError) as exc:
+            # Missing/corrupt cloud_state.json is not a credential-store failure.
+            logger.warning("Could not load cloud_state.json: %s", exc)
+        except keyring.errors.KeyringError as exc:
             logger.warning("Could not load cloud credentials from the credential store: %s", exc)
             self.status["credential_store_error"] = str(exc)
             self.status["credential_store_ok"] = False
@@ -427,8 +430,11 @@ class CloudCommunicator:
         snap = credential_store.status_snapshot()
         # Latched failure: once persistence is memory-only this session, keep
         # credential_store_ok False even if a later write appears to succeed.
+        # Durable backends (keyring / encrypted_file) may clear a prior False
+        # that came from a transient load/write glitch.
         if snap.get("credential_store_ok"):
-            if self.status.get("credential_store_ok", True):
+            if (self.status.get("credential_store_ok", True)
+                    or self.status.get("credential_store_backend") != "memory"):
                 self.status["credential_store_ok"] = True
         else:
             self.status["credential_store_ok"] = False
