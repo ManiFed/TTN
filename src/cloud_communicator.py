@@ -961,6 +961,16 @@ class CloudCommunicator:
                                  state: str, **kwargs) -> str:
         return self._autonomy.record(bundle_id, item_id, state, **kwargs)
 
+    def rearm_plan_delivery(self) -> None:
+        """Allow the current cloud plan to be delivered again on the next poll.
+
+        ``_poll_plan`` consumes a plan_id into ``_last_plan_id`` before calling
+        ``on_plan``. When the dashboard refuses that plan (e.g. AAVSO preflight
+        not ready), clear the consumed id so fixing config.yaml and waiting for
+        the next poll retries the same plan instead of silently dropping it.
+        """
+        self._last_plan_id = None
+
     def _poll_plan(self) -> None:
         data = self._get("/api/v1/plan")
         plan = data.get("plan")

@@ -1221,6 +1221,16 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
                 _sched_state["source"] = "cloud"
                 _sched_state["total"] = len(valid)
                 _sched_state["completed"] = 0
+        # _poll_plan already consumed this plan_id into _last_plan_id; rearm so
+        # the owner fixing aavso.* in config.yaml gets a retry on the next poll
+        # instead of needing a new plan id or an agent restart (Codex P1).
+        if _cloud is not None:
+            try:
+                _cloud.rearm_plan_delivery()
+            except Exception:
+                _cloud._last_plan_id = None
+            _cloud.status["plan_pending_review"] = False
+            _cloud.status["aavso_blocked"] = True
         return
     _store_alternates(contingencies or {})
     _work_starved.clear()
@@ -1238,6 +1248,7 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
         return
     if _cloud is not None:
         _cloud.status["plan_pending_review"] = False
+        _cloud.status["aavso_blocked"] = False
     with _sched_lock:
         if _sched_state["running"]:
             # A newer cloud plan supersedes an older one that hasn't actually

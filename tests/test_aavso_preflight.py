@@ -169,7 +169,74 @@ class TonightAcceptAavsoPreflightTest(unittest.TestCase):
         self.assertIn("aavso.dry_run", text)
 
 
+    def test_tonight_accept_fails_closed_on_api_error(self):
+        """ApiError from /api/aavso must refuse, not wave through (Codex P1)."""
+        from telescope_mcp.client import ApiError
+
+        def boom(path, *args, **kwargs):
+            if path == "/api/cloud/identity":
+                return {"registered": True, "node_id": "node_600334db"}
+            if path == "/api/aavso":
+                raise ApiError(503, "agent unreachable")
+            raise AssertionError(f"unexpected agent GET {path}")
+
+        self.agent.get.side_effect = boom
+        text, _ = _call(self.server, "tonight_accept", {})
+        self.client.post.assert_not_called()
+        self.assertIn("could not verify", text.lower())
+        self.assertIn("aavso", text.lower())
+
+    def test_scheduled_night_accept_skips_local_preflight_for_sibling(self):
+        """Local /api/aavso only gates this computer's node (Codex P2)."""
+        text, _ = _call(self.server, "scheduled_night_accept", {
+            "node_id": "node_sibling", "date": "2026-09-10",
+        })
+        self.client.post.assert_called_once()
+        path = self.client.post.call_args[0][0]
+        self.assertIn("node_sibling", path)
+        # Local node is unready in setUp; sibling must not inherit that refuse.
+        self.assertNotIn("aavso.dry_run", text)
+
+
 # ── node: schedule start gate ─────────────────────────────────────────────────
+
+class CloudPlanRearmTest(unittest.TestCase):
+    """Blocked AAVSO plans must be re-deliverable after config is fixed."""
+
+    def setUp(self):
+        import src.dashboard as dash
+        import src.telemetry as telemetry
+        self.dash = dash
+        telemetry.reset_for_tests()
+        self._orig_cloud = dash._cloud
+        with dash._sched_lock:
+            dash._sched_state.update(running=False, cancelled=False,
+                                     error=None, current_phase="")
+
+    def tearDown(self):
+        import src.telemetry as telemetry
+        self.dash._cloud = self._orig_cloud
+        with self.dash._sched_lock:
+            self.dash._sched_state.update(running=False, cancelled=False)
+        telemetry.reset_for_tests()
+
+    def test_blocked_cloud_plan_rearms_last_plan_id(self):
+        cloud = MagicMock()
+        cloud._last_plan_id = "plan_abc"
+        cloud.status = {"plan_pending_review": False}
+        cloud.rearm_plan_delivery = MagicMock(
+            side_effect=lambda: setattr(cloud, "_last_plan_id", None))
+        self.dash._cloud = cloud
+        with patch.object(self.dash, "_load_config", return_value=_cfg(dry_run=True)):
+            self.dash._on_cloud_plan(
+                [{"target": "Z Cam", "ra": 8.0, "dec": 73.0, "mag": 10.0}])
+        cloud.rearm_plan_delivery.assert_called_once()
+        self.assertIsNone(cloud._last_plan_id)
+        self.assertTrue(cloud.status.get("aavso_blocked"))
+        with self.dash._sched_lock:
+            self.assertEqual(self.dash._sched_state["current_phase"], "blocked_aavso")
+
+
 
 class ScheduleAavsoPreflightTest(unittest.TestCase):
 
