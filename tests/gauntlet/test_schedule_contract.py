@@ -202,6 +202,18 @@ class InterruptContractTest(TempCwdTestCase):
         self.assertTrue(dashboard._interrupt_queue.empty())
 
 
+# Cloud plans are gated by AAVSO preflight (issue #65). These fixtures are
+# intentionally ready so the schedule-contract assertions still exercise
+# auto_run / supersede behaviour rather than the refuse path.
+_AAVSO_READY = (
+    "aavso:\n"
+    "  observer_code: TEST\n"
+    "  username: test\n"
+    "  password: test\n"
+    "  dry_run: false\n"
+)
+
+
 class CloudPlanFlowTest(TempCwdTestCase):
     """F2/F15 — plan arrival leaves evidence and honors auto_run_plans."""
 
@@ -228,7 +240,8 @@ class CloudPlanFlowTest(TempCwdTestCase):
     def test_auto_run_off_defers_plan_with_evidence(self):
         self.write("config.yaml",
                    "observatory:\n  latitude: 31.0\n  longitude: -99.0\n"
-                   "cloud:\n  auto_run_plans: false\n")
+                   "cloud:\n  auto_run_plans: false\n"
+                   + _AAVSO_READY)
         dashboard._cloud = types.SimpleNamespace(status={})
         dashboard._on_cloud_plan([_valid_item()])
         self.assertTrue(dashboard._cloud.status["plan_pending_review"])
@@ -240,7 +253,8 @@ class CloudPlanFlowTest(TempCwdTestCase):
     def test_new_plan_supersedes_one_waiting_for_dark(self):
         self.write("config.yaml",
                    "observatory:\n  latitude: 31.0\n  longitude: -99.0\n"
-                   "cloud:\n  auto_run_plans: true\n")
+                   "cloud:\n  auto_run_plans: true\n"
+                   + _AAVSO_READY)
         dashboard._cloud = types.SimpleNamespace(status={})
         dashboard._safety_mgr = _FakeSafety(sun=-30.0)  # dark → runs immediately
 

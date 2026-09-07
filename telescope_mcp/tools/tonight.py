@@ -67,6 +67,61 @@ def _resolve_node_id(node_id: str, agent: AgentClient | None) -> str:
     return node_id or _this_computer_node_id(agent)
 
 
+def _aavso_accept_refusal(agent: AgentClient | None,
+                           node_id: str = "") -> dict | None:
+    """Refuse research accept when local AAVSO config cannot submit for real.
+
+    Remote (cloud-only) MCP has no agent, so it cannot read config.yaml — the
+    node-side schedule gate still blocks the night. On the telescope computer
+    we check /api/aavso before posting accept to the cloud (issue #65).
+
+    The local preflight only applies when accepting *this* computer's node.
+    Accepting a sibling node_id must not be refused (or waved through) based
+    on this machine's config; that node's own schedule gate remains in force.
+    """
+    if agent is None:
+        return None
+    node_id = (node_id or "").strip()
+    if node_id:
+        local_id = _this_computer_node_id(agent)
+        # Unknown local identity: do not block a sibling on guesswork. When the
+        # resolved id is this computer, or node_id was omitted upstream, check.
+        if local_id and node_id != local_id:
+            return None
+    try:
+        status = agent.get("/api/aavso")
+    except ApiError as exc:
+        # Fail closed: timeout / stopped agent / old agent without /api/aavso
+        # must not post accept and recreate a dry-run research night.
+        detail = (
+            "AAVSO research blocked — could not verify readiness via "
+            f"/api/aavso ({exc.status}: {exc.message}). Start the node agent "
+            "on this computer (or upgrade it), confirm config.yaml aavso.* "
+            "is set, then retry."
+        )
+        return {
+            "accepted": False,
+            "aavso_ready": False,
+            "problems": ["aavso.preflight_unreachable"],
+            "detail": detail,
+            "nudge": detail,
+        }
+    if not isinstance(status, dict) or status.get("ok", True):
+        return None
+    problems = status.get("problems") or []
+    detail = status.get("message") or (
+        "AAVSO research blocked — fix aavso.dry_run / aavso.observer_code / "
+        "aavso.username/password in config.yaml, then retry."
+    )
+    return {
+        "accepted": False,
+        "aavso_ready": False,
+        "problems": problems,
+        "detail": detail,
+        "nudge": detail,
+    }
+
+
 def register(server, client: CloudClient, agent: AgentClient | None = None) -> None:
 
     @server.tool()
@@ -114,6 +169,9 @@ def register(server, client: CloudClient, agent: AgentClient | None = None) -> N
                     "so I can use this machine's node."
                 ),
             }
+        refusal = _aavso_accept_refusal(agent, node_id)
+        if refusal is not None:
+            return refusal
         body: dict = {"decision": "accept"}
         if research_hours is not None:
             body["research_hours"] = float(research_hours)
@@ -164,6 +222,9 @@ def register(server, client: CloudClient, agent: AgentClient | None = None) -> N
                                imaging_after: bool | None = None,
                                note: str = "") -> dict:
         """Accept a future night's proposal (date is YYYY-MM-DD), optionally reshaping it."""
+        refusal = _aavso_accept_refusal(agent, node_id)
+        if refusal is not None:
+            return refusal
         body: dict = {"decision": "accept"}
         if research_hours is not None:
             body["research_hours"] = float(research_hours)
@@ -213,6 +274,9 @@ def register(server, client: CloudClient, agent: AgentClient | None = None) -> N
         Clears any multi-night parking and accepts tonight's recommendation, so
         a telescope stood down earlier in the evening can still observe tonight.
         """
+        refusal = _aavso_accept_refusal(agent, node_id)
+        if refusal is not None:
+            return refusal
         try:
             client.delete(f"/me/nodes/{encode_path(node_id)}/vacation")
         except ApiError as exc:

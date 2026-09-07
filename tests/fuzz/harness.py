@@ -54,6 +54,13 @@ cloud:
   realtime_url: {cloud_url}
 {credentials}  heartbeat_interval: 1.0
   plan_poll_interval: 3.0
+# Research nights refuse when aavso is unset/dry_run (issue #65). Harness
+# defaults are AAVSO-ready so schedule contract / baseline fuzz still run;
+# dedicated preflight tests cover the refuse path.
+aavso:
+  observer_code: FUZZ
+  dry_run: false
+  submit_from_node: false
 photometry:
   enabled: false
 image_watcher:
