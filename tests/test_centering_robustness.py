@@ -8,6 +8,7 @@ of a clear, actionable error).
 
 import threading
 import unittest
+from unittest.mock import patch
 
 from alpaca.platesolve import CenteringError, center_on_target
 from src import dashboard
@@ -105,16 +106,40 @@ class AstapPathAliasTest(unittest.TestCase):
         real = platesolve.solve_image_array
         platesolve.solve_image_array = fake_solve
         try:
-            result = platesolve.center_on_target_device(
-                Tel(), Cam(), 10.0, 20.0,
-                exposure_s=0.01, settle_s=0, max_iterations=1,
-                solver="astap", astap_path="/opt/Astap.app/Contents/MacOS/astap",
-            )
+            with patch("alpaca.platesolve.resolve_solver_path",
+                       return_value="/opt/Astap.app/Contents/MacOS/astap"):
+                result = platesolve.center_on_target_device(
+                    Tel(), Cam(), 10.0, 20.0,
+                    exposure_s=0.01, settle_s=0, max_iterations=1,
+                    solver="astap", astap_path="/opt/Astap.app/Contents/MacOS/astap",
+                )
         finally:
             platesolve.solve_image_array = real
         self.assertTrue(result.success)
         self.assertEqual(calls["solver_path"],
                          "/opt/Astap.app/Contents/MacOS/astap")
+
+    def test_missing_bare_astap_fails_before_exposure_and_names_config(self):
+        from alpaca import platesolve
+
+        class Tel:
+            def slew_to_coordinates(self, *args):
+                raise AssertionError("must fail before slew")
+
+        class Cam:
+            def expose(self, *args, **kwargs):
+                raise AssertionError("must fail before exposure")
+
+        with patch("alpaca.platesolve.shutil.which", return_value=None):
+            with self.assertRaises(CenteringError) as ctx:
+                platesolve.center_on_target_device(
+                    Tel(), Cam(), 10.0, 20.0, solver="astap",
+                    astap_path="astap", settle_s=0, max_iterations=1,
+                )
+
+        message = str(ctx.exception)
+        self.assertIn("photometry.astap_path='astap'", message)
+        self.assertIn("not executable", message)
 
 
 if __name__ == "__main__":
