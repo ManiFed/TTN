@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -36,6 +37,26 @@ class CenteringError(Exception):
 
 class CenteringCancelled(Exception):
     """Raised when auto-centering is aborted via its cancel_check callback."""
+
+
+def resolve_solver_path(solver: str, configured_path: str) -> str:
+    """Resolve a configured solver executable or fail with an actionable error."""
+    configured = os.path.expanduser(str(configured_path or "").strip())
+    resolved = shutil.which(configured) if configured else None
+    if resolved and os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+        return os.path.abspath(resolved)
+
+    config_key = (
+        "photometry.solve_field_path"
+        if solver == "astrometry"
+        else "photometry.astap_path"
+    )
+    shown = configured or "<empty>"
+    raise CenteringError(
+        f"Plate solver is missing or not executable: configured {config_key}="
+        f"'{shown}'. Install the solver or set {config_key} to an executable "
+        "absolute path (a bare command name must be available on PATH)."
+    )
 
 
 
@@ -386,6 +407,7 @@ def center_on_target_device(
         solver_path = astap_path or ("astap" if solver != "astrometry" else "solve-field")
     elif astap_path and solver_path == "solve-field" and solver != "astrometry":
         solver_path = astap_path
+    solver_path = resolve_solver_path(solver, solver_path)
 
     def slew_fn(ra_hours: float, dec_deg: float) -> None:
         telescope.slew_to_coordinates(ra_hours, dec_deg)
