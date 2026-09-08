@@ -5221,6 +5221,56 @@ def _run_schedule_bg(items: list, source: str = "manual",
                              detail={"error": str(exc)[:200]})
 
 
+def _resync_schedule_from_cloud() -> tuple[dict, int]:
+    """Non-admin refill: re-deliver the accepted cloud plan into the local runner.
+
+    Returns (payload, http_status).
+    """
+    with _sched_lock:
+        if _sched_state["running"]:
+            return {"ok": False, "error": "Schedule already running"}, 409
+    if _cloud is None:
+        return {"ok": False, "error": "Cloud communicator not connected"}, 503
+    blocked = _aavso_research_block_reason("cloud")
+    if blocked:
+        return {"ok": False, "error": blocked, "aavso_ready": False}, 409
+    try:
+        result = _cloud.force_redeliver_current_plan()
+    except Exception as exc:
+        logger.exception("schedule resync failed")
+        return {"ok": False, "error": str(exc)[:300]}, 500
+    with _sched_lock:
+        running = bool(_sched_state.get("running"))
+        total = int(_sched_state.get("total") or 0)
+        phase = _sched_state.get("current_phase", "")
+    result = dict(result or {})
+    result["schedule_running"] = running
+    result["schedule_total"] = total
+    result["schedule_phase"] = phase
+    result["ok"] = bool(result.get("ok", True)) and (running or total > 0
+                      or int(result.get("plan_items") or 0) > 0)
+    if not result["ok"] and "error" not in result:
+        result["error"] = (
+            "Cloud plan redelivery did not start a local schedule "
+            "(empty plan or auto_run_plans off)"
+        )
+        return result, 409
+    logger.info("Schedule resync from cloud: plan_items=%s running=%s total=%s",
+                result.get("plan_items"), running, total)
+    return result, 200
+
+
+@app.route("/api/schedule/resync", methods=["POST"])
+def api_schedule_resync():
+    """Reload the local schedule runner from the accepted cloud plan.
+
+    Used after cancel leaves the local queue empty while the cloud still has
+    tonight's items — without requiring admin_replan (issue #67).
+    """
+    payload, status = _resync_schedule_from_cloud()
+    return jsonify(payload), status
+
+
 @app.route("/api/schedule/run", methods=["POST"])
 def api_schedule_run():
     with _sched_lock:
@@ -5229,9 +5279,17 @@ def api_schedule_run():
     blocked = _aavso_research_block_reason("manual")
     if blocked:
         return jsonify({"ok": False, "error": blocked, "aavso_ready": False}), 409
-    data  = request.get_json(force=True) or {}
-    items = data.get("items", [])
+    data  = request.get_json(force=True, silent=True) or {}
+    items = data.get("items", []) if isinstance(data, dict) else []
     if not items:
+        # MCP node_schedule_run posts no body. After a cancel the cloud still
+        # has the plan — refill from cloud instead of "No items provided".
+        payload, status = _resync_schedule_from_cloud()
+        if status == 200:
+            payload["refilled_from_cloud"] = True
+            return jsonify(payload), 200
+        if payload.get("error") and "not connected" not in str(payload.get("error")):
+            return jsonify(payload), status
         return jsonify({"error": "No items provided"}), 400
 
     valid, err = _validate_schedule_items(items)

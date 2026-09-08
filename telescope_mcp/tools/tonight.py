@@ -179,8 +179,21 @@ def register(server, client: CloudClient, agent: AgentClient | None = None) -> N
             body["imaging_after"] = bool(imaging_after)
         if note:
             body["note"] = note
-        return _with_nudge(
+        result = _with_nudge(
             client.post(f"/me/nodes/{encode_path(node_id)}/tonight", body))
+        # After accept (or idempotent re-accept), refill the local runner from
+        # the cloud plan so cancel → empty queue is recoverable without admin
+        # (issue #67). Best-effort — cloud accept still stands if resync fails.
+        if agent is not None and isinstance(result, dict):
+            try:
+                resync = agent.post("/api/schedule/resync", timeout=60.0)
+                if isinstance(resync, dict):
+                    result = dict(result)
+                    result["local_resync"] = resync
+            except Exception as exc:
+                result = dict(result)
+                result["local_resync"] = {"ok": False, "error": str(exc)[:200]}
+        return result
 
     @server.tool()
     def tonight_decline(node_id: str = "", note: str = "") -> dict:
