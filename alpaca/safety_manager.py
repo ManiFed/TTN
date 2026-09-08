@@ -596,6 +596,11 @@ class SafetyManager:
         Uses the client's dedicated heartbeat session and retries once so a
         single dropped packet — or a momentary collision with in-flight device
         traffic — doesn't register as a connection failure.
+
+        ``ping()`` returns the ALPACA ``connected`` Value. A successful HTTP
+        response with ``Value=false`` (e.g. after ``_emergency_park`` called
+        ``disconnect()``) must count as failure so we attempt reconnect instead
+        of clearing an unreachable latch while the device stays disconnected.
         """
         with self._lock:
             tel = self._tel
@@ -603,14 +608,19 @@ class SafetyManager:
             return False
         for attempt in (1, 2):
             try:
-                tel._c.ping(timeout=self._heartbeat_timeout)
-                return True
+                if tel._c.ping(timeout=self._heartbeat_timeout):
+                    return True
+                logger.debug(
+                    "SafetyManager: heartbeat attempt %d: device reports "
+                    "connected=false",
+                    attempt,
+                )
             except Exception as exc:
                 logger.debug(
                     "SafetyManager: heartbeat attempt %d failed: %s", attempt, exc
                 )
-                if attempt < 2:
-                    self._stop_event.wait(timeout=0.5)
+            if attempt < 2:
+                self._stop_event.wait(timeout=0.5)
         return False
 
     def _try_reconnect(self) -> bool:
