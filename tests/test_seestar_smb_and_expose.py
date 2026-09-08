@@ -86,6 +86,42 @@ class ExposeFailFastTest(unittest.TestCase):
         self.assertIn('current_item_outcome"] = "failed"', failure_block)
         self.assertIn("return False", failure_block)
 
+    def test_fits_write_failure_honors_deferred_cancellation(self):
+        """Codex #77 P1: cancel_after_frame must set cancelled before early return."""
+        import inspect
+        from src import dashboard
+
+        src = inspect.getsource(dashboard._run_schedule_observation)
+        failure_block = src[src.index("except Exception as exc:", src.index("# ── Expose")):]
+        failure_block = failure_block[:failure_block.index("finally:")]
+        self.assertIn('cancel_after_frame', failure_block)
+        self.assertIn('_sched_state["cancelled"] = True', failure_block)
+        # cancelled must be applied before the early return on this path
+        self.assertLess(
+            failure_block.index('_sched_state["cancelled"] = True'),
+            failure_block.index("return False"),
+        )
+
+    def test_fits_write_failure_does_not_count_completed_frame(self):
+        """Codex #77 P2: frames_completed tracks successes, not current_frame."""
+        import inspect
+        from src import dashboard
+
+        src = inspect.getsource(dashboard._run_schedule_observation)
+        self.assertIn('"frames_completed": 0', src)
+        # Success path increments frames_completed
+        self.assertIn('_sched_state["frames_completed"]', src)
+        # Cloud outcome must report the success counter, not current_frame
+        runner = inspect.getsource(dashboard._run_schedule_bg)
+        self.assertIn(
+            'frames_completed=int(_sched_state.get("frames_completed") or 0)',
+            runner,
+        )
+        self.assertNotIn(
+            'frames_completed=int(_sched_state.get("current_frame") or 0)',
+            runner,
+        )
+
     def test_camera_expose_failfast_on_idle_without_ready(self):
         import inspect
         from alpaca.camera import Camera
