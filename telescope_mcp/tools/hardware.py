@@ -68,6 +68,16 @@ def register(server, agent: AgentClient) -> None:
         return agent.get("/api/photometry")
 
     @server.tool()
+
+    @server.tool()
+    def node_photometry_enqueue(path: str) -> dict:
+        """Enqueue a FITS file (e.g. under fits_export/) for photometry.
+
+        Manual exposures write to fits_export/ while the Seestar watcher looks
+        at MyWorks — call this to feed a manual frame into the AAVSO path.
+        """
+        return agent.post("/api/photometry/enqueue", {"path": path}, timeout=30.0)
+
     def node_aavso() -> dict:
         """AAVSO export status on this node."""
         return agent.get("/api/aavso")

@@ -581,6 +581,7 @@ def _store_history_image(
 # ── Image watcher ──────────────────────────────────────────────────────────────
 
 _image_watcher: Optional[ImageWatcher] = None
+_fits_export_watcher: Optional[ImageWatcher] = None
 
 _SEESTAR_SMB_SHARE = "EMMC Images"
 
@@ -642,6 +643,66 @@ def _start_image_watcher_at(path: str) -> None:
         _state["image_watcher"]["enabled"]    = True
         _state["image_watcher"]["watch_path"] = path
     logger.info("Image watcher started at %s", path)
+    _ensure_fits_export_watcher()
+
+
+def _fits_export_dir() -> str:
+    cfg = _load_config()
+    return str((cfg.get("photometry", {}) or {}).get("fits_export", {})
+               .get("export_dir", "fits_export") or "fits_export")
+
+
+def _fits_already_photometered(path: str) -> bool:
+    """Skip enhanced exports so watching fits_export does not loop."""
+    try:
+        from astropy.io import fits as _fits
+        with _fits.open(path, memmap=False, ignore_missing_simple=True) as hdul:
+            hdr = hdul[0].header
+            hist = hdr.get("HISTORY", "")
+            hist_s = " ".join(str(h) for h in hist) if isinstance(hist, list) else str(hist)
+            if "Differential photometry" in hist_s:
+                return True
+            if hdr.get("DATE-BLD") and "The Telescope Net Node" in str(hdr.get("SWCREATE", "")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _on_new_fits_export(info: dict) -> None:
+    """Ingest manual / exported frames under fits_export/ (issue #70)."""
+    path = info.get("path") or ""
+    if not path or _fits_already_photometered(path):
+        logger.debug("fits_export watcher skipping already-processed %s", path)
+        return
+    _on_new_fits(info)
+
+
+def _ensure_fits_export_watcher() -> None:
+    """Watch fits_export so manual frames enter photometry without MCP copy."""
+    global _fits_export_watcher
+    export_dir = _fits_export_dir()
+    try:
+        pathlib.Path(export_dir).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("Could not create fits_export dir %s: %s", export_dir, exc)
+        return
+    cfg = _load_config()
+    debounce = float(cfg.get("image_watcher", {}).get("debounce_delay", 2.0))
+    current = getattr(_fits_export_watcher, "_path", None) if _fits_export_watcher else None
+    running = (_fits_export_watcher is not None
+               and bool(getattr(_fits_export_watcher, "_running", False))
+               and current == export_dir)
+    if running:
+        return
+    if _fits_export_watcher is not None:
+        try:
+            _fits_export_watcher.stop()
+        except Exception:
+            pass
+    _fits_export_watcher = ImageWatcher(export_dir, _on_new_fits_export, debounce)
+    _fits_export_watcher.start()
+    logger.info("fits_export photometry watcher started at %s", export_dir)
 
 
 def _auto_mount_and_watch(host: str) -> None:
@@ -3194,6 +3255,10 @@ def _supervisor_watcher_ok() -> bool:
 
 
 def _revive_image_watcher() -> bool:
+    try:
+        _ensure_fits_export_watcher()
+    except Exception:
+        pass
     """Re-mount the Seestar share if possible and restart the image watcher."""
     cfg = _load_config()
     iw_cfg = cfg.get("image_watcher", {}) or {}
@@ -3639,6 +3704,13 @@ def api_expose():
                     logger.info(
                         "Manual exposure %d/%d complete — FITS %s",
                         frame, count, fits_save_path)
+                    # Manual frames land in fits_export/; also enqueue so
+                    # photometry does not depend solely on the MyWorks watcher
+                    # (issue #70).
+                    try:
+                        _enqueue_photometry(fits_save_path)
+                    except Exception as exc:
+                        logger.warning("Manual FITS photometry enqueue failed: %s", exc)
                 else:
                     last_error = (
                         f"Exposure {frame}/{count} finished but FITS was not written "
@@ -3833,8 +3905,46 @@ def api_photometry():
             "last_result": _state["photometry"]["last_result"],
             "last_export": _state["photometry"]["last_export"],
             "history":     list(_state["photometry"]["history"]),
+            "queued":      _state["photometry"].get("queued", 0),
         }
     return jsonify(snap)
+
+
+@app.route("/api/photometry/enqueue", methods=["POST"])
+def api_photometry_enqueue():
+    """Enqueue a FITS path (typically under fits_export/) for photometry.
+
+    Manual frames are written to fits_export/ while the Seestar watcher looks
+    at MyWorks — this MCP/API path feeds them into the queue (issue #70).
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw = str(data.get("path") or data.get("fits_path") or "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "path is required"}), 400
+    abs_path = os.path.realpath(raw)
+    if not os.path.isfile(abs_path):
+        return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
+    if not abs_path.lower().endswith((".fits", ".fit")):
+        return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
+    # Allow fits_export, configured watch path, and data/fits only.
+    export_abs = os.path.realpath(_fits_export_dir())
+    allowed_roots = [export_abs, os.path.realpath("data/fits")]
+    iw_path = ""
+    with _state_lock:
+        iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
+    if iw_path:
+        allowed_roots.append(os.path.realpath(iw_path))
+    if not any(abs_path == root or abs_path.startswith(root + os.sep)
+               for root in allowed_roots if root):
+        return jsonify({
+            "ok": False,
+            "error": "path must be under fits_export/, data/fits/, or the image watch path",
+        }), 403
+    _enqueue_photometry(abs_path)
+    with _state_lock:
+        queued = _state["photometry"].get("queued", 0)
+    logger.info("Photometry enqueue requested: %s (queued=%s)", abs_path, queued)
+    return jsonify({"ok": True, "path": abs_path, "queued": queued})
 
 
 @app.route("/api/fits/list")
