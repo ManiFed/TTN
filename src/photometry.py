@@ -1293,6 +1293,24 @@ def _get_comparison_stars_file(
     return comp_stars
 
 
+def _vsp_coord_to_deg(s, is_ra: bool) -> float:
+    """Parse VSP RA/Dec which may be sexagesimal or decimal degrees."""
+    text = str(s).strip()
+    if ":" not in text:
+        # Current VSP JSON returns decimal degrees when not sexagesimal.
+        return float(text)
+    parts = text.split(":")
+    d = abs(float(parts[0]))
+    m = float(parts[1]) if len(parts) > 1 else 0.0
+    sec = float(parts[2]) if len(parts) > 2 else 0.0
+    val = d + m / 60.0 + sec / 3600.0
+    if is_ra:
+        val *= 15.0  # hours → degrees
+    elif text.startswith("-"):
+        val = -val
+    return val
+
+
 def _get_comparison_stars_aavso(
     target_name: str,
     ra_deg: float,
@@ -1310,35 +1328,44 @@ def _get_comparison_stars_aavso(
         logger.warning("requests not installed — cannot query AAVSO VSP")
         return []
 
-    fov_arcmin = int(field_radius_deg * 2 * 60)
-    # VSP requires star name OR ra/dec, not both.
-    if target_name:
-        params = {"star": target_name, "fov": fov_arcmin, "maglimit": mag_limit, "format": "json"}
-    else:
-        params = {"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin, "maglimit": mag_limit, "format": "json"}
-    url = "https://www.aavso.org/apps/vsp/api/chart/"
-    try:
+    # VSP rejects oversized FOVs (HTTP 400). Clamp to the documented useful range.
+    fov_arcmin = int(round(field_radius_deg * 2 * 60))
+    fov_arcmin = max(15, min(fov_arcmin, 180))
+    # Current host is app.aavso.org; the legacy www.../apps/vsp path 400s.
+    url = "https://app.aavso.org/vsp/api/chart/"
+
+    def _query(params: dict):
         resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code != 200:
-            logger.warning("AAVSO VSP returned HTTP %d", resp.status_code)
+        return resp
+
+    payload = None
+    try:
+        # Prefer star name when given; on 400 (unknown exoplanet etc.) fall back
+        # to the field centre so comparison stars still resolve (issue #69).
+        attempts = []
+        if target_name:
+            attempts.append({"star": target_name, "fov": fov_arcmin,
+                             "maglimit": mag_limit, "format": "json"})
+        attempts.append({"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin,
+                         "maglimit": mag_limit, "format": "json"})
+        last_status = None
+        for params in attempts:
+            resp = _query(params)
+            last_status = resp.status_code
+            if resp.status_code == 200:
+                payload = resp.json()
+                break
+            logger.warning("AAVSO VSP returned HTTP %d for params=%s",
+                           resp.status_code, {k: params[k] for k in params if k != "format"})
+        if payload is None:
+            logger.warning("AAVSO VSP gave no chart (last HTTP %s)", last_status)
             return []
-        payload = resp.json()
     except Exception as exc:
         logger.warning("AAVSO VSP request failed: %s", exc)
         return []
 
     def _sexa_to_deg(s: str, is_ra: bool) -> float:
-        """Convert sexagesimal 'HH:MM:SS.ss' or 'DD:MM:SS.s' to decimal degrees."""
-        parts = str(s).split(":")
-        d = abs(float(parts[0]))
-        m = float(parts[1]) if len(parts) > 1 else 0.0
-        sec = float(parts[2]) if len(parts) > 2 else 0.0
-        val = d + m / 60.0 + sec / 3600.0
-        if is_ra:
-            val *= 15.0  # hours → degrees
-        elif str(s).strip().startswith("-"):
-            val = -val
-        return val
+        return _vsp_coord_to_deg(s, is_ra=is_ra)
 
     comp_stars = []
     for star in payload.get("photometry", []):
@@ -1398,7 +1425,14 @@ def _get_comparison_stars_gaia(
     try:
         Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source"
         Gaia.ROW_LIMIT = n_max * 3  # oversample; we'll filter
-        j = Gaia.cone_search_async(coord, radius)
+        # radius is keyword-only in current astroquery (coordinate, *, radius=...).
+        # Passing it positionally raises:
+        #   cone_search_async() takes 2 positional arguments but 3 were given
+        # which wiped the Gaia fallback and left "No comparison stars" (issue #69).
+        try:
+            j = Gaia.cone_search_async(coord, radius=radius)
+        except TypeError:
+            j = Gaia.cone_search_async(coord, radius)
         results = j.get_results()
     except Exception as exc:
         logger.warning("Gaia cone search failed: %s", exc)
@@ -1482,14 +1516,25 @@ def _get_comparison_stars_apass(
         return []
 
     cols = ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag", "e_Bmag"]
+    try:
+        from astroquery.vizier import conf as _viz_conf
+        # Stale mirrors redirect to HTML/docs (astropy_icon.png 404s) instead of
+        # VOTables — pin the CDS host (issue #69).
+        _viz_conf.server = "vizier.cds.unistra.fr"
+    except Exception:
+        pass
     viz = Vizier(columns=cols,
                  column_filters={"Vmag": f">8.0 && <{mag_limit}"})
     viz.ROW_LIMIT = n_max * 3
+    try:
+        viz.TIMEOUT = 60
+    except Exception:
+        pass
     coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
 
     try:
         result = viz.query_region(coord, radius=field_radius_deg * u.deg,
-                                  catalog="II/336/apass9")
+                                  catalog=["II/336/apass9"])
     except Exception as exc:
         logger.warning("APASS Vizier query failed: %s", exc)
         return []
@@ -1550,13 +1595,22 @@ def _get_comparison_stars_atlas(
         return []
 
     cols = ["RA_ICRS", "DE_ICRS", "gmag", "rmag"]
+    try:
+        from astroquery.vizier import conf as _viz_conf
+        _viz_conf.server = "vizier.cds.unistra.fr"
+    except Exception:
+        pass
     viz = Vizier(columns=cols, column_filters={"gmag": f">8.0 && <{mag_limit + 1.0}"})
     viz.ROW_LIMIT = n_max * 4
+    try:
+        viz.TIMEOUT = 60
+    except Exception:
+        pass
     coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
 
     try:
         result = viz.query_region(coord, radius=field_radius_deg * u.deg,
-                                  catalog="J/ApJ/867/105/refcat2")
+                                  catalog=["J/ApJ/867/105/refcat2"])
     except Exception as exc:
         logger.warning("ATLAS-REFCAT2 Vizier query failed: %s", exc)
         return []
