@@ -26,6 +26,23 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
+
+def _above_horizon_radec(lat=31.5, lon=-99.2):
+    """(ra_hours, dec_deg) near zenith for the e2e observer — time-independent altitude.
+
+    Fixed RA/Dec become below the geometric horizon as CI clocks advance; after
+    issue #68 the node refuses those slews. Aim due south at +70° alt instead.
+    """
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+    from astropy.time import Time
+    import astropy.units as u
+    loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
+    frame = AltAz(obstime=Time.now(), location=loc)
+    target = SkyCoord(alt=70 * u.deg, az=180 * u.deg, frame=frame)
+    icrs = target.transform_to("icrs")
+    return float(icrs.ra.hour), float(icrs.dec.deg)
+
+
 CONFIG = """
 alpaca:
   api_version: 1
@@ -158,7 +175,10 @@ class EndToEndNodeMcpTest(unittest.TestCase):
             steps["camera_connected"] = (after.get("camera") or {}).get("connected")
 
             # Hardware motion, for real, against the fake mount.
-            ok, slew = await call("node_slew", {"ra_hours": 5.5, "dec_deg": 22.0})
+            # Must be above the geometric horizon for the CONFIG observer site
+            # (lat/lon set); fixed RA/Dec go down as CI time advances (#68).
+            ra_h, dec_d = _above_horizon_radec()
+            ok, slew = await call("node_slew", {"ra_hours": ra_h, "dec_deg": dec_d})
             steps["slew"] = (ok, slew)
 
             ok, park = await call("node_park")

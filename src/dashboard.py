@@ -1887,37 +1887,87 @@ def _wait_slew_complete(timeout: float = 120.0) -> bool:
     return False
 
 
+def _is_below_horizon_device_error(exc: BaseException) -> bool:
+    """True when Seestar/ALPACA refused a slew/track because the target is down.
+
+    ErrorNumber 1279 is ALPACA's generic driver-exception code (0x4ff), not a
+    horizon-specific status. Only treat the failure as an intentional skip when
+    the message identifies a horizon refusal (issue #68) — bare 1279 may be an
+    unrelated mount/firmware fault and must still cancel/fail the item.
+    """
+    msg = str(exc).lower()
+    return "below horizon" in msg
+
+
+def _observer_lat_lon_from_disk() -> tuple:
+    """Read configured observer lat/lon without IP-geolocation enrichment.
+
+    `_load_config()` always runs `enrich_config_with_location()`, which can block
+    up to 5s on ip-api.com when lat/lon are unset. `_slew_rejection` is called
+    per candidate (e.g. reachable-target scans), so enrichment here would stall
+    an offline node for minutes. Only explicit config.yaml values count.
+    """
+    try:
+        with open("config.yaml") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except Exception:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    obs = (cfg.get("safety") or {}).get("observer") or {}
+    o2 = cfg.get("observatory") or {}
+    try:
+        lat = float(obs.get("latitude") or o2.get("latitude") or 0.0 or 0.0)
+        lon = float(obs.get("longitude") or o2.get("longitude") or 0.0 or 0.0)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    return lat, lon
+
+
 def _slew_rejection(ra_h: float, dec_d: float) -> Optional[str]:
     """Return a human-readable reason a RA/Dec slew should be refused, or None.
 
-    Gates on the SafetyManager's overall safe state and on the configured
-    horizon mask.  Used by both the manual slew route and the scheduler so the
-    two paths enforce identical safety rules.
+    Gates on the SafetyManager's overall safe state and on geometric altitude /
+    the configured horizon mask.  Used by both the manual slew route and the
+    scheduler so the two paths enforce identical safety rules.
+
+    An empty horizon mask used to skip the altitude check entirely, so a lead
+    item below the geometric horizon reached the Seestar, raised Error 1279, and
+    cancelled the night at 1/N (issue #68). Always refuse alt < floor when the
+    observer location is known.
     """
     if _safety_mgr is not None and not _safety_mgr.is_safe():
         reason = _safety_mgr.status().get("reason") or "unknown"
         return f"system is in an unsafe state ({reason})"
 
-    if _safety_mgr is not None and _safety_mgr._horizon_mask:
-        cfg = _load_config()
-        obs = cfg.get("safety", {}).get("observer", {})
-        lat = float(obs.get("latitude", 0.0))
-        lon = float(obs.get("longitude", 0.0))
-        if lat != 0.0 or lon != 0.0:
-            try:
-                from astropy.coordinates import AltAz, EarthLocation, SkyCoord
-                from astropy.time import Time
-                import astropy.units as u
-                loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
-                frame = AltAz(obstime=Time.now(), location=loc)
-                coord = SkyCoord(ra=ra_h * 15.0 * u.deg, dec=dec_d * u.deg).transform_to(frame)
-                alt, az = float(coord.alt.deg), float(coord.az.deg)
-                if not _safety_mgr.is_pointing_safe(alt, az):
-                    min_alt = _safety_mgr.min_safe_altitude(az)
-                    return (f"horizon mask: Alt {alt:.1f}° is below the "
-                            f"{min_alt:.1f}° limit at Az {az:.1f}°")
-            except Exception as exc:
-                logger.debug("Horizon-mask RA/Dec check skipped: %s", exc)
+    lat, lon = _observer_lat_lon_from_disk()
+    if lat == 0.0 and lon == 0.0:
+        return None
+    try:
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+        from astropy.time import Time
+        import astropy.units as u
+        loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
+        frame = AltAz(obstime=Time.now(), location=loc)
+        coord = SkyCoord(ra=ra_h * 15.0 * u.deg, dec=dec_d * u.deg).transform_to(frame)
+        alt, az = float(coord.alt.deg), float(coord.az.deg)
+    except Exception as exc:
+        logger.debug("Altitude RA/Dec check skipped: %s", exc)
+        return None
+
+    # Geometric floor even with an empty mask — Seestar Error 1279 otherwise.
+    min_alt = 0.0
+    if _safety_mgr is not None:
+        try:
+            min_alt = float(_safety_mgr.min_safe_altitude(az))
+        except Exception:
+            min_alt = 0.0
+    if alt < min_alt:
+        label = "horizon mask" if (_safety_mgr is not None
+                                   and getattr(_safety_mgr, "_horizon_mask", None)
+                                   ) else "below horizon"
+        return (f"{label}: Alt {alt:.1f}° is below the "
+                f"{min_alt:.1f}° limit at Az {az:.1f}°")
     return None
 
 
@@ -4796,7 +4846,12 @@ def _sched_prepare_mount() -> None:
                 logger.info("Schedule: enabling tracking")
                 _tel.set_tracking(True)
     except Exception as exc:
-        logger.warning("Schedule: mount preparation failed: %s", exc)
+        if _is_below_horizon_device_error(exc):
+            logger.warning("Schedule: mount preparation hit below-horizon "
+                           "tracking refusal (%s) — continuing; items will "
+                           "be skipped individually if still down", exc)
+        else:
+            logger.warning("Schedule: mount preparation failed: %s", exc)
 
 
 def _run_schedule_observation(idx: int, item: dict) -> None:
@@ -4888,6 +4943,16 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 _telemetry.event("slew_failed", severity="error", target=target,
                                  detail={"reason": "timeout", "timeout_s": 180})
         except Exception as exc:
+            if _is_below_horizon_device_error(exc):
+                reason = f"below horizon (device): {exc}"
+                logger.warning("Schedule: skipping %s — %s", target, reason)
+                with _sched_lock:
+                    _sched_state["error"] = f"{target}: {reason}"
+                    _sched_state["current_item_outcome"] = "skipped"
+                    _sched_state["current_failure_reason"] = reason[:500]
+                _telemetry.event("slew_rejected", severity="warning", target=target,
+                                 detail={"reason": reason[:300], "device_error": True})
+                return
             logger.error("Schedule: slew failed for %s: %s", target, exc)
             with _sched_lock:
                 _sched_state["error"] = f"Slew to {target} failed: {exc}"
