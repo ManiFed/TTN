@@ -123,6 +123,30 @@ class DisconnectParkTest(unittest.TestCase):
         mgr.attach_telescope(tel)
         self.assertTrue(mgr.is_safe())
 
+    def test_live_heartbeat_clears_stale_unreachable_latch(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("telescope unreachable for 606s (timeout=600s)")
+        self.assertFalse(mgr.is_safe())
+
+        mgr._run_connection_check()
+
+        status = mgr.status()
+        self.assertTrue(status["safe"])
+        self.assertFalse(status["parked"])
+        self.assertEqual(status["reason"], "")
+        self.assertTrue(status["heartbeat_ok"])
+
+    def test_live_heartbeat_does_not_clear_other_safety_latches(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("high wind")
+
+        mgr._run_connection_check()
+
+        self.assertFalse(mgr.is_safe())
+        self.assertEqual(mgr.status()["reason"], "high wind")
+
 
 class DawnParkTest(unittest.TestCase):
     def test_sun_above_threshold_parks(self):

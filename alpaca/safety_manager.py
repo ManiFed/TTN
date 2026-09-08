@@ -456,8 +456,21 @@ class SafetyManager:
             with self._lock:
                 was_lost           = self._disconnect_since is not None
                 self._disconnect_since = None
+                stale_latch = (
+                    not self._safe
+                    and self._reason.startswith("telescope unreachable")
+                )
+                if stale_latch:
+                    self._safe = True
+                    self._parked = False
+                    self._reason = ""
             if was_lost:
                 logger.info("SafetyManager: telescope connection restored")
+            if stale_latch:
+                logger.warning(
+                    "SafetyManager: cleared stale telescope-unreachable latch "
+                    "after a successful live heartbeat"
+                )
             return
 
         # Heartbeat failed — attempt reconnect immediately
@@ -465,6 +478,19 @@ class SafetyManager:
         if self._try_reconnect():
             with self._lock:
                 self._disconnect_since = None
+                stale_latch = (
+                    not self._safe
+                    and self._reason.startswith("telescope unreachable")
+                )
+                if stale_latch:
+                    self._safe = True
+                    self._parked = False
+                    self._reason = ""
+            if stale_latch:
+                logger.warning(
+                    "SafetyManager: cleared stale telescope-unreachable latch "
+                    "after reconnect"
+                )
             return
 
         # All reconnect attempts exhausted
