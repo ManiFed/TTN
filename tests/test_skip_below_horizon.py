@@ -12,7 +12,7 @@ import src.dashboard as dash
 
 
 class BelowHorizonDeviceErrorTest(unittest.TestCase):
-    def test_detects_error_number_1279(self):
+    def test_detects_error_number_1279_with_horizon_message(self):
         exc = Exception("tracking → ErrorNumber 1279: SET_SCOPE_SET_TRACK_STATE fail: below horizon")
         exc.code = 1279
         self.assertTrue(dash._is_below_horizon_device_error(exc))
@@ -20,6 +20,12 @@ class BelowHorizonDeviceErrorTest(unittest.TestCase):
     def test_detects_message_without_code(self):
         self.assertTrue(dash._is_below_horizon_device_error(
             RuntimeError("slew failed: below horizon")))
+
+    def test_ignores_bare_1279_without_horizon_message(self):
+        """1279 is ALPACA's generic driver exception — not a horizon skip alone."""
+        exc = Exception("slewtocoordinatesasync → ErrorNumber 1279: driver fault")
+        exc.code = 1279
+        self.assertFalse(dash._is_below_horizon_device_error(exc))
 
     def test_ignores_unrelated_errors(self):
         exc = Exception("timeout")
@@ -35,11 +41,10 @@ class GeometricHorizonRejectionTest(unittest.TestCase):
         safety._horizon_mask = []
         safety.min_safe_altitude.return_value = 0.0
 
-        cfg = {"safety": {"observer": {"latitude": 30.5, "longitude": -104.0}}}
         # Circumpolar-opposite: pick a Dec that is always down from +30°N —
         # Dec = -80° at any RA is below horizon from mid-latitudes.
         with patch.object(dash, "_safety_mgr", safety), \
-             patch.object(dash, "_load_config", return_value=cfg):
+             patch.object(dash, "_observer_lat_lon_from_disk", return_value=(30.5, -104.0)):
             reason = dash._slew_rejection(12.0, -85.0)
         self.assertIsNotNone(reason)
         self.assertIn("below horizon", reason.lower())
@@ -49,9 +54,8 @@ class GeometricHorizonRejectionTest(unittest.TestCase):
         safety.is_safe.return_value = True
         safety._horizon_mask = []
         safety.min_safe_altitude.return_value = 0.0
-        cfg = {"safety": {"observer": {"latitude": 30.5, "longitude": -104.0}}}
         with patch.object(dash, "_safety_mgr", safety), \
-             patch.object(dash, "_load_config", return_value=cfg):
+             patch.object(dash, "_observer_lat_lon_from_disk", return_value=(30.5, -104.0)):
             # Near zenith for the site around transit of RA~local sidereal — use
             # Dec matching latitude so alt is high regardless of hour angle approx.
             # Safer: Dec = latitude → culminates near zenith; any RA still usually up.

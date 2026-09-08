@@ -1829,19 +1829,38 @@ def _wait_slew_complete(timeout: float = 120.0) -> bool:
 def _is_below_horizon_device_error(exc: BaseException) -> bool:
     """True when Seestar/ALPACA refused a slew/track because the target is down.
 
-    ErrorNumber 1279 / SET_SCOPE_SET_TRACK_STATE "below horizon" must skip the
-    item and continue the night — never cancel the whole schedule (issue #68).
+    ErrorNumber 1279 is ALPACA's generic driver-exception code (0x4ff), not a
+    horizon-specific status. Only treat the failure as an intentional skip when
+    the message identifies a horizon refusal (issue #68) — bare 1279 may be an
+    unrelated mount/firmware fault and must still cancel/fail the item.
     """
     msg = str(exc).lower()
-    if "below horizon" in msg:
-        return True
-    code = getattr(exc, "code", None)
+    return "below horizon" in msg
+
+
+def _observer_lat_lon_from_disk() -> tuple:
+    """Read configured observer lat/lon without IP-geolocation enrichment.
+
+    `_load_config()` always runs `enrich_config_with_location()`, which can block
+    up to 5s on ip-api.com when lat/lon are unset. `_slew_rejection` is called
+    per candidate (e.g. reachable-target scans), so enrichment here would stall
+    an offline node for minutes. Only explicit config.yaml values count.
+    """
     try:
-        if int(code) == 1279:
-            return True
+        with open("config.yaml") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except Exception:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    obs = (cfg.get("safety") or {}).get("observer") or {}
+    o2 = cfg.get("observatory") or {}
+    try:
+        lat = float(obs.get("latitude") or o2.get("latitude") or 0.0 or 0.0)
+        lon = float(obs.get("longitude") or o2.get("longitude") or 0.0 or 0.0)
     except (TypeError, ValueError):
-        pass
-    return False
+        return 0.0, 0.0
+    return lat, lon
 
 
 def _slew_rejection(ra_h: float, dec_d: float) -> Optional[str]:
@@ -1860,10 +1879,7 @@ def _slew_rejection(ra_h: float, dec_d: float) -> Optional[str]:
         reason = _safety_mgr.status().get("reason") or "unknown"
         return f"system is in an unsafe state ({reason})"
 
-    cfg = _load_config()
-    obs = cfg.get("safety", {}).get("observer", {})
-    lat = float(obs.get("latitude", 0.0) or 0.0)
-    lon = float(obs.get("longitude", 0.0) or 0.0)
+    lat, lon = _observer_lat_lon_from_disk()
     if lat == 0.0 and lon == 0.0:
         return None
     try:
