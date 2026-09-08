@@ -282,9 +282,23 @@ def register(server, agent: AgentClient) -> None:
 
     @server.tool()
     def node_schedule_run() -> dict:
-        """Run tonight's observing schedule now."""
+        """Run tonight's observing schedule now.
+
+        With no items body the node refills from the accepted cloud plan
+        (after cancel the local queue is empty — issue #67).
+        """
         require_non_production("run the observing schedule")
         return agent.post("/api/schedule/run", timeout=60.0)
+
+    @server.tool()
+    def node_schedule_resync() -> dict:
+        """Reload the local schedule from the accepted cloud plan.
+
+        Non-admin path for when cancel emptied the local runner while the
+        cloud still has tonight's items. Prefer this over admin_replan.
+        """
+        require_non_production("resync the observing schedule from cloud")
+        return agent.post("/api/schedule/resync", timeout=60.0)
 
     @server.tool()
     def node_schedule_status() -> dict:

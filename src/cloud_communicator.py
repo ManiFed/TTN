@@ -971,6 +971,37 @@ class CloudCommunicator:
         """
         self._last_plan_id = None
 
+    def force_redeliver_current_plan(self) -> dict:
+        """Clear the plan-id latch and re-fetch / deliver the cloud plan now.
+
+        After a local schedule cancel the cloud still holds the accepted night's
+        items, but ``_last_plan_id`` suppresses redelivery and
+        ``tonight_accept`` is idempotent — so the local runner stays empty
+        (issue #67). Owners without an admin key need this non-admin resync.
+        """
+        previous = self._last_plan_id
+        self._last_plan_id = None
+        self.status["plan_pending_review"] = False
+        try:
+            self._poll_plan()
+        except Exception as exc:
+            logger.warning("force_redeliver_current_plan failed: %s", exc)
+            return {
+                "ok": False,
+                "error": str(exc)[:300],
+                "previous_plan_id": previous,
+                "plan_id": self._last_plan_id,
+                "plan_items": int(self.status.get("plan_items") or 0),
+            }
+        return {
+            "ok": True,
+            "previous_plan_id": previous,
+            "plan_id": self.status.get("last_plan_id") or self._last_plan_id,
+            "plan_items": int(self.status.get("plan_items") or 0),
+            "schedule_running": False,
+        }
+
+
     def _poll_plan(self) -> None:
         data = self._get("/api/v1/plan")
         plan = data.get("plan")
