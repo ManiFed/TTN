@@ -68,6 +68,24 @@ class ExposeFailFastTest(unittest.TestCase):
         self.assertIn("exposing", src)
         self.assertIn("fits_export", src)
 
+    def test_fits_write_errors_are_not_swallowed_as_image_success(self):
+        import inspect
+        from src import dashboard
+
+        src = inspect.getsource(dashboard._capture_image)
+        self.assertIn("raise FitsWriteError(message) from exc", src)
+        self.assertIn("except FitsWriteError:", src)
+        self.assertIn("not fits_path or pathlib.Path(fits_path).is_file()", src)
+
+    def test_schedule_stops_item_when_a_fits_write_fails(self):
+        import inspect
+        from src import dashboard
+
+        src = inspect.getsource(dashboard._run_schedule_observation)
+        failure_block = src[src.index("except Exception as exc:", src.index("# ── Expose")):]
+        self.assertIn('current_item_outcome"] = "failed"', failure_block)
+        self.assertIn("return False", failure_block)
+
     def test_camera_expose_failfast_on_idle_without_ready(self):
         import inspect
         from alpaca.camera import Camera

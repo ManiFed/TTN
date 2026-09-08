@@ -396,6 +396,10 @@ _pier_cam_pause = threading.Event()
 _pier_cam_stop  = threading.Event()
 
 
+class FitsWriteError(RuntimeError):
+    """The camera readout succeeded, but its science FITS could not be saved."""
+
+
 def _capture_image(fits_path: Optional[str] = None,
                    exp_dur: Optional[float] = None,
                    target: Optional[str] = None) -> Optional[str]:
@@ -499,7 +503,9 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdu.writeto(fits_path, overwrite=True)
                 logger.info("FITS saved: %s  shape=%s", fits_path, sci.shape)
             except Exception as exc:
-                logger.error("FITS save failed: %s", exc)
+                message = f"FITS save failed at '{fits_path}': {exc}"
+                logger.error(message)
+                raise FitsWriteError(message) from exc
 
         # ── Display PNG (stretched for viewing) ───────────────────────────
         mn, mx = float(arr_display.min()), float(arr_display.max())
@@ -517,10 +523,16 @@ def _capture_image(fits_path: Optional[str] = None,
         with _last_image_lock:
             _last_image_b64 = b64
         with _state_lock:
-            _state["image_captured"] = True
+            # A requested science frame only counts as captured once the FITS
+            # write above has succeeded. A display PNG is not a substitute.
+            _state["image_captured"] = not fits_path or pathlib.Path(fits_path).is_file()
             _state["image_id"] += 1
         logger.info("Image stored — %.1f KB PNG", len(b64) * 3 / 4 / 1024)
         return b64
+    except FitsWriteError:
+        # Callers must turn a failed science-file write into a failed exposure,
+        # preserving the destination and OS error for remote diagnosis.
+        raise
     except Exception as exc:
         logger.error("Image capture failed: %s", exc)
         return None
@@ -5033,6 +5045,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             with _sched_lock:
                 _sched_state["current_item_outcome"] = "failed"
                 _sched_state["current_failure_reason"] = str(exc)[:500]
+            return False
         finally:
             _pier_cam_pause.clear()
         with _sched_lock:
