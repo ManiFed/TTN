@@ -50,10 +50,6 @@ class RuntimeHookSslCertTest(unittest.TestCase):
                 self.assertTrue(os.environ["PATH"].startswith(str(meipass)))
             finally:
                 for key, val in saved.items():
-                    if key == "PATH":
-                        if val is not None:
-                            os.environ["PATH"] = val
-                        continue
                     if val is None:
                         os.environ.pop(key, None)
                     else:
