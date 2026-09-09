@@ -64,7 +64,7 @@ logger = logging.getLogger("photometry")
 
 # Version stamp recorded in every measurement's provenance block, so a stored
 # measurement can always be traced to the algorithm that produced it.
-PIPELINE_VERSION = "1.2.1"
+PIPELINE_VERSION = "1.2.2"
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -208,6 +208,21 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
 
     ra_deg  = _coord(tgt_cfg["ra_deg"])  if tgt_cfg.get("ra_deg")  is not None else _coord(header_ra)
     dec_deg = _coord(tgt_cfg["dec_deg"]) if tgt_cfg.get("dec_deg") is not None else _coord(header_dec)
+
+    # Config / commanded target coords win when FITS DEC is a hemisphere
+    # mirror (Seestar alt-az → eq sign flip). Keep northern targets northern.
+    cfg_ra  = _coord(tgt_cfg["ra_deg"])  if tgt_cfg.get("ra_deg")  is not None else None
+    cfg_dec = _coord(tgt_cfg["dec_deg"]) if tgt_cfg.get("dec_deg") is not None else None
+    hdr_ra  = _coord(header_ra)
+    hdr_dec = _coord(header_dec)
+    if cfg_ra is not None and cfg_dec is not None and hdr_dec is not None:
+        if _dec_hemisphere_mirrored(hdr_dec, cfg_dec):
+            logger.warning(
+                "FITS DEC=%+.4f° mirrored vs config Dec=%+.4f° — using config "
+                "RA/Dec for photometry (SS Cyg-like northern field)",
+                hdr_dec, cfg_dec,
+            )
+            ra_deg, dec_deg = cfg_ra, cfg_dec
 
     if not target_name:
         logger.warning("No target name in FITS header or config — skipping")
@@ -898,6 +913,43 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     return None
 
 
+def _dec_hemisphere_mirrored(a: float, b: float, tol_deg: float = 2.0) -> bool:
+    """True when *a* and *b* are opposite-hemisphere mirrors within *tol_deg*.
+
+    Alt-az mounts (Seestar via ALPACA) derive equatorial coords from Alt/Az
+    plus site latitude. A wrong-sign site latitude mirrors Dec through the
+    equator while leaving |Dec| (and usually RA) nearly unchanged — the
+    Starfront SS Cyg failure mode (+43.6° → −43.6°).
+    """
+    try:
+        fa, fb = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    return fa * fb < 0.0 and abs(abs(fa) - abs(fb)) <= float(tol_deg)
+
+
+def _resolve_pointing_radec(tel_ra, tel_dec, target_ra, target_dec):
+    """Choose CRVAL RA/Dec for approximate / pointing WCS.
+
+    Prefer mount-reported FITS RA/DEC when present, but if Dec is a
+    hemisphere mirror of the pipeline target coords, keep the target — the
+    mount is still physically on the northern field; only the reported Dec
+    sign is wrong.
+    """
+    if tel_ra is None or tel_dec is None:
+        return float(target_ra), float(target_dec)
+    if target_ra is None or target_dec is None:
+        return float(tel_ra), float(tel_dec)
+    if _dec_hemisphere_mirrored(tel_dec, target_dec):
+        logger.warning(
+            "Pointing WCS: header DEC=%+.4f° is hemisphere-mirrored vs target "
+            "Dec=%+.4f° — using target RA/Dec for CRVAL (northern field kept)",
+            float(tel_dec), float(target_dec),
+        )
+        return float(target_ra), float(target_dec)
+    return float(tel_ra), float(tel_dec)
+
+
 def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
                          pixel_scale_arcsec: float) -> bool:
     """Write a simple TAN WCS into the FITS header from telescope pointing.
@@ -906,22 +958,42 @@ def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     reported pointing) over the caller-supplied target coords, because the
     mount pointing is what physically centres the frame.  Falls back to
     ra_deg/dec_deg if those keys are absent.
+
+    If header DEC is a hemisphere mirror of the caller target (same |Dec|,
+    opposite sign), the caller coords win so northern targets keep positive
+    Dec in CRVAL2. Existing CD/CDELT WCS cards are stripped first so a stale
+    Seestar/ASTAP matrix cannot mix with the new CDELT solution.
     """
     try:
         with fits.open(fits_path, mode="update", memmap=False,
                        ignore_missing_simple=True) as hdul:
             hdr  = hdul[0].header
-            # Use the mount's reported pointing if present; else target coords
-            tel_ra  = float(hdr.get("RA",  ra_deg))
-            tel_dec = float(hdr.get("DEC", dec_deg))
+            raw_ra  = hdr.get("RA",  None)
+            raw_dec = hdr.get("DEC", None)
+            try:
+                tel_ra = float(raw_ra) if raw_ra is not None else None
+            except (TypeError, ValueError):
+                tel_ra = None
+            try:
+                tel_dec = float(raw_dec) if raw_dec is not None else None
+            except (TypeError, ValueError):
+                tel_dec = None
+            crval_ra, crval_dec = _resolve_pointing_radec(
+                tel_ra, tel_dec, ra_deg, dec_deg,
+            )
+            # Keep FITS RA/DEC consistent with CRVAL so later pipeline reads
+            # (and AAVSO provenance) do not re-introduce the mirrored Dec.
+            hdr["RA"]  = (crval_ra,  "Pointing RA (deg)")
+            hdr["DEC"] = (crval_dec, "Pointing Dec (deg)")
+            _strip_wcs(hdr)
             h, w = hdul[0].data.shape[-2], hdul[0].data.shape[-1]
             ps   = pixel_scale_arcsec / 3600.0  # arcsec → degrees
             hdr["CTYPE1"] = ("RA---TAN", "TAN projection")
             hdr["CTYPE2"] = ("DEC--TAN", "TAN projection")
             hdr["CRPIX1"] = (w / 2.0 + 0.5, "Reference pixel X")
             hdr["CRPIX2"] = (h / 2.0 + 0.5, "Reference pixel Y")
-            hdr["CRVAL1"] = (tel_ra,  "Reference RA (deg)")
-            hdr["CRVAL2"] = (tel_dec, "Reference Dec (deg)")
+            hdr["CRVAL1"] = (crval_ra,  "Reference RA (deg)")
+            hdr["CRVAL2"] = (crval_dec, "Reference Dec (deg)")
             hdr["CDELT1"] = (-ps,  "deg/pixel (RA, East-left)")
             hdr["CDELT2"] = ( ps,  "deg/pixel (Dec)")
             hdr["BS_WCS"]  = ("pointing", "WCS source: telescope pointing")

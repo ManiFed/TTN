@@ -195,7 +195,8 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
         def fake_pipeline_ex(fits_path, cfg):
             self.assertEqual(cfg["photometry"]["target"]["name"], "SS Cyg")
             self.assertEqual(cfg["photometry"]["target"]["auid"], "000-BCP-220")
-            # Stale coords must be cleared on per-frame override.
+            # Stale config coords cleared; no last-commanded slew in this test
+            # so ra_deg/dec_deg stay absent (FITS pointing would win).
             self.assertNotIn("ra_deg", cfg["photometry"]["target"])
             self.assertNotIn("dec_deg", cfg["photometry"]["target"])
             return None, {
@@ -425,3 +426,52 @@ class McpTargetOverrideSurfaceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommandedEqHemisphereTest(unittest.TestCase):
+    """Mount-reported Dec mirrored south must not poison FITS / photometry."""
+
+    def setUp(self):
+        with dash._last_commanded_lock:
+            dash._last_commanded_eq["ra_h"] = None
+            dash._last_commanded_eq["dec"] = None
+
+    def tearDown(self):
+        with dash._last_commanded_lock:
+            dash._last_commanded_eq["ra_h"] = None
+            dash._last_commanded_eq["dec"] = None
+
+    def test_choose_eq_keeps_northern_commanded_dec(self):
+        # SS Cyg-like: commanded +43.5864°, mount reports −43.5867°.
+        ra_h, dec = dash._choose_eq_for_fits(
+            21.7236, -43.5867, cmd_ra_h=21.7222, cmd_dec=43.5864,
+        )
+        self.assertAlmostEqual(ra_h, 21.7222, places=4)
+        self.assertAlmostEqual(dec, 43.5864, places=4)
+
+    def test_choose_eq_keeps_mount_when_signs_agree(self):
+        ra_h, dec = dash._choose_eq_for_fits(
+            21.7236, 43.5900, cmd_ra_h=21.7222, cmd_dec=43.5864,
+        )
+        self.assertAlmostEqual(ra_h, 21.7236, places=4)
+        self.assertAlmostEqual(dec, 43.5900, places=4)
+
+    def test_override_seeds_commanded_coords(self):
+        dash._note_commanded_eq(21.7222, 43.5864)
+        seen = {}
+
+        def fake_pipeline_ex(fits_path, cfg):
+            seen.update(cfg["photometry"]["target"])
+            return None, {"reason_code": "no_zero_point", "stage": "zero_point",
+                          "message": "x", "target_name": "SS Cyg"}
+
+        with patch.object(dash, "_load_config", return_value={
+                "photometry": {"target": {"ra_deg": 1.0, "dec_deg": 2.0}},
+             }),              patch("src.photometry.run_pipeline_ex", side_effect=fake_pipeline_ex),              patch.object(dash, "_telemetry", type("T", (), {"event": staticmethod(lambda *a, **k: None)})()):
+            dash._run_photometry_bg("/tmp/manual.fits", target_name="SS Cyg")
+
+        self.assertEqual(seen.get("name"), "SS Cyg")
+        # Stale 1.0/2.0 cleared; commanded SS Cyg coords seeded instead.
+        self.assertAlmostEqual(float(seen["ra_deg"]), 21.7222 * 15.0, places=3)
+        self.assertAlmostEqual(float(seen["dec_deg"]), 43.5864, places=3)
+

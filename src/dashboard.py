@@ -436,6 +436,56 @@ _device_lock = threading.RLock()
 # start of each manual exposure.
 _expose_cancel = threading.Event()
 
+# Last equatorial slew commanded by this agent (RA hours, Dec degrees).
+# Alt-az mounts can report a hemisphere-mirrored Declination via ALPACA while
+# still physically on target; FITS RA/DEC and photometry prefer this when the
+# mount value looks mirrored (SS Cyg +43.6° → −43.6° on Starfront).
+_last_commanded_eq: dict = {"ra_h": None, "dec": None}
+_last_commanded_lock = threading.Lock()
+
+
+def _note_commanded_eq(ra_h: float, dec_deg: float) -> None:
+    """Record the most recent equatorial goto we commanded."""
+    try:
+        ra_f = float(ra_h)
+        dec_f = float(dec_deg)
+    except (TypeError, ValueError):
+        return
+    with _last_commanded_lock:
+        _last_commanded_eq["ra_h"] = ra_f
+        _last_commanded_eq["dec"] = dec_f
+
+
+def _choose_eq_for_fits(mount_ra_h, mount_dec, cmd_ra_h=None, cmd_dec=None):
+    """Pick RA(hours)/Dec(deg) to stamp into a science FITS header.
+
+    Prefer mount-reported values, but if Dec is a hemisphere mirror of the
+    last commanded goto (same |Dec| within 2°, opposite sign), keep the
+    commanded northern/southern hemisphere.
+    """
+    if cmd_ra_h is None or cmd_dec is None:
+        with _last_commanded_lock:
+            cmd_ra_h = _last_commanded_eq.get("ra_h")
+            cmd_dec = _last_commanded_eq.get("dec")
+    if mount_ra_h is None or mount_dec is None:
+        if cmd_ra_h is not None and cmd_dec is not None:
+            return float(cmd_ra_h), float(cmd_dec)
+        return mount_ra_h, mount_dec
+    if cmd_ra_h is None or cmd_dec is None:
+        return float(mount_ra_h), float(mount_dec)
+    mdec, cdec = float(mount_dec), float(cmd_dec)
+    if mdec * cdec < 0.0 and abs(abs(mdec) - abs(cdec)) <= 2.0:
+        logger.warning(
+            "FITS pointing: mount DEC=%+.4f° mirrored vs commanded Dec=%+.4f° "
+            "— stamping commanded RA/Dec",
+            mdec, cdec,
+        )
+        return float(cmd_ra_h), cdec
+    return float(mount_ra_h), mdec
+
+
+
+
 _pier_cam_frame: Optional[bytes] = None
 _pier_cam_frame_lock = threading.Lock()
 _pier_cam_pause = threading.Event()
@@ -510,10 +560,12 @@ def _capture_image(fits_path: Optional[str] = None,
                     hdr["CCD-TEMP"] = _cam.ccd_temperature()
                 except Exception:
                     pass
-                # Telescope pointing
+                # Telescope pointing — prefer last commanded RA/Dec when the
+                # mount reports a hemisphere-mirrored Declination (alt-az eq).
                 with _state_lock:
                     ra  = _state["telescope"].get("ra")
                     dec = _state["telescope"].get("dec")
+                ra, dec = _choose_eq_for_fits(ra, dec)
                 if ra is not None and dec is not None:
                     hdr["RA"]  = round(float(ra) * 15.0, 6)   # hours→degrees
                     hdr["DEC"] = round(float(dec), 6)
@@ -982,6 +1034,15 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
             # previous target in config.yaml (Codex P2 on #90).
             tgt.pop("ra_deg", None)
             tgt.pop("dec_deg", None)
+            # Re-seed from the last commanded equatorial goto when available so
+            # photometry does not inherit a mount-mirrored FITS DEC
+            # (SS Cyg +43.6° → −43.6°). Stale config coords stay cleared.
+            with _last_commanded_lock:
+                cmd_ra_h = _last_commanded_eq.get("ra_h")
+                cmd_dec = _last_commanded_eq.get("dec")
+            if cmd_ra_h is not None and cmd_dec is not None:
+                tgt["ra_deg"] = float(cmd_ra_h) * 15.0
+                tgt["dec_deg"] = float(cmd_dec)
             phot["target"] = tgt
             cfg = dict(cfg)
             cfg["photometry"] = phot
@@ -1798,10 +1859,12 @@ def _run_centering_bg(
     )
     radius   = float(phot.get("astap_search_radius", 10))
 
+    _note_commanded_eq(target_ra_deg / 15.0, target_dec_deg)
     with _center_lock:
         _center_state.update({
             "running": True, "cancelled": False,
             "target_ra": target_ra_deg, "target_dec": target_dec_deg,
+
             "iterations": [], "result": None, "error": None,
         })
 
@@ -2558,6 +2621,7 @@ def _run_imaging_block(target: Optional[dict] = None) -> None:
             # slew_to_coordinates takes RA in HOURS, which is how the catalogue
             # stores it. _run_centering_bg takes DEGREES. Getting that wrong
             # points the telescope fifteen times too far round the sky.
+            _note_commanded_eq(ra, dec)
             _tel.slew_to_coordinates(ra, dec)
     except Exception as exc:
         logger.warning("Imaging: could not slew to %s: %s", name, exc)
@@ -3683,6 +3747,7 @@ def api_slew():
                 dec_d = float(eq.dec.deg)
                 with _device_lock:
                     _tel.begin_slew(ra_h, dec_d)
+                _note_commanded_eq(ra_h, dec_d)
                 logger.info("Alt-Az fallback slew: RA=%.4f h  Dec=%.4f °", ra_h, dec_d)
             except Exception as exc2:
                 logger.error("Alt-Az fallback slew failed: %s", exc2)
@@ -3711,6 +3776,7 @@ def api_slew():
             logger.warning("FORCED slew despite rejection: %s", rejection)
 
         logger.info("Slewing: RA=%.4f h  Dec=%.4f°", ra, dec)
+        _note_commanded_eq(ra, dec)
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
@@ -3770,6 +3836,7 @@ def api_nudge():
     try:
         with _device_lock:
             _tel.begin_slew(new_ra, new_dec)
+            _note_commanded_eq(new_ra, new_dec)
     except Exception as exc:
         logger.error("Nudge slew failed: %s", exc)
         logger.exception("Nudge slew failed")
@@ -5093,6 +5160,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                              detail={"reason": rejection})
             return
         logger.info("Schedule: slewing to %s RA=%.4f h Dec=%.4f°", target, ra, dec)
+        _note_commanded_eq(ra, dec)
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
