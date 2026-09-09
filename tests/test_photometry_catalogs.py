@@ -70,6 +70,31 @@ class VspClientTest(unittest.TestCase):
         self.assertEqual(seen.get("fov"), 180)
 
 
+
+    def test_empty_or_whitespace_star_skips_star_param(self):
+        """Issue #81: never query VSP with star='' (HTTP 400)."""
+        for name in ("", "   ", "\t", None):
+            calls = []
+
+            class Resp:
+                status_code = 200
+                def json(self):
+                    return {"photometry": []}
+
+            def fake_get(url, params=None, timeout=15):
+                calls.append(dict(params or {}))
+                return Resp()
+
+            with patch.dict("sys.modules", {"requests": MagicMock()}):
+                import requests as req_mod
+                with patch.object(req_mod, "get", side_effect=fake_get):
+                    P._get_comparison_stars_aavso(name, 10.0, 20.0, 0.5, 15.0)
+            self.assertEqual(len(calls), 1, msg=repr(name))
+            self.assertNotIn("star", calls[0], msg=repr(name))
+            self.assertIn("ra", calls[0])
+            self.assertIn("dec", calls[0])
+
+
 class GaiaConeSearchArityTest(unittest.TestCase):
     def test_radius_passed_as_keyword(self):
         calls = []
