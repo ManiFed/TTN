@@ -841,7 +841,10 @@ def _maybe_aavso_submit(result: dict, cfg: dict) -> dict:
         }
 
     sub = _aavso_submit(result, cfg)
-    if sub.get("status") not in ("error",):
+    # Only gate retries on verified WebObs acceptance (#85). Statuses like
+    # dry_run / audit / skipped / rejected must NOT populate recent_submissions
+    # or operators see "duplicate suppressed" while AAVSO never received data.
+    if sub.get("status") == "accepted":
         with _state_lock:
             _state["aavso"]["recent_submissions"][target] = bjd
     return sub
