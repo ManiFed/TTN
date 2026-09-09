@@ -212,6 +212,7 @@ _sched_state: dict = {
     "current_phase":   "",   # waiting | slewing | exposing | done | cancelled
     "current_frame":   0,
     "total_frames":    0,
+    "frames_completed": 0,   # successful science frames only (not failed writes)
     "completed":       0,
     "total":           0,
     "error":           None,
@@ -396,6 +397,10 @@ _pier_cam_pause = threading.Event()
 _pier_cam_stop  = threading.Event()
 
 
+class FitsWriteError(RuntimeError):
+    """The camera readout succeeded, but its science FITS could not be saved."""
+
+
 def _capture_image(fits_path: Optional[str] = None,
                    exp_dur: Optional[float] = None,
                    target: Optional[str] = None) -> Optional[str]:
@@ -499,7 +504,9 @@ def _capture_image(fits_path: Optional[str] = None,
                 hdu.writeto(fits_path, overwrite=True)
                 logger.info("FITS saved: %s  shape=%s", fits_path, sci.shape)
             except Exception as exc:
-                logger.error("FITS save failed: %s", exc)
+                message = f"FITS save failed at '{fits_path}': {exc}"
+                logger.error(message)
+                raise FitsWriteError(message) from exc
 
         # ── Display PNG (stretched for viewing) ───────────────────────────
         mn, mx = float(arr_display.min()), float(arr_display.max())
@@ -517,10 +524,16 @@ def _capture_image(fits_path: Optional[str] = None,
         with _last_image_lock:
             _last_image_b64 = b64
         with _state_lock:
-            _state["image_captured"] = True
+            # A requested science frame only counts as captured once the FITS
+            # write above has succeeded. A display PNG is not a substitute.
+            _state["image_captured"] = not fits_path or pathlib.Path(fits_path).is_file()
             _state["image_id"] += 1
         logger.info("Image stored — %.1f KB PNG", len(b64) * 3 / 4 / 1024)
         return b64
+    except FitsWriteError:
+        # Callers must turn a failed science-file write into a failed exposure,
+        # preserving the destination and OS error for remote diagnosis.
+        raise
     except Exception as exc:
         logger.error("Image capture failed: %s", exc)
         return None
@@ -4875,6 +4888,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             "current_phase": "waiting",
             "current_frame": 0,
             "total_frames": exp_count,
+            "frames_completed": 0,
             "current_item_id": str(item.get("item_id") or ""),
             "current_bundle_id": str(item.get("bundle_id") or ""),
             "current_filter": str(item.get("filter") or ""),
@@ -5031,11 +5045,21 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             _telemetry.event("exposure_failed", severity="error", target=target,
                              detail={"frame": frame, "reason": str(exc)[:300]})
             with _sched_lock:
+                # Honor deferred cancel_after_frame before early-returning so a
+                # time-critical interrupt / task cancel is not lost when the
+                # next item resets cancel_after_frame (Codex #77 P1).
+                if _sched_state.get("cancel_after_frame"):
+                    _sched_state["cancelled"] = True
                 _sched_state["current_item_outcome"] = "failed"
                 _sched_state["current_failure_reason"] = str(exc)[:500]
+            # Do not count this attempted frame as completed (Codex #77 P2).
+            return False
         finally:
             _pier_cam_pause.clear()
         with _sched_lock:
+            _sched_state["frames_completed"] = (
+                int(_sched_state.get("frames_completed") or 0) + 1
+            )
             if _sched_state.get("cancel_after_frame"):
                 _sched_state["cancelled"] = True
                 _sched_state["current_item_outcome"] = "cancelled"
@@ -5147,6 +5171,7 @@ def _run_schedule_bg(items: list, source: str = "manual",
                 "current_idx": -1, "current_target": "",
                 "current_phase": "blocked_aavso",
                 "current_frame": 0, "total_frames": 0,
+                "frames_completed": 0,
                 "completed": 0, "total": len(items), "error": blocked,
                 "source": source,
                 "started_at": None,
@@ -5163,6 +5188,7 @@ def _run_schedule_bg(items: list, source: str = "manual",
             "current_idx": -1, "current_target": "",
             "current_phase": "starting",
             "current_frame": 0, "total_frames": 0,
+            "frames_completed": 0,
             "completed": 0, "total": len(items), "error": None,
             "source": source,
             "started_at": time.time(),
@@ -5308,7 +5334,7 @@ def _run_schedule_bg(items: list, source: str = "manual",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                         task_id=str(item.get("task_id") or ""),
                         frames_attempted=int(_sched_state.get("current_frame") or 0),
-                        frames_completed=int(_sched_state.get("current_frame") or 0),
+                        frames_completed=int(_sched_state.get("frames_completed") or 0),
                         last_checkpoint="item_finished",
                         failure_reason=item_reason,
                         detail={"offline": offline_execution})
