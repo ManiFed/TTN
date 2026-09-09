@@ -232,7 +232,7 @@ hidden_imports = [
 # hard-block aperture photometry again (hardening on top of #82 / issue #78).
 # Fail the freeze build if collection itself errors (Codex P2) — do not silently
 # ship with only the explicit list.
-hidden_imports += collect_submodules("photutils")
+hidden_imports += collect_submodules("photutils", on_error="raise")
 
 # ── Data files ─────────────────────────────────────────────────────────────────
 # Tuples: (source_path, dest_directory_in_bundle)
