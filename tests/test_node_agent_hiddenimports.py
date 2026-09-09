@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -15,8 +16,14 @@ class PhotutilsHiddenImportsTest(unittest.TestCase):
         spec = (ROOT / "build" / "node_agent.spec").read_text(encoding="utf-8")
         self.assertIn('"photutils.geometry"', spec)
         self.assertIn('"photutils.geometry.core"', spec)
-        self.assertIn("collect_submodules", spec)
-        self.assertIn("photutils", spec)
+        # Codex P2: require the actual photutils collection call, not just the
+        # import name / unrelated substring.
+        self.assertRegex(
+            spec,
+            r"""collect_submodules\(\s*["']photutils["']\s*\)""",
+            msg="build/node_agent.spec must call collect_submodules('photutils')",
+        )
+        self.assertIn('"photutils.psf"', spec)
 
 
 if __name__ == "__main__":
