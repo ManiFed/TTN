@@ -1342,9 +1342,12 @@ def _get_comparison_stars_aavso(
     try:
         # Prefer star name when given; on 400 (unknown exoplanet etc.) fall back
         # to the field centre so comparison stars still resolve (issue #69).
+        # Never send star='' / whitespace — VSP returns HTTP 400 for an empty
+        # star param (issue #81 / NodeAgent 1.0.63 Starfront logs).
         attempts = []
-        if target_name:
-            attempts.append({"star": target_name, "fov": fov_arcmin,
+        star = str(target_name or "").strip()
+        if star:
+            attempts.append({"star": star, "fov": fov_arcmin,
                              "maglimit": mag_limit, "format": "json"})
         attempts.append({"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin,
                          "maglimit": mag_limit, "format": "json"})
