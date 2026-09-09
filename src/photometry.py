@@ -176,10 +176,26 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     header_ra   = header.get("RA")    # degrees (FITS standard)
     header_dec  = header.get("DEC")   # degrees
 
-    # Config override (useful for Phase 0 manual testing)
-    tgt_cfg = phot_cfg.get("target", {})
-    if tgt_cfg.get("name"):
-        target_name = str(tgt_cfg["name"])
+    # Config / MCP override (manual expose OBJECT is often "Manual RA …";
+    # callers can force a VSX name or AUID via photometry.target.name/auid
+    # so VSP gets a real star id — issue #89).
+    tgt_cfg = phot_cfg.get("target", {}) or {}
+    override_name = str(tgt_cfg.get("name") or "").strip()
+    override_auid = str(tgt_cfg.get("auid") or "").strip()
+    if override_name:
+        if target_name and target_name != override_name:
+            logger.info(
+                "Target name override: FITS OBJECT=%r → config name=%r",
+                target_name, override_name,
+            )
+        target_name = override_name
+    elif override_auid:
+        if target_name and target_name != override_auid:
+            logger.info(
+                "Target AUID override: FITS OBJECT=%r → config auid=%r",
+                target_name, override_auid,
+            )
+        target_name = override_auid
     def _coord(value):
         # Header RA/DEC may be non-numeric (e.g. sexagesimal strings from other
         # capture software); treat unparseable values as missing so the frame
