@@ -68,16 +68,30 @@ def register(server, agent: AgentClient) -> None:
         return agent.get("/api/photometry")
 
     @server.tool()
-
-    @server.tool()
-    def node_photometry_enqueue(path: str) -> dict:
+    def node_photometry_enqueue(
+        path: str,
+        target_name: str = "",
+        auid: str = "",
+    ) -> dict:
         """Enqueue a FITS file (e.g. under fits_export/) for photometry.
 
         Manual exposures write to fits_export/ while the Seestar watcher looks
         at MyWorks — call this to feed a manual frame into the AAVSO path.
-        """
-        return agent.post("/api/photometry/enqueue", {"path": path}, timeout=30.0)
 
+        Pass ``target_name`` (e.g. ``SS Cyg``) or ``auid`` (e.g. ``000-BCP-220``)
+        when FITS OBJECT is still ``Manual RA …`` so VSP gets a real star id
+        (issue #89).
+        """
+        body: dict = {"path": path}
+        tn = (target_name or "").strip()
+        au = (auid or "").strip()
+        if tn:
+            body["target_name"] = tn
+        elif au:
+            body["auid"] = au
+        return agent.post("/api/photometry/enqueue", body, timeout=30.0)
+
+    @server.tool()
     def node_aavso() -> dict:
         """AAVSO export status on this node."""
         return agent.get("/api/aavso")
@@ -205,11 +219,26 @@ def register(server, agent: AgentClient) -> None:
                           {"direction": direction, "arcsec": arcsec})
 
     @server.tool()
-    def node_expose(seconds: float, count: int = 1) -> dict:
-        """Take an exposure with the node's camera."""
+    def node_expose(
+        seconds: float,
+        count: int = 1,
+        target_name: str = "",
+        auid: str = "",
+    ) -> dict:
+        """Take an exposure with the node's camera.
+
+        Optional ``target_name`` / ``auid`` writes a real OBJECT (not
+        ``Manual RA …``) so photometry/VSP can resolve comparison stars (#89).
+        """
         require_non_production("expose the camera")
-        return agent.post("/api/camera/expose",
-                          {"seconds": seconds, "count": int(count)},
+        body: dict = {"seconds": seconds, "count": int(count)}
+        tn = (target_name or "").strip()
+        au = (auid or "").strip()
+        if tn:
+            body["target_name"] = tn
+        elif au:
+            body["auid"] = au
+        return agent.post("/api/camera/expose", body,
                           timeout=max(60.0, seconds * count + 30.0))
 
     @server.tool()

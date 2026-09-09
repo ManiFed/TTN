@@ -171,10 +171,29 @@ _PHOT_QUEUE_MAX = 50
 _phot_queue: queue.Queue = queue.Queue(maxsize=_PHOT_QUEUE_MAX)
 
 
-def _enqueue_photometry(fits_path: str) -> None:
-    """Submit a FITS file for photometry, dropping it if the queue is full."""
+def _normalize_target_override(*candidates) -> str:
+    """First non-empty target name / AUID from caller-supplied candidates."""
+    for raw in candidates:
+        val = str(raw or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _enqueue_photometry(fits_path: str, target_name: str | None = None) -> None:
+    """Submit a FITS file for photometry, dropping it if the queue is full.
+
+    ``target_name`` (optional) overrides FITS OBJECT for VSP / AAVSO identity
+    when the header still says ``Manual RA …`` (issue #89).
+    """
+    override = _normalize_target_override(target_name)
+    job: object
+    if override:
+        job = {"path": fits_path, "target_name": override}
+    else:
+        job = fits_path
     try:
-        _phot_queue.put_nowait(fits_path)
+        _phot_queue.put_nowait(job)
         with _state_lock:
             _state["photometry"]["queued"] = _phot_queue.qsize()
     except queue.Full:
@@ -191,13 +210,20 @@ def _phot_worker() -> None:
     """Single daemon thread: process FITS files for photometry one at a time."""
     while True:
         try:
-            fits_path = _phot_queue.get(block=True, timeout=1.0)
+            job = _phot_queue.get(block=True, timeout=1.0)
         except queue.Empty:
             continue
         with _state_lock:
             _state["photometry"]["queued"] = _phot_queue.qsize()
+        target_name = None
+        if isinstance(job, dict):
+            fits_path = str(job.get("path") or "")
+            target_name = _normalize_target_override(job.get("target_name"))
+        else:
+            fits_path = str(job)
         try:
-            _run_photometry_bg(fits_path)
+            if fits_path:
+                _run_photometry_bg(fits_path, target_name=target_name or None)
         finally:
             _phot_queue.task_done()
 
@@ -904,17 +930,50 @@ def _run_survey_only(fits_path: str, cfg: dict) -> None:
     _maybe_report_characterization()
 
 
-def _run_photometry_bg(fits_path: str) -> None:
-    """Run the photometry pipeline in a background thread and store the result."""
+def _run_photometry_bg(fits_path: str, target_name: str | None = None) -> None:
+    """Run the photometry pipeline in a background thread and store the result.
+
+    ``target_name`` overrides FITS OBJECT via config photometry.target.name so
+    VSP receives a real star id / AUID (issue #89).
+    """
     with _state_lock:
         _state["photometry"]["running"] = True
     try:
         cfg = _load_config()
+        override = _normalize_target_override(target_name)
+        if override:
+            # Shallow-copy the nested photometry/target dicts so we do not mutate
+            # the cached config object shared with other threads.
+            phot = dict(cfg.get("photometry") or {})
+            tgt = dict(phot.get("target") or {})
+            tgt["name"] = override
+            phot["target"] = tgt
+            cfg = dict(cfg)
+            cfg["photometry"] = phot
+            logger.info(
+                "Photometry target override for %s: %r",
+                os.path.basename(fits_path), override,
+            )
         if (cfg.get("photometry", {}).get("survey_enabled", False)
                 and not _frame_has_target(fits_path, cfg)):
             _run_survey_only(fits_path, cfg)
             return
         result = _run_photometry(fits_path, cfg)
+        if override:
+            measured = (result or {}).get("target_name") if result else None
+            if measured != override:
+                logger.error(
+                    "Target override ignored for %s: requested=%r measured=%r "
+                    "— refusing to treat as a valid measurement (issue #89)",
+                    os.path.basename(fits_path), override, measured,
+                )
+                _telemetry.event(
+                    "photometry_override_ignored", severity="error",
+                    detail={"file": os.path.basename(fits_path),
+                            "requested": override,
+                            "measured": measured},
+                )
+                result = None
         # Survey sources ride the result out of the pipeline but travel to the
         # cloud on their own endpoint — pop them before the result is stored in
         # dashboard state or the measurement payload (up to ~800 entries).
@@ -3694,6 +3753,11 @@ def api_expose():
     duration = float(data.get("duration", data.get("seconds", 1.0)))
     binning  = int(data.get("binning", 1))
     count    = int(data.get("count", 1))
+    # Optional VSX name / AUID so OBJECT is not stuck as "Manual RA …" (#89).
+    expose_target = _normalize_target_override(
+        data.get("target_name"), data.get("target"),
+        data.get("object"), data.get("auid"),
+    )
 
     if duration <= 0:
         return jsonify({"error": "Duration must be > 0"}), 400
@@ -3731,7 +3795,10 @@ def api_expose():
         try:
             with _state_lock:
                 ra = _state["telescope"].get("ra")
-            target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
+            if expose_target:
+                target = expose_target
+            else:
+                target = f"Manual RA {ra:.4f}h" if ra is not None else "Manual"
             safe_tgt = "".join(
                 c if c.isalnum() or c in "-_ " else "_" for c in target
             ).strip() or "Manual"
@@ -3774,7 +3841,10 @@ def api_expose():
                     # photometry does not depend solely on the MyWorks watcher
                     # (issue #70).
                     try:
-                        _enqueue_photometry(fits_save_path)
+                        _enqueue_photometry(
+                            fits_save_path,
+                            target_name=expose_target or None,
+                        )
                     except Exception as exc:
                         logger.warning("Manual FITS photometry enqueue failed: %s", exc)
                 else:
@@ -3985,6 +4055,10 @@ def api_photometry_enqueue():
     """
     data = request.get_json(force=True, silent=True) or {}
     raw = str(data.get("path") or data.get("fits_path") or "").strip()
+    override = _normalize_target_override(
+        data.get("target_name"), data.get("target"),
+        data.get("object"), data.get("auid"),
+    )
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
     abs_path = os.path.realpath(raw)
@@ -4006,11 +4080,17 @@ def api_photometry_enqueue():
             "ok": False,
             "error": "path must be under fits_export/, data/fits/, or the image watch path",
         }), 403
-    _enqueue_photometry(abs_path)
+    _enqueue_photometry(abs_path, target_name=override or None)
     with _state_lock:
         queued = _state["photometry"].get("queued", 0)
-    logger.info("Photometry enqueue requested: %s (queued=%s)", abs_path, queued)
-    return jsonify({"ok": True, "path": abs_path, "queued": queued})
+    logger.info(
+        "Photometry enqueue requested: %s (queued=%s override=%r)",
+        abs_path, queued, override or None,
+    )
+    out = {"ok": True, "path": abs_path, "queued": queued}
+    if override:
+        out["target_name"] = override
+    return jsonify(out)
 
 
 @app.route("/api/fits/list")

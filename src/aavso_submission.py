@@ -358,6 +358,7 @@ def _post_to_webobs(
         resp = requests.post(url, data=payload, timeout=30)
         response_text = resp.text
         http_status   = resp.status_code
+        content_type  = (resp.headers.get("Content-Type") or "")[:120]
     except requests.exceptions.Timeout:
         logger.error("WebObs POST timed out after 30 s")
         return _error_result("POST timed out")
@@ -367,6 +368,12 @@ def _post_to_webobs(
     except Exception as exc:
         logger.error("WebObs POST failed: %s", exc)
         return _error_result(f"POST failed: {exc}")
+
+    # Always leave an auditable trail in logs (issue #87), not only on disk.
+    logger.info(
+        "WebObs HTTP %s content-type=%s body=%.500s",
+        http_status, content_type or "-", response_text.replace("\n", " ")[:500],
+    )
 
     # Save raw response regardless of status
     try:

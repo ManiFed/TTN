@@ -436,7 +436,7 @@ def submit_pending_batch(config: dict) -> dict:
     else:
         status, accepted, rejected, message = _post_batch(
             text, aavso_cfg.get("username", ""), aavso_cfg.get("password", ""),
-            aavso_cfg.get("submit_url", _WEBOBS_URL))
+            aavso_cfg.get("submit_url", _WEBOBS_URL), file_path=file_path)
 
     if status in ("accepted", "dry_run"):
         db.executemany("UPDATE measurements SET aavso_submitted = 1 WHERE id = %s",
@@ -530,7 +530,8 @@ def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _post_batch(text: str, username: str, password: str, url: str) -> tuple:
+def _post_batch(text: str, username: str, password: str, url: str,
+                file_path: Path | None = None) -> tuple:
     """POST a batch to WebObs. Returns (status, accepted, rejected, message)."""
     if not username or not password:
         return "skipped", 0, 0, "aavso credentials not configured"
@@ -543,6 +544,22 @@ def _post_batch(text: str, username: str, password: str, url: str) -> tuple:
     except Exception as exc:
         logger.error("WebObs batch POST failed: %s", exc)
         return "error", 0, 0, f"POST failed: {exc}"
+
+    content_type = (resp.headers.get("Content-Type") or "")[:120]
+    # Always log status + body snippet (issue #87).
+    logger.info(
+        "WebObs batch HTTP %s content-type=%s body=%.500s",
+        resp.status_code, content_type or "-",
+        resp.text.replace("\n", " ")[:500],
+    )
+
+    # Persist raw response beside the batch file (mirror node *_response.txt).
+    if file_path is not None:
+        try:
+            resp_path = Path(str(file_path) + "_response.txt")
+            resp_path.write_text(resp.text, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not save WebObs batch response file: %s", exc)
 
     if resp.status_code != 200:
         return "error", 0, 0, f"HTTP {resp.status_code}"
