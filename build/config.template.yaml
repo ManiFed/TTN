@@ -68,6 +68,9 @@ photometry:
   annulus_inner: 4.0
   annulus_outer: 6.0
   comparison_catalogs: [aavso, apass, gaia]  # queried in order until enough found
+  # VSP (app.aavso.org) can exceed 15s on busy charts (SS Cyg); 45s default.
+  # On timeout/empty, gather continues to APASS/Gaia — does not abort.
+  vsp_timeout_s: 45
   comparison_target_count: 8
   min_comparison_stars: 3
   snr_threshold: 20
