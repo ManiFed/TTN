@@ -20,21 +20,24 @@ class FakeTelescope:
         self.reconnectable = False
         self.park_calls = 0
         self.park_raises = False
+        # Mirrors ALPACA Connected: HTTP can succeed while Value=false.
+        self.device_connected = True
         self._c = self  # SafetyManager pings via tel._c.ping()
 
     # AlpacaClient surface
     def ping(self, timeout=5.0):
         if not self.reachable:
             raise ConnectionError("telescope unreachable")
-        return True
+        return bool(self.device_connected)
 
     def connect(self):
         if not self.reconnectable:
             raise ConnectionError("still unreachable")
         self.reachable = True
+        self.device_connected = True
 
     def disconnect(self):
-        pass
+        self.device_connected = False
 
     def park(self):
         if self.park_raises:
@@ -122,6 +125,63 @@ class DisconnectParkTest(unittest.TestCase):
         self.assertFalse(mgr.is_safe())
         mgr.attach_telescope(tel)
         self.assertTrue(mgr.is_safe())
+
+    def test_live_heartbeat_clears_stale_unreachable_latch(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("telescope unreachable for 606s (timeout=600s)")
+        self.assertFalse(mgr.is_safe())
+        # emergency_park disconnects; restore Connected=true to model a live
+        # device that already reports connected without needing reconnect.
+        tel.device_connected = True
+
+        mgr._run_connection_check()
+
+        status = mgr.status()
+        self.assertTrue(status["safe"])
+        self.assertFalse(status["parked"])
+        self.assertEqual(status["reason"], "")
+        self.assertTrue(status["heartbeat_ok"])
+
+    def test_heartbeat_connected_false_keeps_unreachable_latch(self):
+        """HTTP-ok ping with Value=false must not clear the latch (Codex #75)."""
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("telescope unreachable for 606s (timeout=600s)")
+        self.assertFalse(tel.device_connected)
+        tel.reachable = True
+        tel.reconnectable = False
+
+        mgr._run_connection_check()
+
+        self.assertFalse(mgr.is_safe())
+        self.assertIn("unreachable", mgr.status()["reason"])
+        self.assertFalse(mgr.status()["heartbeat_ok"])
+
+    def test_reconnect_after_connected_false_clears_unreachable_latch(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("telescope unreachable for 606s (timeout=600s)")
+        self.assertFalse(tel.device_connected)
+        tel.reconnectable = True
+
+        mgr._run_connection_check()
+
+        status = mgr.status()
+        self.assertTrue(status["safe"])
+        self.assertTrue(tel.device_connected)
+        self.assertEqual(status["reason"], "")
+
+    def test_live_heartbeat_does_not_clear_other_safety_latches(self):
+        tel = FakeTelescope()
+        mgr = _mgr(tel)
+        mgr.emergency_park("high wind")
+        tel.device_connected = True  # live heartbeat ok must not clear non-unreachable
+
+        mgr._run_connection_check()
+
+        self.assertFalse(mgr.is_safe())
+        self.assertEqual(mgr.status()["reason"], "high wind")
 
 
 class DawnParkTest(unittest.TestCase):

@@ -456,8 +456,21 @@ class SafetyManager:
             with self._lock:
                 was_lost           = self._disconnect_since is not None
                 self._disconnect_since = None
+                stale_latch = (
+                    not self._safe
+                    and self._reason.startswith("telescope unreachable")
+                )
+                if stale_latch:
+                    self._safe = True
+                    self._parked = False
+                    self._reason = ""
             if was_lost:
                 logger.info("SafetyManager: telescope connection restored")
+            if stale_latch:
+                logger.warning(
+                    "SafetyManager: cleared stale telescope-unreachable latch "
+                    "after a successful live heartbeat"
+                )
             return
 
         # Heartbeat failed — attempt reconnect immediately
@@ -465,6 +478,19 @@ class SafetyManager:
         if self._try_reconnect():
             with self._lock:
                 self._disconnect_since = None
+                stale_latch = (
+                    not self._safe
+                    and self._reason.startswith("telescope unreachable")
+                )
+                if stale_latch:
+                    self._safe = True
+                    self._parked = False
+                    self._reason = ""
+            if stale_latch:
+                logger.warning(
+                    "SafetyManager: cleared stale telescope-unreachable latch "
+                    "after reconnect"
+                )
             return
 
         # All reconnect attempts exhausted
@@ -570,6 +596,11 @@ class SafetyManager:
         Uses the client's dedicated heartbeat session and retries once so a
         single dropped packet — or a momentary collision with in-flight device
         traffic — doesn't register as a connection failure.
+
+        ``ping()`` returns the ALPACA ``connected`` Value. A successful HTTP
+        response with ``Value=false`` (e.g. after ``_emergency_park`` called
+        ``disconnect()``) must count as failure so we attempt reconnect instead
+        of clearing an unreachable latch while the device stays disconnected.
         """
         with self._lock:
             tel = self._tel
@@ -577,14 +608,19 @@ class SafetyManager:
             return False
         for attempt in (1, 2):
             try:
-                tel._c.ping(timeout=self._heartbeat_timeout)
-                return True
+                if tel._c.ping(timeout=self._heartbeat_timeout):
+                    return True
+                logger.debug(
+                    "SafetyManager: heartbeat attempt %d: device reports "
+                    "connected=false",
+                    attempt,
+                )
             except Exception as exc:
                 logger.debug(
                     "SafetyManager: heartbeat attempt %d failed: %s", attempt, exc
                 )
-                if attempt < 2:
-                    self._stop_event.wait(timeout=0.5)
+            if attempt < 2:
+                self._stop_event.wait(timeout=0.5)
         return False
 
     def _try_reconnect(self) -> bool:
