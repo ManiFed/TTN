@@ -92,6 +92,9 @@ hidden_imports = [
     "photutils.centroids.gaussian",
     "photutils.background",
     "photutils.background.core",
+    # Needed by CircularAperture → photutils.geometry (PyInstaller miss; issue #78)
+    "photutils.geometry",
+    "photutils.geometry.core",
     "photutils.utils",
 
     # ── astroquery ────────────────────────────────────────────────────────────
