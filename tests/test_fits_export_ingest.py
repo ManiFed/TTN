@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Manual fits_export frames must reach photometry (issue #70).
 
-Also covers issue #89 (target name / AUID override for Manual RA frames)
+Also covers issue #89 (target name / AUID override for Manual RA frames),
+issue #79 (ASTAP fail + fallback WCS must still reach VSP when override/AUID
+is set; measured=None must not be reported as override-ignored),
 and issue #87 (AAVSO WebObs HTTP status+body logging).
 """
 
@@ -51,12 +53,12 @@ class PhotometryEnqueueApiTest(unittest.TestCase):
             enqueued = []
             with patch.object(dash, "_fits_export_dir", return_value=os.path.join(td, "fits_export")), \
                  patch.object(dash, "_enqueue_photometry",
-                              side_effect=lambda p, target_name=None: enqueued.append(
-                                  (p, target_name))):
+                              side_effect=lambda p, target_name=None, auid=None:
+                                  enqueued.append((p, target_name, auid))):
                 resp = client.post("/api/photometry/enqueue", json={"path": path})
             self.assertEqual(resp.status_code, 200)
             self.assertTrue(resp.get_json()["ok"])
-            self.assertEqual(enqueued, [(os.path.realpath(path), None)])
+            self.assertEqual(enqueued, [(os.path.realpath(path), None, None)])
 
     def test_enqueue_rejects_outside_roots(self):
         from astropy.io import fits
@@ -104,8 +106,8 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
             with patch.object(dash, "_fits_export_dir",
                               return_value=os.path.join(td, "fits_export")), \
                  patch.object(dash, "_enqueue_photometry",
-                              side_effect=lambda p, target_name=None: enqueued.append(
-                                  (p, target_name))):
+                              side_effect=lambda p, target_name=None, auid=None:
+                                  enqueued.append((p, target_name, auid))):
                 resp = client.post("/api/photometry/enqueue", json={
                     "path": path,
                     "target_name": "SS Cyg",
@@ -115,7 +117,11 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
             body = resp.get_json()
             self.assertTrue(body["ok"])
             self.assertEqual(body["target_name"], "SS Cyg")
-            self.assertEqual(enqueued, [(os.path.realpath(path), "SS Cyg")])
+            self.assertEqual(body["auid"], "000-BCP-220")
+            self.assertEqual(
+                enqueued,
+                [(os.path.realpath(path), "SS Cyg", "000-BCP-220")],
+            )
 
     def test_enqueue_accepts_auid_alone(self):
         from astropy.io import fits
@@ -130,14 +136,19 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
             with patch.object(dash, "_fits_export_dir",
                               return_value=os.path.join(td, "fits_export")), \
                  patch.object(dash, "_enqueue_photometry",
-                              side_effect=lambda p, target_name=None: enqueued.append(
-                                  (p, target_name))):
+                              side_effect=lambda p, target_name=None, auid=None:
+                                  enqueued.append((p, target_name, auid))):
                 resp = client.post("/api/photometry/enqueue", json={
                     "path": path, "auid": "000-BCP-220",
                 })
             self.assertEqual(resp.status_code, 200)
-            self.assertEqual(resp.get_json()["target_name"], "000-BCP-220")
-            self.assertEqual(enqueued, [(os.path.realpath(path), "000-BCP-220")])
+            body = resp.get_json()
+            self.assertEqual(body["target_name"], "000-BCP-220")
+            self.assertEqual(body["auid"], "000-BCP-220")
+            self.assertEqual(
+                enqueued,
+                [(os.path.realpath(path), "000-BCP-220", "000-BCP-220")],
+            )
 
     def test_enqueue_job_dict_carries_override(self):
         got = []
@@ -156,9 +167,9 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
     def test_run_photometry_bg_injects_override_and_refuses_mismatch(self):
         calls = []
 
-        def fake_pipeline(fits_path, cfg):
+        def fake_pipeline_ex(fits_path, cfg):
             calls.append(cfg["photometry"]["target"]["name"])
-            return {
+            return ({
                 "target_name": "Manual RA 21.7147h",
                 "magnitude": 1.0,
                 "uncertainty": 0.1,
@@ -166,16 +177,84 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
                 "quality_flag": "poor",
                 "bjd": 2460000.5,
                 "sky_mag": None,
-            }
+            }, None)
 
         with patch.object(dash, "_load_config", return_value={"photometry": {}}), \
-             patch.object(dash, "_run_photometry", side_effect=fake_pipeline):
+             patch("src.photometry.run_pipeline_ex", side_effect=fake_pipeline_ex):
             with dash._state_lock:
                 dash._state["photometry"]["last_result"] = "sentinel"
             dash._run_photometry_bg("/tmp/manual.fits", target_name="SS Cyg")
             with dash._state_lock:
                 self.assertIsNone(dash._state["photometry"]["last_result"])
         self.assertEqual(calls, ["SS Cyg"])
+
+    def test_run_photometry_bg_measured_none_is_not_override_ignored(self):
+        """Issue #79: pipeline None after override must not look like ignore."""
+        events = []
+
+        def fake_pipeline_ex(fits_path, cfg):
+            self.assertEqual(cfg["photometry"]["target"]["name"], "SS Cyg")
+            self.assertEqual(cfg["photometry"]["target"]["auid"], "000-BCP-220")
+            # Stale coords must be cleared on per-frame override.
+            self.assertNotIn("ra_deg", cfg["photometry"]["target"])
+            self.assertNotIn("dec_deg", cfg["photometry"]["target"])
+            return None, {
+                "stage": "zero_point",
+                "reason_code": "no_zero_point",
+                "message": "no usable comparison stars",
+                "target_name": "SS Cyg",
+            }
+
+        class _Tel:
+            def event(self, name, severity="info", detail=None):
+                events.append((name, severity, detail))
+
+        with patch.object(dash, "_load_config", return_value={
+                "photometry": {
+                    "target": {"name": "", "ra_deg": 10.0, "dec_deg": 20.0},
+                },
+             }), \
+             patch("src.photometry.run_pipeline_ex", side_effect=fake_pipeline_ex), \
+             patch.object(dash, "_telemetry", _Tel()):
+            with dash._state_lock:
+                dash._state["photometry"]["last_result"] = "sentinel"
+                dash._state["photometry"]["last_rejection"] = None
+            dash._run_photometry_bg(
+                "/tmp/manual.fits",
+                target_name="SS Cyg",
+                auid="000-BCP-220",
+            )
+            with dash._state_lock:
+                self.assertIsNone(dash._state["photometry"]["last_result"])
+                rej = dash._state["photometry"]["last_rejection"]
+        self.assertIsNotNone(rej)
+        self.assertEqual(rej["reason_code"], "no_zero_point")
+        self.assertFalse(
+            any(name == "photometry_override_ignored" for name, *_ in events),
+            events,
+        )
+
+    def test_frame_has_target_recognizes_auid(self):
+        cfg = {"photometry": {"target": {"auid": "000-BCP-220"}}}
+        self.assertTrue(dash._frame_has_target("/nonexistent.fits", cfg))
+
+    def test_enqueue_job_dict_carries_name_and_auid(self):
+        got = []
+
+        class _Q:
+            def put_nowait(self, job):
+                got.append(job)
+
+            def qsize(self):
+                return len(got)
+
+        with patch.object(dash, "_phot_queue", _Q()):
+            dash._enqueue_photometry(
+                "/tmp/x.fits", target_name="SS Cyg", auid="000-BCP-220")
+        self.assertEqual(
+            got,
+            [{"path": "/tmp/x.fits", "target_name": "SS Cyg", "auid": "000-BCP-220"}],
+        )
 
     def test_api_expose_source_reads_target_override_keys(self):
         import inspect
@@ -223,6 +302,75 @@ class PhotometryConfigAuidOverrideTest(unittest.TestCase):
                 _meas, rej = phot.run_pipeline_ex(path, cfg)
             self.assertIsNotNone(rej)
             self.assertEqual(rej.get("target_name"), "000-BCP-220")
+
+    def test_override_queries_vsp_before_off_frame_abort(self):
+        """Issue #79: with AUID override, VSP runs even if target looks off-frame."""
+        from src import photometry as phot
+        import numpy as np
+        from astropy.io import fits
+
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "off.fits")
+            data = np.zeros((64, 64), dtype=np.float32)
+            data[32, 32] = 5000.0
+            hdu = fits.PrimaryHDU(data)
+            hdu.header["OBJECT"] = "Manual RA 21.7147h"
+            hdu.header["RA"] = 325.72
+            hdu.header["DEC"] = 43.58
+            hdu.header["IMAGETYP"] = "LIGHT"
+            hdu.writeto(path)
+
+            vsp_ids = []
+
+            def fake_gather(target_name, ra_deg, dec_deg, *args, **kwargs):
+                vsp_ids.append(target_name)
+                return [{
+                    "auid": "000-AAA-001",
+                    "ra_deg": ra_deg,
+                    "dec_deg": dec_deg,
+                    "mag_v": 12.0,
+                    "mag_err": 0.02,
+                    "source": "aavso_V",
+                }]
+
+            cfg = {"photometry": {
+                "target": {"name": "SS Cyg", "auid": "000-BCP-220",
+                           "ra_deg": 10.0, "dec_deg": 80.0},
+                "pixel_scale": 2.4,
+                "comparison_catalogs": ["aavso"],
+            }}
+
+            self.assertTrue(phot._inject_pointing_wcs(path, 325.72, 43.58, 2.4))
+            real_wcs_cls = phot.WCS
+
+            class _Wrap(real_wcs_cls):
+                def world_to_pixel(self, *a, **k):
+                    return (-50.0, -50.0)
+
+            with patch.object(phot, "_ensure_wcs", return_value="pointing"), \
+                 patch.object(phot, "_gather_comparison_stars", side_effect=fake_gather), \
+                 patch.object(phot, "WCS", _Wrap):
+                meas, rej = phot.run_pipeline_ex(path, cfg)
+
+            self.assertIsNone(meas)
+            self.assertIsNotNone(rej)
+            self.assertEqual(rej.get("reason_code"), "target_off_frame")
+            self.assertEqual(vsp_ids, ["000-BCP-220"])
+            detail = rej.get("detail") or {}
+            self.assertEqual(detail.get("n_comp_candidates"), 1)
+            self.assertEqual(detail.get("vsp_id"), "000-BCP-220")
+
+    def test_pointing_wcs_never_quality_good(self):
+        from src import photometry as phot
+        flag, reasons = phot.evaluate_quality(
+            {"snr": 100, "uncertainty": 0.01, "n_comparison_stars": 5,
+             "airmass": 1.1, "zp_scatter": 0.02,
+             "target_saturated": False, "target_blended": False,
+             "wcs_source": "pointing"},
+            {},
+        )
+        self.assertEqual(flag, "acceptable")
+        self.assertTrue(any(r["check"] == "wcs_source" for r in reasons))
 
 
 class AavsoHttpLoggingTest(unittest.TestCase):
