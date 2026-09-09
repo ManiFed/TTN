@@ -230,10 +230,9 @@ hidden_imports = [
 
 # Sweep remaining photutils submodules so the next Cython/submodule gap does not
 # hard-block aperture photometry again (hardening on top of #82 / issue #78).
-try:
-    hidden_imports += collect_submodules("photutils")
-except Exception:
-    pass
+# Fail the freeze build if collection itself errors (Codex P2) — do not silently
+# ship with only the explicit list.
+hidden_imports += collect_submodules("photutils")
 
 # ── Data files ─────────────────────────────────────────────────────────────────
 # Tuples: (source_path, dest_directory_in_bundle)
