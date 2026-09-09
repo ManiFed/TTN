@@ -17,7 +17,7 @@ import sys
 import glob as _glob
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent          # repo root (build/ is one level down)
 ENTRY = ROOT / "src" / "main_service.py"
@@ -92,6 +92,7 @@ hidden_imports = [
     "photutils.centroids.gaussian",
     "photutils.background",
     "photutils.background.core",
+    "photutils.psf",
     # Needed by CircularAperture → photutils.geometry (PyInstaller miss; issue #78)
     "photutils.geometry",
     "photutils.geometry.core",
@@ -226,6 +227,13 @@ hidden_imports = [
     "tarfile",
     "tempfile",
 ]
+
+# Sweep remaining photutils submodules so the next Cython/submodule gap does not
+# hard-block aperture photometry again (hardening on top of #82 / issue #78).
+try:
+    hidden_imports += collect_submodules("photutils")
+except Exception:
+    pass
 
 # ── Data files ─────────────────────────────────────────────────────────────────
 # Tuples: (source_path, dest_directory_in_bundle)
