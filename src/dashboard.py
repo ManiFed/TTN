@@ -153,6 +153,7 @@ _state: dict[str, Any] = {
         "enabled":     False,
         "last_result": None,   # most recent measurement dict
         "last_export": None,   # path to most recent exported FITS file
+        "last_rejection": None,  # run_pipeline_ex rejection when result is None
         "running":     False,
         "queued":      0,      # FITS paths waiting in the photometry queue
         "history":     [],     # rolling last 20 measurements this session
@@ -180,16 +181,28 @@ def _normalize_target_override(*candidates) -> str:
     return ""
 
 
-def _enqueue_photometry(fits_path: str, target_name: str | None = None) -> None:
+def _looks_like_auid(value: str) -> bool:
+    """True for AAVSO AUID forms like 000-BCP-220."""
+    import re
+    return bool(re.fullmatch(r"\d{3}-[A-Za-z0-9]{2,4}-\d{3}", str(value or "").strip()))
+
+
+def _enqueue_photometry(fits_path: str, target_name: str | None = None,
+                        auid: str | None = None) -> None:
     """Submit a FITS file for photometry, dropping it if the queue is full.
 
-    ``target_name`` (optional) overrides FITS OBJECT for VSP / AAVSO identity
-    when the header still says ``Manual RA …`` (issue #89).
+    ``target_name`` / ``auid`` (optional) override FITS OBJECT for VSP / AAVSO
+    identity when the header still says ``Manual RA …`` (issues #89 / #79).
     """
     override = _normalize_target_override(target_name)
+    override_auid = _normalize_target_override(auid)
     job: object
-    if override:
-        job = {"path": fits_path, "target_name": override}
+    if override or override_auid:
+        job = {"path": fits_path}
+        if override:
+            job["target_name"] = override
+        if override_auid:
+            job["auid"] = override_auid
     else:
         job = fits_path
     try:
@@ -216,14 +229,20 @@ def _phot_worker() -> None:
         with _state_lock:
             _state["photometry"]["queued"] = _phot_queue.qsize()
         target_name = None
+        auid = None
         if isinstance(job, dict):
             fits_path = str(job.get("path") or "")
             target_name = _normalize_target_override(job.get("target_name"))
+            auid = _normalize_target_override(job.get("auid"))
         else:
             fits_path = str(job)
         try:
             if fits_path:
-                _run_photometry_bg(fits_path, target_name=target_name or None)
+                _run_photometry_bg(
+                    fits_path,
+                    target_name=target_name or None,
+                    auid=auid or None,
+                )
         finally:
             _phot_queue.task_done()
 
@@ -880,7 +899,8 @@ def _frame_has_target(fits_path: str, cfg: dict) -> bool:
     """True when the frame (or config) names a target for differential
     photometry. Contributor-mode frames from NINA/ASIAIR capture dirs
     usually don't — they go down the full-frame survey path instead."""
-    if str(cfg.get("photometry", {}).get("target", {}).get("name") or "").strip():
+    tgt = (cfg.get("photometry") or {}).get("target") or {}
+    if str(tgt.get("name") or "").strip() or str(tgt.get("auid") or "").strip():
         return True
     try:
         from astropy.io import fits as _fits
@@ -930,50 +950,88 @@ def _run_survey_only(fits_path: str, cfg: dict) -> None:
     _maybe_report_characterization()
 
 
-def _run_photometry_bg(fits_path: str, target_name: str | None = None) -> None:
+def _run_photometry_bg(fits_path: str, target_name: str | None = None,
+                       auid: str | None = None) -> None:
     """Run the photometry pipeline in a background thread and store the result.
 
-    ``target_name`` overrides FITS OBJECT via config photometry.target.name so
-    VSP receives a real star id / AUID (issue #89).
+    ``target_name`` / ``auid`` override FITS OBJECT via config photometry.target
+    so VSP receives a real star id (issues #89 / #79). Stale configured
+    ra_deg/dec_deg are cleared on per-frame override so FITS pointing wins.
     """
     with _state_lock:
         _state["photometry"]["running"] = True
     try:
         cfg = _load_config()
         override = _normalize_target_override(target_name)
-        if override:
+        override_auid = _normalize_target_override(auid)
+        # If the single override token looks like an AAVSO AUID and no separate
+        # auid was supplied, treat it as AUID as well so catalog lookup +
+        # _frame_has_target both see it.
+        if override and not override_auid and _looks_like_auid(override):
+            override_auid = override
+        if override or override_auid:
             # Shallow-copy the nested photometry/target dicts so we do not mutate
             # the cached config object shared with other threads.
             phot = dict(cfg.get("photometry") or {})
             tgt = dict(phot.get("target") or {})
-            tgt["name"] = override
+            if override:
+                tgt["name"] = override
+            if override_auid:
+                tgt["auid"] = override_auid
+            # Per-frame identity override must not keep coordinates from a
+            # previous target in config.yaml (Codex P2 on #90).
+            tgt.pop("ra_deg", None)
+            tgt.pop("dec_deg", None)
             phot["target"] = tgt
             cfg = dict(cfg)
             cfg["photometry"] = phot
             logger.info(
-                "Photometry target override for %s: %r",
-                os.path.basename(fits_path), override,
+                "Photometry target override for %s: name=%r auid=%r",
+                os.path.basename(fits_path), override or None, override_auid or None,
             )
         if (cfg.get("photometry", {}).get("survey_enabled", False)
                 and not _frame_has_target(fits_path, cfg)):
             _run_survey_only(fits_path, cfg)
             return
-        result = _run_photometry(fits_path, cfg)
-        if override:
-            measured = (result or {}).get("target_name") if result else None
-            if measured != override:
-                logger.error(
-                    "Target override ignored for %s: requested=%r measured=%r "
-                    "— refusing to treat as a valid measurement (issue #89)",
-                    os.path.basename(fits_path), override, measured,
+        # Prefer run_pipeline_ex so rejection stage/reason is auditable when the
+        # frame fails after ASTAP (fallback WCS / comps / ZP) — issue #79.
+        try:
+            from src.photometry import run_pipeline_ex as _run_photometry_ex
+            result, rejection = _run_photometry_ex(fits_path, cfg)
+        except Exception:
+            result = _run_photometry(fits_path, cfg)
+            rejection = None
+        expected = override or override_auid
+        if expected:
+            # Only refuse a *successful* measurement that ignored the override.
+            # measured=None means the pipeline failed later (ASTAP/comps/ZP) —
+            # the override was still applied to VSP identity (issue #79).
+            if result is not None:
+                measured = str(result.get("target_name") or "").strip()
+                allowed = {x for x in (override, override_auid) if x}
+                if measured not in allowed:
+                    logger.error(
+                        "Target override ignored for %s: requested=%r measured=%r "
+                        "— refusing to treat as a valid measurement (issue #89)",
+                        os.path.basename(fits_path), expected, measured,
+                    )
+                    _telemetry.event(
+                        "photometry_override_ignored", severity="error",
+                        detail={"file": os.path.basename(fits_path),
+                                "requested": expected,
+                                "measured": measured},
+                    )
+                    result = None
+            elif rejection:
+                logger.warning(
+                    "Photometry rejected for %s after target override %r: "
+                    "stage=%s reason=%s — %s",
+                    os.path.basename(fits_path), expected,
+                    rejection.get("stage"), rejection.get("reason_code"),
+                    rejection.get("message"),
                 )
-                _telemetry.event(
-                    "photometry_override_ignored", severity="error",
-                    detail={"file": os.path.basename(fits_path),
-                            "requested": override,
-                            "measured": measured},
-                )
-                result = None
+                with _state_lock:
+                    _state["photometry"]["last_rejection"] = rejection
         # Survey sources ride the result out of the pipeline but travel to the
         # cloud on their own endpoint — pop them before the result is stored in
         # dashboard state or the measurement payload (up to ~800 entries).
@@ -981,6 +1039,7 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None) -> None:
         with _state_lock:
             _state["photometry"]["last_result"] = result
             if result:
+                _state["photometry"]["last_rejection"] = None
                 hist = _state["photometry"]["history"]
                 hist.append({
                     "target_name":  result["target_name"],
@@ -4056,9 +4115,12 @@ def api_photometry_enqueue():
     data = request.get_json(force=True, silent=True) or {}
     raw = str(data.get("path") or data.get("fits_path") or "").strip()
     override = _normalize_target_override(
-        data.get("target_name"), data.get("target"),
-        data.get("object"), data.get("auid"),
+        data.get("target_name"), data.get("target"), data.get("object"),
     )
+    override_auid = _normalize_target_override(data.get("auid"))
+    # Back-compat: callers that only send auid still work via target_name slot.
+    if not override and override_auid:
+        override = override_auid
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
     abs_path = os.path.realpath(raw)
@@ -4080,16 +4142,22 @@ def api_photometry_enqueue():
             "ok": False,
             "error": "path must be under fits_export/, data/fits/, or the image watch path",
         }), 403
-    _enqueue_photometry(abs_path, target_name=override or None)
+    _enqueue_photometry(
+        abs_path,
+        target_name=override or None,
+        auid=override_auid or None,
+    )
     with _state_lock:
         queued = _state["photometry"].get("queued", 0)
     logger.info(
-        "Photometry enqueue requested: %s (queued=%s override=%r)",
-        abs_path, queued, override or None,
+        "Photometry enqueue requested: %s (queued=%s override=%r auid=%r)",
+        abs_path, queued, override or None, override_auid or None,
     )
     out = {"ok": True, "path": abs_path, "queued": queued}
     if override:
         out["target_name"] = override
+    if override_auid:
+        out["auid"] = override_auid
     return jsonify(out)
 
 

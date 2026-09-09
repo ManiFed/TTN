@@ -64,7 +64,7 @@ logger = logging.getLogger("photometry")
 
 # Version stamp recorded in every measurement's provenance block, so a stored
 # measurement can always be traced to the algorithm that produced it.
-PIPELINE_VERSION = "1.2.0"
+PIPELINE_VERSION = "1.2.1"
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -178,10 +178,11 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
 
     # Config / MCP override (manual expose OBJECT is often "Manual RA …";
     # callers can force a VSX name or AUID via photometry.target.name/auid
-    # so VSP gets a real star id — issue #89).
+    # so VSP gets a real star id — issues #89 / #79).
     tgt_cfg = phot_cfg.get("target", {}) or {}
     override_name = str(tgt_cfg.get("name") or "").strip()
     override_auid = str(tgt_cfg.get("auid") or "").strip()
+    has_target_override = bool(override_name or override_auid)
     if override_name:
         if target_name and target_name != override_name:
             logger.info(
@@ -273,14 +274,20 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
                                 fits_path, target_name)
 
     margin = 20  # pixels — target must be this far from edges for reliable photometry
-    if not (margin <= tx < w - margin and margin <= ty < h - margin):
+    target_on_frame = (margin <= tx < w - margin and margin <= ty < h - margin)
+    if not target_on_frame:
         logger.warning("Target %s is outside image bounds or too close to edge "
                        "(x=%.1f y=%.1f in %dx%d image)", target_name, tx, ty, w, h)
-        return None, _rejection("field", "target_off_frame",
-                                "target outside frame or within edge margin",
-                                fits_path, target_name,
-                                x_px=round(tx, 1), y_px=round(ty, 1),
-                                width=w, height=h, margin=margin)
+        # With an explicit name/AUID override + fallback/pointing WCS (ASTAP
+        # often fails on Starfront), still query VSP so comps are attempted
+        # before we give up — issue #79. Without an override, abort as before.
+        if not has_target_override:
+            return None, _rejection("field", "target_off_frame",
+                                    "target outside frame or within edge margin",
+                                    fits_path, target_name,
+                                    x_px=round(tx, 1), y_px=round(ty, 1),
+                                    width=w, height=h, margin=margin,
+                                    wcs_source=wcs_source)
 
     logger.debug("Target pixel: x=%.1f  y=%.1f", tx, ty)
 
@@ -309,18 +316,38 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     # the 10–20 matches that broadband differential photometry wants.
     catalogs     = phot_cfg.get("comparison_catalogs", ["aavso", "apass", "gaia"])
     target_count = int(phot_cfg.get("comparison_target_count", 8))
+    # Prefer AUID for VSP star= when both name and AUID are configured — VSP
+    # accepts either, and AUID avoids Manual-RA / alias confusion (#79/#89).
+    vsp_id = override_auid or target_name
     comp_stars = _gather_comparison_stars(
-        target_name, ra_deg, dec_deg, field_radius_deg, mag_limit,
+        vsp_id, ra_deg, dec_deg, field_radius_deg, mag_limit,
         catalogs, target_count,
         comparison_star_file=str(phot_cfg.get("comparison_star_file", "") or ""),
     )
+
+    if not target_on_frame:
+        # Override path: VSP/comps were attempted; now abort honestly.
+        return None, _rejection(
+            "field", "target_off_frame",
+            "target outside frame or within edge margin "
+            "(VSP/comps queried via target override before abort)",
+            fits_path, target_name,
+            x_px=round(tx, 1), y_px=round(ty, 1),
+            width=w, height=h, margin=margin,
+            wcs_source=wcs_source,
+            n_comp_candidates=len(comp_stars),
+            vsp_id=vsp_id,
+            override_auid=override_auid or None,
+        )
 
     if not comp_stars:
         logger.error("No comparison stars found in field")
         return None, _rejection("comp_stars", "no_comparison_stars",
                                 "no comparison stars returned by any catalog",
                                 fits_path, target_name,
-                                catalogs=[str(c) for c in catalogs])
+                                catalogs=[str(c) for c in catalogs],
+                                wcs_source=wcs_source,
+                                vsp_id=vsp_id)
 
     # Filter to stars within the image frame
     comp_in_field = []
@@ -348,7 +375,9 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
                                 "fewer than 2 comparison stars land in the frame",
                                 fits_path, target_name,
                                 n_in_field=len(comp_in_field),
-                                n_candidates=len(comp_stars))
+                                n_candidates=len(comp_stars),
+                                wcs_source=wcs_source,
+                                vsp_id=vsp_id)
 
     # ── Step 5a: Centroid-refine positions onto actual source peaks ───────────
     # The pointing-WCS can be off by tens of pixels; snap each position to the
@@ -562,6 +591,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             "zp_scatter":       zp_scatter,
             "target_saturated": target_saturated,
             "target_blended":   target_blended,
+            "wcs_source":       wcs_source,
         },
         phot_cfg,
     )
@@ -770,6 +800,12 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
         _flag("airmass", None, max_airmass, "warn")
     elif airmass >= max_airmass:
         _flag("airmass", airmass, max_airmass, "warn")
+
+    # Pointing / fallback WCS (ASTAP miss) is usable for VSP+comps but is not
+    # plate-solved astrometry — never claim quality=good (issue #79).
+    wcs_src = str(metrics.get("wcs_source") or "")
+    if wcs_src == "pointing":
+        _flag("wcs_source", wcs_src, "solved", "warn")
 
     if any(r["outcome"] == "fail" for r in reasons):
         return "poor", reasons
