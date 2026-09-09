@@ -29,7 +29,7 @@ class VspClientTest(unittest.TestCase):
             def json(self):
                 return self._payload
 
-        def fake_get(url, params=None, timeout=15):
+        def fake_get(url, params=None, timeout=45, **kwargs):
             calls.append(dict(params or {}))
             if "star" in (params or {}):
                 return Resp(400)
@@ -59,7 +59,7 @@ class VspClientTest(unittest.TestCase):
             def json(self):
                 return {"photometry": []}
 
-        def fake_get(url, params=None, timeout=15):
+        def fake_get(url, params=None, timeout=45, **kwargs):
             seen.update(params or {})
             return Resp()
 
@@ -81,7 +81,7 @@ class VspClientTest(unittest.TestCase):
                 def json(self):
                     return {"photometry": []}
 
-            def fake_get(url, params=None, timeout=15):
+            def fake_get(url, params=None, timeout=45, **kwargs):
                 calls.append(dict(params or {}))
                 return Resp()
 
@@ -93,6 +93,73 @@ class VspClientTest(unittest.TestCase):
             self.assertNotIn("star", calls[0], msg=repr(name))
             self.assertIn("ra", calls[0])
             self.assertIn("dec", calls[0])
+
+    def test_default_timeout_is_45s(self):
+        seen = {}
+
+        class Resp:
+            status_code = 200
+            def json(self):
+                return {"photometry": []}
+
+        def fake_get(url, params=None, timeout=None, **kwargs):
+            seen["timeout"] = timeout
+            return Resp()
+
+        with patch.dict("sys.modules", {"requests": MagicMock()}):
+            import requests as req_mod
+            with patch.object(req_mod, "get", side_effect=fake_get):
+                P._get_comparison_stars_aavso("SS Cyg", 325.83, 43.59, 0.5, 15.0)
+        self.assertEqual(seen.get("timeout"), 45.0)
+
+    def test_star_timeout_still_tries_radec_attempt(self):
+        """Per-attempt timeout must not abort the RA/Dec fallback."""
+        calls = []
+
+        class Resp:
+            status_code = 200
+            def json(self):
+                return {"photometry": [{
+                    "auid": "000-BCP-001",
+                    "ra": "21:42:42",
+                    "dec": "+43:35:10",
+                    "bands": [{"band": "V", "mag": 11.5, "error": 0.02}],
+                }]}
+
+        def fake_get(url, params=None, timeout=45, **kwargs):
+            calls.append(dict(params or {}))
+            if "star" in (params or {}):
+                raise TimeoutError("VSP hung on star=")
+            return Resp()
+
+        with patch.dict("sys.modules", {"requests": MagicMock()}):
+            import requests as req_mod
+            with patch.object(req_mod, "get", side_effect=fake_get):
+                stars = P._get_comparison_stars_aavso(
+                    "SS Cyg", 325.83, 43.59, 0.5, 15.0, timeout_s=45)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("star", calls[0])
+        self.assertIn("ra", calls[1])
+        self.assertEqual(len(stars), 1)
+
+    def test_configurable_timeout_passed_through(self):
+        seen = {}
+
+        class Resp:
+            status_code = 200
+            def json(self):
+                return {"photometry": []}
+
+        def fake_get(url, params=None, timeout=None, **kwargs):
+            seen["timeout"] = timeout
+            return Resp()
+
+        with patch.dict("sys.modules", {"requests": MagicMock()}):
+            import requests as req_mod
+            with patch.object(req_mod, "get", side_effect=fake_get):
+                P._get_comparison_stars_aavso(
+                    "SS Cyg", 325.83, 43.59, 0.5, 15.0, timeout_s=60)
+        self.assertEqual(seen.get("timeout"), 60.0)
 
 
 class GaiaConeSearchArityTest(unittest.TestCase):

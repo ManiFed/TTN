@@ -84,6 +84,50 @@ class GatherComparisonStarsTest(unittest.TestCase):
         self.assertTrue(any(s["mag_v"] == 11 for s in res))
 
 
+    def test_aavso_timeout_continues_to_apass_gaia(self):
+        """VSP timeout/empty must not abort the catalog chain (SS Cyg wall)."""
+        calls = []
+
+        def boom(*a, **k):
+            calls.append("aavso")
+            raise TimeoutError("VSP timed out after 45s")
+
+        P._get_comparison_stars_aavso = boom
+        P._get_comparison_stars_apass = lambda *a, **k: (
+            calls.append("apass") or [
+                {"ra_deg": 325.8, "dec_deg": 43.6, "mag_v": 12.0, "mag_err": 0.05},
+                {"ra_deg": 325.9, "dec_deg": 43.5, "mag_v": 12.5, "mag_err": 0.05},
+                {"ra_deg": 325.7, "dec_deg": 43.7, "mag_v": 13.0, "mag_err": 0.05},
+            ])
+        P._get_comparison_stars_gaia = lambda *a, **k: (
+            calls.append("gaia") or [
+                {"ra_deg": 325.85, "dec_deg": 43.55, "mag_v": 13.5, "mag_err": 0.1},
+            ])
+
+        res = P._gather_comparison_stars(
+            "SS Cyg", 325.83, 43.59, 0.5, 15,
+            ["aavso", "apass", "gaia"], target_count=8,
+            vsp_timeout_s=45,
+        )
+        self.assertEqual(calls, ["aavso", "apass", "gaia"])
+        self.assertGreaterEqual(len(res), 3)
+
+    def test_aavso_empty_continues_to_apass(self):
+        calls = []
+        P._get_comparison_stars_aavso = lambda *a, **k: (calls.append("aavso") or [])
+        P._get_comparison_stars_apass = lambda *a, **k: (
+            calls.append("apass") or [
+                {"ra_deg": 1, "dec_deg": 43.6, "mag_v": 12.0},
+                {"ra_deg": 2, "dec_deg": 43.6, "mag_v": 12.5},
+            ])
+        P._get_comparison_stars_gaia = lambda *a, **k: (calls.append("gaia") or [])
+        res = P._gather_comparison_stars(
+            "000-BCP-220", 325.83, 43.59, 0.5, 15,
+            ["aavso", "apass", "gaia"], target_count=8)
+        self.assertEqual(calls, ["aavso", "apass", "gaia"])
+        self.assertEqual(len(res), 2)
+
+
 class MaskedHelperTest(unittest.TestCase):
     def test_masked_detects_missing_cells(self):
         from astropy.table import Table

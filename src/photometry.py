@@ -64,7 +64,7 @@ logger = logging.getLogger("photometry")
 
 # Version stamp recorded in every measurement's provenance block, so a stored
 # measurement can always be traced to the algorithm that produced it.
-PIPELINE_VERSION = "1.2.1"
+PIPELINE_VERSION = "1.2.2"
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -319,10 +319,12 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     # Prefer AUID for VSP star= when both name and AUID are configured — VSP
     # accepts either, and AUID avoids Manual-RA / alias confusion (#79/#89).
     vsp_id = override_auid or target_name
+    vsp_timeout_s = float(phot_cfg.get("vsp_timeout_s", 45))
     comp_stars = _gather_comparison_stars(
         vsp_id, ra_deg, dec_deg, field_radius_deg, mag_limit,
         catalogs, target_count,
         comparison_star_file=str(phot_cfg.get("comparison_star_file", "") or ""),
+        vsp_timeout_s=vsp_timeout_s,
     )
 
     if not target_on_frame:
@@ -1220,6 +1222,7 @@ def _gather_comparison_stars(
     catalogs,
     target_count: int,
     comparison_star_file: str = "",
+    vsp_timeout_s: float = 45.0,
 ) -> list:
     """
     Query the configured catalogs in order, accumulating de-duplicated
@@ -1231,6 +1234,9 @@ def _gather_comparison_stars(
     auditable comparison sequence).  Unknown names are skipped with a warning.
     Order matters — earlier catalogs win on duplicates, so list
     curated/most-reliable photometry first.
+
+    A timeout or empty result from an earlier catalog (e.g. AAVSO VSP) never
+    aborts the chain — later catalogs such as APASS/Gaia still run.
     """
     comp_stars: list = []
     for raw in catalogs:
@@ -1244,7 +1250,8 @@ def _gather_comparison_stars(
                     field_radius_deg, mag_limit)
             elif cat == "aavso":
                 new = _get_comparison_stars_aavso(
-                    target_name, ra_deg, dec_deg, field_radius_deg, mag_limit)
+                    target_name, ra_deg, dec_deg, field_radius_deg, mag_limit,
+                    timeout_s=vsp_timeout_s)
             elif cat == "apass":
                 new = _get_comparison_stars_apass(
                     ra_deg, dec_deg, field_radius_deg, mag_limit)
@@ -1258,7 +1265,13 @@ def _gather_comparison_stars(
                 logger.warning("Unknown comparison catalog '%s' — skipping", cat)
                 continue
         except Exception as exc:
-            logger.warning("Comparison catalog '%s' query failed: %s", cat, exc)
+            # Timeout / network / parse errors must not stop APASS/Gaia.
+            logger.warning("Comparison catalog '%s' query failed: %s — continuing",
+                           cat, exc)
+            continue
+
+        if not new:
+            logger.info("Catalog %s: no stars — continuing to next catalog", cat)
             continue
 
         before = len(comp_stars)
@@ -1369,10 +1382,16 @@ def _get_comparison_stars_aavso(
     dec_deg: float,
     field_radius_deg: float,
     mag_limit: float,
+    timeout_s: float = 45.0,
 ) -> list:
     """
     Query the AAVSO Variable Star Plotter (VSP) API for comparison stars.
     Returns a list of dicts with ra_deg, dec_deg, mag_v, mag_err.
+
+    ``timeout_s`` defaults to 45s (was 15s) — app.aavso.org is often slow for
+    busy charts like SS Cyg. Per-attempt timeouts/errors continue to the next
+    attempt (star name → RA/Dec); a total miss returns [] so the gather chain
+    can fall through to APASS/Gaia.
     """
     try:
         import requests
@@ -1385,38 +1404,48 @@ def _get_comparison_stars_aavso(
     fov_arcmin = max(15, min(fov_arcmin, 180))
     # Current host is app.aavso.org; the legacy www.../apps/vsp path 400s.
     url = "https://app.aavso.org/vsp/api/chart/"
+    timeout_s = max(5.0, float(timeout_s))
 
     def _query(params: dict):
-        resp = requests.get(url, params=params, timeout=15)
+        resp = requests.get(url, params=params, timeout=timeout_s)
         return resp
 
-    payload = None
-    try:
-        # Prefer star name when given; on 400 (unknown exoplanet etc.) fall back
-        # to the field centre so comparison stars still resolve (issue #69).
-        # Never send star='' / whitespace — VSP returns HTTP 400 for an empty
-        # star param (issue #81 / NodeAgent 1.0.63 Starfront logs).
-        attempts = []
-        star = str(target_name or "").strip()
-        if star:
-            attempts.append({"star": star, "fov": fov_arcmin,
-                             "maglimit": mag_limit, "format": "json"})
-        attempts.append({"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin,
+    # Prefer star name when given; on 400 (unknown exoplanet etc.) fall back
+    # to the field centre so comparison stars still resolve (issue #69).
+    # Never send star='' / whitespace — VSP returns HTTP 400 for an empty
+    # star param (issue #81 / NodeAgent 1.0.63 Starfront logs).
+    # Timeouts are per-attempt: a hung star= query must not skip the RA/Dec
+    # attempt (Starfront SS Cyg / AUID 000-BCP-220 same-night wall).
+    attempts = []
+    star = str(target_name or "").strip()
+    if star:
+        attempts.append({"star": star, "fov": fov_arcmin,
                          "maglimit": mag_limit, "format": "json"})
-        last_status = None
-        for params in attempts:
+    attempts.append({"ra": ra_deg, "dec": dec_deg, "fov": fov_arcmin,
+                     "maglimit": mag_limit, "format": "json"})
+    payload = None
+    last_status = None
+    for params in attempts:
+        try:
             resp = _query(params)
             last_status = resp.status_code
             if resp.status_code == 200:
                 payload = resp.json()
                 break
             logger.warning("AAVSO VSP returned HTTP %d for params=%s",
-                           resp.status_code, {k: params[k] for k in params if k != "format"})
-        if payload is None:
-            logger.warning("AAVSO VSP gave no chart (last HTTP %s)", last_status)
-            return []
-    except Exception as exc:
-        logger.warning("AAVSO VSP request failed: %s", exc)
+                           resp.status_code,
+                           {k: params[k] for k in params if k != "format"})
+        except Exception as exc:
+            # requests.Timeout / ConnectionError / etc. — try next attempt.
+            logger.warning(
+                "AAVSO VSP request failed (timeout=%.0fs) for params=%s: %s",
+                timeout_s,
+                {k: params[k] for k in params if k != "format"},
+                exc,
+            )
+            continue
+    if payload is None:
+        logger.warning("AAVSO VSP gave no chart (last HTTP %s)", last_status)
         return []
 
     def _sexa_to_deg(s: str, is_ra: bool) -> float:
