@@ -306,6 +306,21 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
 
     # ── Step 4: Get comparison stars ──────────────────────────────────────────
     field_radius_deg = float(phot_cfg.get("field_radius", 0.5))
+    # Clamp to short-axis half-FOV when plate scale is known so catalog queries
+    # do not prefer off-frame VSP stars over APASS/Gaia fallthrough.
+    try:
+        scale_as = float(phot_cfg.get("pixel_scale") or 0.0) or 0.0
+        if scale_as <= 0 and wcs is not None:
+            scale_as = float(_wcs_pixel_scale(wcs) or 0.0)
+        if scale_as > 0 and h > 0 and w > 0:
+            short_half = 0.5 * min(h, w) * scale_as / 3600.0
+            if short_half > 0 and field_radius_deg > short_half:
+                logger.info(
+                    "Clamping field_radius %.3f° → short-axis half-FOV %.3f°",
+                    field_radius_deg, short_half)
+                field_radius_deg = short_half
+    except Exception as exc:
+        logger.debug("field_radius short-axis clamp skipped: %s", exc)
     mag_limit        = float(phot_cfg.get("mag_limit", 15.0))
     mag_min          = float(phot_cfg.get("mag_min", 10.0))  # skip bright/saturated stars
 
@@ -319,7 +334,9 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     # Prefer AUID for VSP star= when both name and AUID are configured — VSP
     # accepts either, and AUID avoids Manual-RA / alias confusion (#79/#89).
     vsp_id = override_auid or target_name
-    vsp_timeout_s = float(phot_cfg.get("vsp_timeout_s", 45))
+    vsp_timeout_s = float(phot_cfg.get("vsp_timeout_s", 60) or 60)
+    if vsp_timeout_s <= 0:
+        vsp_timeout_s = 60.0
     comp_stars = _gather_comparison_stars(
         vsp_id, ra_deg, dec_deg, field_radius_deg, mag_limit,
         catalogs, target_count,
@@ -1222,7 +1239,7 @@ def _gather_comparison_stars(
     catalogs,
     target_count: int,
     comparison_star_file: str = "",
-    vsp_timeout_s: float = 45.0,
+    vsp_timeout_s: float = 60.0,
 ) -> list:
     """
     Query the configured catalogs in order, accumulating de-duplicated
@@ -1382,13 +1399,13 @@ def _get_comparison_stars_aavso(
     dec_deg: float,
     field_radius_deg: float,
     mag_limit: float,
-    timeout_s: float = 45.0,
+    timeout_s: float = 60.0,
 ) -> list:
     """
     Query the AAVSO Variable Star Plotter (VSP) API for comparison stars.
     Returns a list of dicts with ra_deg, dec_deg, mag_v, mag_err.
 
-    ``timeout_s`` defaults to 45s (was 15s) — app.aavso.org is often slow for
+    ``timeout_s`` defaults to 60s (was 15s, then 45s) — app.aavso.org is often slow for
     busy charts like SS Cyg. Per-attempt timeouts/errors continue to the next
     attempt (star name → RA/Dec); a total miss returns [] so the gather chain
     can fall through to APASS/Gaia.

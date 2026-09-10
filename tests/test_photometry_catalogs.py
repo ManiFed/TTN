@@ -94,7 +94,7 @@ class VspClientTest(unittest.TestCase):
             self.assertIn("ra", calls[0])
             self.assertIn("dec", calls[0])
 
-    def test_default_timeout_is_45s(self):
+    def test_default_timeout_is_60s(self):
         seen = {}
 
         class Resp:
@@ -110,7 +110,7 @@ class VspClientTest(unittest.TestCase):
             import requests as req_mod
             with patch.object(req_mod, "get", side_effect=fake_get):
                 P._get_comparison_stars_aavso("SS Cyg", 325.83, 43.59, 0.5, 15.0)
-        self.assertEqual(seen.get("timeout"), 45.0)
+        self.assertEqual(seen.get("timeout"), 60.0)
 
     def test_star_timeout_still_tries_radec_attempt(self):
         """Per-attempt timeout must not abort the RA/Dec fallback."""

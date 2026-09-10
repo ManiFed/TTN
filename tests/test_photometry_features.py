@@ -90,7 +90,7 @@ class GatherComparisonStarsTest(unittest.TestCase):
 
         def boom(*a, **k):
             calls.append("aavso")
-            raise TimeoutError("VSP timed out after 45s")
+            raise TimeoutError("VSP timed out after 60s")
 
         P._get_comparison_stars_aavso = boom
         P._get_comparison_stars_apass = lambda *a, **k: (
@@ -107,7 +107,7 @@ class GatherComparisonStarsTest(unittest.TestCase):
         res = P._gather_comparison_stars(
             "SS Cyg", 325.83, 43.59, 0.5, 15,
             ["aavso", "apass", "gaia"], target_count=8,
-            vsp_timeout_s=45,
+            vsp_timeout_s=60,
         )
         self.assertEqual(calls, ["aavso", "apass", "gaia"])
         self.assertGreaterEqual(len(res), 3)
