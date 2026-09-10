@@ -814,13 +814,14 @@ def derive_params(spec: TelescopeSpec) -> dict:
 
       pixel_scale_arcsec = 206.265 · pixel_size_µm / focal_length_mm
       fov_deg            = pixel_scale · sensor_width_px / 3600
+      short_fov_deg      = pixel_scale · min(sensor_w, sensor_h) / 3600
       focal_ratio        = focal_length / aperture
       mag_limit (faint)  = 15.0 + 5·log10(aperture/50) + (0.5 if cooled)
                            — faint reach grows with light grasp (∝ aperture²)
       mag_min  (sat. cut)= 10.0 + 2.5·log10((aperture/50)² · (max_exp/30))
                            — more light / longer subs saturate fainter stars,
                              so the bright comp-star cutoff moves faint-ward
-      field_radius_deg   = max(0.25, 0.4 · fov_deg) — comp search ~⅖ of the FOV
+      field_radius_deg   = max(0.25, 0.5 · short_fov_deg) — ≤ short-axis half-FOV
       fwhm_fallback_px   = clamp(9.6 / pixel_scale, 2.0, 6.0) — last-resort PSF
                            width when DAOStarFinder finds nothing (S50 → 4.0)
 
@@ -852,8 +853,12 @@ def derive_params(spec: TelescopeSpec) -> dict:
         if spec.sensor_w_px:
             out["fov_deg"] = round(pixel_scale * spec.sensor_w_px / 3600.0, 3)
         out["fwhm_fallback_px"] = round(_clamp(9.6 / pixel_scale, 2.0, 6.0), 2)
-        if "fov_deg" in out:
-            out["field_radius_deg"] = round(max(0.25, 0.4 * out["fov_deg"]), 2)
+        # Bound catalog radius by short frame axis so VSP comps stay on-chip
+        # and do not fill target_count before APASS/Gaia fallthrough.
+        short_px = min(p for p in (spec.sensor_w_px, spec.sensor_h_px) if p)
+        if short_px:
+            short_fov = pixel_scale * short_px / 3600.0
+            out["field_radius_deg"] = round(max(0.25, 0.5 * short_fov), 2)
     if ap > 0:
         out["focal_ratio"] = round(fl / ap, 2) if ap else 0.0
         light_grasp = (ap / 50.0) ** 2

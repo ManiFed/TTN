@@ -98,7 +98,12 @@ photometry:
   comparison_star_file: ''
   comparison_target_count: 8
   enabled: true
-  field_radius: 0.5
+  # Keep ≤ short-axis half-FOV (Seestar 1920×1080 ≈ 0.36° vertical half).
+  # Larger radii can fill comparison_target_count with off-frame VSP stars
+  # and suppress APASS/Gaia fallthrough (Codex P1 on #94).
+  field_radius: 0.36
+  # AAVSO VSP chart API — Starfront often needs >15s; fallthrough uses APASS/Gaia.
+  vsp_timeout_s: 60
   filter_name: CV
   fits_export:
     enabled: true
