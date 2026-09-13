@@ -2477,13 +2477,11 @@ def api_me_attach_node(user):
     )
     if ghost:
         info["node_id"] = ghost["node_id"]
-        info["api_key"] = db.query_one(
-            "SELECT api_key FROM nodes WHERE node_id = %s",
-            (ghost["node_id"],))["api_key"]
 
     try:
         creds = registry.register_node(
-            info, _config.get("light_pollution", {}).get("api_key", ""))
+            info, _config.get("light_pollution", {}).get("api_key", ""),
+            trusted_relink=bool(ghost))
     except (ValueError, TypeError) as exc:
         logger.warning("Node link failed for member %s: %s", user["user_id"], exc)
         return jsonify({"error": "could not link telescope — check the details and try again"}), 400
@@ -2926,7 +2924,7 @@ def _ensure_contributor_node(user) -> str:
         "INSERT INTO nodes (node_id, api_key, owner_name, latitude, longitude, "
         " tier, mount_type, telescope_model, status, registered_at, last_heartbeat) "
         "VALUES (%s,%s,%s,0,0,0,'none','Contributed frames','contributor',%s,%s)",
-        (node_id, secrets.token_urlsafe(32),
+        (node_id, registry._hash_api_key(secrets.token_urlsafe(32)),
          str(user.get("display_name") or ""), now, now))
     db.execute(
         "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (%s,%s,%s)",
