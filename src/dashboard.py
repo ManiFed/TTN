@@ -4012,7 +4012,7 @@ def api_cloud_credentials():
                                     allow_identity_change=allow_identity_change)
     except ValueError as exc:
         logger.warning("install_credentials refused: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 409
+        return jsonify({"ok": False, "error": "invalid credentials request"}), 409
     except Exception:
         logger.exception("install_credentials failed")
         return jsonify({"ok": False, "error": "could not install credentials"}), 500
