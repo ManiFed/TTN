@@ -171,6 +171,16 @@ _state_lock = threading.Lock()
 _PHOT_QUEUE_MAX = 50
 _phot_queue: queue.Queue = queue.Queue(maxsize=_PHOT_QUEUE_MAX)
 
+# ── SNR-collapse tracking (issue #96) ───────────────────────────────────────
+# Per-target memory of the last quality=poor attempt, so a second poor result
+# can be classified against the first (SNR got worse despite a longer
+# exposure ⇒ collapse, not "needed more time"). Cleared as soon as a target
+# stops coming back poor (a real pass, or a non-poor rejection upstream).
+_poor_quality_lock = threading.Lock()
+_poor_quality_last: dict[str, dict] = {}     # target -> {"snr":, "exp_dur":}
+_poor_quality_retries: dict[str, int] = {}   # target -> auto-recenter attempts used
+_SNR_COLLAPSE_MAX_RETRIES = 1                # one automatic recenter+retry per streak
+
 
 def _normalize_target_override(*candidates) -> str:
     """First non-empty target name / AUID from caller-supplied candidates."""
@@ -895,6 +905,148 @@ def _maybe_aavso_submit(result: dict, cfg: dict) -> dict:
     return sub
 
 
+def _read_exptime_s(fits_path: str) -> Optional[float]:
+    """Best-effort EXPTIME (seconds) from a FITS header, or None."""
+    try:
+        from astropy.io import fits as _fits
+        with _fits.open(fits_path, memmap=False,
+                        ignore_missing_simple=True) as hdul:
+            value = hdul[0].header.get("EXPTIME")
+            return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _handle_poor_quality_result(result: dict, fits_path: str, cfg: dict) -> None:
+    """Issue #96: quality=poor must not just mean "try a longer exposure".
+
+    A poor result is classified against the previous poor attempt on the
+    same target (if any):
+
+    - "collapse" (SNR near zero, or SNR got WORSE after a longer exposure)
+      means a failed lock / empty or wrong field. The current pointing is
+      abandoned, the mount is recentered on the named target/AUID using the
+      existing centering primitive (the same one behind node_center_start /
+      /api/center/run), and one more named frame is taken at the *original*
+      exposure — not a longer one.
+    - "borderline" (a real but faint star) is left alone: more integration
+      time / more frames from the caller is fine, still subject to the
+      unmodified quality gate in evaluate_quality().
+
+    This never submits quality=poor to AAVSO and never touches the quality
+    gate itself — _maybe_aavso_submit()/_aavso_submit() already refuse a
+    "poor" flag on their own, so last_submission stays "skipped" here
+    regardless of what this function does.
+    """
+    target = str(result.get("target_name") or "").strip()
+    if not target or result.get("quality_flag") != "poor":
+        return
+
+    snr = float(result.get("snr", 0.0))
+    exp_dur = _read_exptime_s(fits_path)
+
+    with _poor_quality_lock:
+        prior = _poor_quality_last.get(target)
+        prior_snr = prior.get("snr") if prior else None
+        prior_exp_dur = prior.get("exp_dur") if prior else None
+        _poor_quality_last[target] = {"snr": snr, "exp_dur": exp_dur}
+        retries_used = _poor_quality_retries.get(target, 0)
+
+    from src.photometry import classify_snr_failure
+    classification = classify_snr_failure(snr, exp_dur, prior_snr, prior_exp_dur)
+    logger.info(
+        "Quality=poor for %s: SNR=%.2f (prior=%s) exp=%ss (prior=%ss) → %s",
+        target, snr, prior_snr, exp_dur, prior_exp_dur, classification,
+    )
+    if classification != "collapse":
+        return  # borderline-faint: extra integration/frames is fine as-is
+
+    if retries_used >= _SNR_COLLAPSE_MAX_RETRIES:
+        logger.warning(
+            "SNR collapse on %s — auto recenter/retry budget (%d) already used "
+            "this streak; leaving frame skipped rather than looping",
+            target, _SNR_COLLAPSE_MAX_RETRIES,
+        )
+        return
+
+    with _poor_quality_lock:
+        _poor_quality_retries[target] = retries_used + 1
+
+    _telemetry.event(
+        "snr_collapse_detected", severity="warning", target=target,
+        detail={"snr": snr, "exp_dur": exp_dur,
+                "prior_snr": prior_snr, "prior_exp_dur": prior_exp_dur},
+    )
+    _recenter_and_retry_target(target, result, cfg, retry_exp_dur=prior_exp_dur or exp_dur)
+
+
+def _recenter_and_retry_target(target: str, result: dict, cfg: dict,
+                               retry_exp_dur: Optional[float]) -> None:
+    """Abort the dead pointing, recenter, and take one more named frame.
+
+    Reuses `_run_centering_bg` — the same plate-solve/correct loop behind
+    node_center_start / /api/center/run — rather than inventing new centering
+    logic. Retakes the frame at the ORIGINAL exposure duration so a bad
+    pointing doesn't just get a longer stare next time.
+    """
+    if _tel is None or _cam is None:
+        logger.warning(
+            "SNR collapse on %s but telescope/camera not connected — cannot recenter",
+            target,
+        )
+        return
+
+    tgt_cfg = (cfg.get("photometry") or {}).get("target") or {}
+    ra_deg = tgt_cfg.get("ra_deg")
+    dec_deg = tgt_cfg.get("dec_deg")
+    if ra_deg is None or dec_deg is None:
+        ra_deg = result.get("ra_deg")
+        dec_deg = result.get("dec_deg")
+    if ra_deg is None or dec_deg is None:
+        logger.warning(
+            "SNR collapse on %s but no target coordinates available — cannot recenter",
+            target,
+        )
+        return
+
+    phot = cfg.get("photometry") or {}
+    logger.warning(
+        "SNR collapse on %s — aborting pointing and recentering before retrying", target,
+    )
+    try:
+        _run_centering_bg(
+            float(ra_deg), float(dec_deg),
+            exposure_s=float(phot.get("centering_exposure_s", 3.0)),
+            tolerance_arcmin=float(phot.get("centering_tolerance_arcmin", 2.0)),
+            max_iterations=int(phot.get("centering_max_iterations", 5)),
+            settle_s=float(phot.get("centering_settle_s", 2.0)),
+        )
+    except Exception as exc:
+        logger.error("Recenter after SNR collapse failed for %s: %s", target, exc)
+        return
+
+    exp_dur = float(retry_exp_dur or 30.0)
+    safe_tgt = "".join(
+        c if c.isalnum() or c in "-_ " else "_" for c in target
+    ).strip()
+    retry_path = str(
+        pathlib.Path("data") / "fits" /
+        f"{safe_tgt}_recenter_retry_{int(time.time())}.fits"
+    )
+    try:
+        with _device_lock:
+            _cam.expose(duration=exp_dur, light=True, cancel_check=lambda: False)
+            _capture_image(fits_path=retry_path, exp_dur=exp_dur, target=target)
+    except Exception as exc:
+        logger.error("Retry exposure after recenter failed for %s: %s", target, exc)
+        return
+
+    if pathlib.Path(retry_path).exists():
+        _enqueue_photometry(retry_path, target_name=target)
+    else:
+        logger.warning("Retry exposure for %s produced no FITS file", target)
+
+
 def _frame_has_target(fits_path: str, cfg: dict) -> bool:
     """True when the frame (or config) names a target for differential
     photometry. Contributor-mode frames from NINA/ASIAIR capture dirs
@@ -1057,6 +1209,16 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                 result["target_name"], result["magnitude"],
                 result["uncertainty"], result["snr"], result["quality_flag"],
             )
+            if result.get("quality_flag") == "poor":
+                _handle_poor_quality_result(result, fits_path, cfg)
+            else:
+                # A pass (or merely "acceptable") ends any collapse streak so
+                # a later poor result on this target starts fresh (issue #96).
+                tgt = str(result.get("target_name") or "").strip()
+                if tgt:
+                    with _poor_quality_lock:
+                        _poor_quality_last.pop(tgt, None)
+                        _poor_quality_retries.pop(tgt, None)
             export_cfg = cfg.get("photometry", {}).get("fits_export", {})
             if export_cfg.get("enabled", True):
                 export_path = _export_fits(fits_path, result, cfg)
