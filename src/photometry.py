@@ -833,6 +833,45 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
     return "good", reasons
 
 
+def classify_snr_failure(
+    snr: float,
+    exp_dur: Optional[float] = None,
+    prior_snr: Optional[float] = None,
+    prior_exp_dur: Optional[float] = None,
+    collapse_snr_floor: float = 2.0,
+) -> str:
+    """Classify *why* a quality=poor frame failed on SNR, for issue #96.
+
+    A quality=poor result can mean two very different things:
+
+    - "collapse": the field is empty, the pointing is wrong, or the lock
+      failed. Signature: SNR is near zero, or SNR got WORSE despite a
+      *longer* exposure (more integration time should only ever help a real
+      but faint star). The fix is to abort the pointing and recenter, not to
+      linger on a dead field with an even longer exposure.
+    - "borderline": a real but faint star. SNR is low but plausible, and
+      either there is no prior attempt to compare against or SNR is moving
+      the right direction. More integration time / more frames is fine here
+      — it's still subject to the quality gate.
+
+    ``exp_dur``/``prior_exp_dur`` are exposure durations in seconds for the
+    current and previous attempt on the same target (``None`` when unknown).
+    Never used to weaken ``evaluate_quality`` itself — this only decides the
+    retry strategy for a result that has already been flagged poor.
+    """
+    if snr <= collapse_snr_floor:
+        return "collapse"
+    if (
+        prior_snr is not None
+        and prior_exp_dur is not None
+        and exp_dur is not None
+        and exp_dur > prior_exp_dur
+        and snr <= prior_snr
+    ):
+        return "collapse"
+    return "borderline"
+
+
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────
 
 def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
@@ -1088,9 +1127,36 @@ def _inject_wcs(fits_path: str, wcs_path: str) -> bool:
         return False
 
 
+class AstapResult:
+    """Outcome of an ASTAP invocation.
+
+    Behaves as a plain bool in the existing ``if _run_astap(...):`` call
+    sites (photometry pipeline), while also carrying the human-readable
+    failure reason (e.g. ASTAP's own "No solution found!") so callers that
+    need it — the auto-centering status/error field, see issue #79 — can
+    surface it instead of a generic "solve failed" message.
+    """
+    __slots__ = ("ok", "message")
+
+    def __init__(self, ok: bool, message: Optional[str] = None):
+        self.ok = ok
+        self.message = message
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def __repr__(self) -> str:
+        return f"AstapResult(ok={self.ok!r}, message={self.message!r})"
+
+
 def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
-               astap_path: str, search_radius: float) -> bool:
-    """Call ASTAP CLI to plate-solve and write WCS back into the FITS file."""
+               astap_path: str, search_radius: float) -> AstapResult:
+    """Call ASTAP CLI to plate-solve and write WCS back into the FITS file.
+
+    Returns an ``AstapResult`` — truthy on success, falsy on failure — whose
+    ``.message`` carries the reason for a failure (missing binary, timeout,
+    or ASTAP's own stderr/stdout such as "No solution found!").
+    """
     # ASTAP takes RA in decimal hours, SPD (South Polar Distance) in degrees
     ra_hours = ra_deg / 15.0
     spd      = 90.0 + dec_deg   # SPD = 90 + dec
@@ -1104,30 +1170,38 @@ def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
         "-update",              # write WCS into FITS header in-place
     ]
     try:
+        # A hard timeout is essential here: this call runs inside the
+        # auto-centering background thread (src/dashboard.py
+        # _run_centering_bg), and a hung subprocess with no timeout would
+        # leave centering state stuck at running=True forever (issue #79).
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=90
         )
         if result.returncode == 0:
             logger.info("ASTAP plate solve succeeded")
-            return True
+            return AstapResult(True)
         else:
-            logger.error("ASTAP failed (rc=%d): %s",
-                         result.returncode, (result.stderr or result.stdout)[:300])
-            return False
+            detail = (result.stderr or result.stdout or "").strip()[:300]
+            logger.error("ASTAP failed (rc=%d): %s", result.returncode, detail)
+            message = f"ASTAP failed (rc={result.returncode}): {detail}" if detail \
+                else f"ASTAP failed (rc={result.returncode})"
+            return AstapResult(False, message)
     except FileNotFoundError:
-        logger.error(
-            "ASTAP not found at '%s'. "
-            "Download from https://www.hnsky.org/astap.htm and set "
-            "photometry.astap_path in config.yaml",
-            astap_path,
+        message = (
+            f"ASTAP not found at '{astap_path}'. Download from "
+            "https://www.hnsky.org/astap.htm and set photometry.astap_path "
+            "in config.yaml"
         )
-        return False
+        logger.error(message)
+        return AstapResult(False, message)
     except subprocess.TimeoutExpired:
-        logger.error("ASTAP timed out after 90 s")
-        return False
+        message = "ASTAP timed out after 90 s"
+        logger.error(message)
+        return AstapResult(False, message)
     except Exception as exc:
-        logger.error("ASTAP error: %s", exc)
-        return False
+        message = f"ASTAP error: {exc}"
+        logger.error(message)
+        return AstapResult(False, message)
 
 
 # ── Step 3 helpers: FWHM estimation ───────────────────────────────────────────

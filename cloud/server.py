@@ -1560,7 +1560,7 @@ def api_admin_aavso_batches():
     limit = min(int(request.args.get("limit", 20)), 100)
     rows = db.query(
         """SELECT id, submitted_at, n_obs, status, accepted, rejected, message,
-                  manually_submitted, manually_submitted_at,
+                  manually_submitted, manually_submitted_at, response_path,
                   (file_text <> '') AS has_text
              FROM aavso_batches
             ORDER BY submitted_at DESC LIMIT %s""",
@@ -2251,8 +2251,9 @@ def api_me_node_night(user, node_id, night):
         return error
     try:
         night = nightly.validate_night(node, night)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        logger.warning("Invalid night value for node %s: %r", node_id, night, exc_info=True)
+        return jsonify({"error": "Invalid night value."}), 400
     return jsonify(nightly.resolve(node, night=night))
 
 
@@ -2265,8 +2266,14 @@ def api_me_node_night_respond(user, node_id, night):
         return error
     try:
         night = nightly.validate_night(node, night)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        logger.warning(
+            "Invalid night in member response for node %s: %r",
+            node_id,
+            night,
+            exc_info=True,
+        )
+        return jsonify({"error": "Invalid night value."}), 400
     body = _json_body()
     try:
         hours = body.get("research_hours")
@@ -2470,13 +2477,11 @@ def api_me_attach_node(user):
     )
     if ghost:
         info["node_id"] = ghost["node_id"]
-        info["api_key"] = db.query_one(
-            "SELECT api_key FROM nodes WHERE node_id = %s",
-            (ghost["node_id"],))["api_key"]
 
     try:
         creds = registry.register_node(
-            info, _config.get("light_pollution", {}).get("api_key", ""))
+            info, _config.get("light_pollution", {}).get("api_key", ""),
+            trusted_relink=bool(ghost))
     except (ValueError, TypeError) as exc:
         logger.warning("Node link failed for member %s: %s", user["user_id"], exc)
         return jsonify({"error": "could not link telescope — check the details and try again"}), 400
@@ -2919,7 +2924,7 @@ def _ensure_contributor_node(user) -> str:
         "INSERT INTO nodes (node_id, api_key, owner_name, latitude, longitude, "
         " tier, mount_type, telescope_model, status, registered_at, last_heartbeat) "
         "VALUES (%s,%s,%s,0,0,0,'none','Contributed frames','contributor',%s,%s)",
-        (node_id, secrets.token_urlsafe(32),
+        (node_id, registry._hash_api_key(secrets.token_urlsafe(32)),
          str(user.get("display_name") or ""), now, now))
     db.execute(
         "INSERT INTO node_members (node_id, user_id, claimed_at) VALUES (%s,%s,%s)",

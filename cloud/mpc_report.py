@@ -16,7 +16,6 @@ common source of malformed 80-col submissions.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -167,10 +166,8 @@ def generate_report(cand_id: int, config: dict) -> Optional[dict]:
     except ValueError:
         raise ValueError(f"Unsafe report date directory outside root: {date_dir}")
     date_dir.mkdir(parents=True, exist_ok=True)
-    designation = cand.get("designation") or f"candidate_{cand_id}"
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in designation)
-    safe_name = os.path.basename(safe_name) or f"candidate_{cand_id}"
-    dest = (date_dir / f"{safe_name}.psv").resolve()
+    file_stem = f"candidate_{int(cand_id)}"
+    dest = (date_dir / f"{file_stem}.psv").resolve()
     if dest.parent != date_dir:
         raise ValueError(f"Unsafe report destination outside root: {dest}")
     try:

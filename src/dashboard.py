@@ -117,6 +117,8 @@ _state: dict[str, Any] = {
         "exposing":         False,
         "exposure_start_ts": None,
         "exposure_duration": None,
+        "exposure_readout_timeout": None,
+        "exposure_generation": 0,
     },
     "focuser": {
         "enabled":   False,
@@ -170,6 +172,16 @@ _state_lock = threading.Lock()
 # measurements while the previous plate-solve is still running.
 _PHOT_QUEUE_MAX = 50
 _phot_queue: queue.Queue = queue.Queue(maxsize=_PHOT_QUEUE_MAX)
+
+# ── SNR-collapse tracking (issue #96) ───────────────────────────────────────
+# Per-target memory of the last quality=poor attempt, so a second poor result
+# can be classified against the first (SNR got worse despite a longer
+# exposure ⇒ collapse, not "needed more time"). Cleared as soon as a target
+# stops coming back poor (a real pass, or a non-poor rejection upstream).
+_poor_quality_lock = threading.Lock()
+_poor_quality_last: dict[str, dict] = {}     # target -> {"snr":, "exp_dur":}
+_poor_quality_retries: dict[str, int] = {}   # target -> auto-recenter attempts used
+_SNR_COLLAPSE_MAX_RETRIES = 1                # one automatic recenter+retry per streak
 
 
 def _normalize_target_override(*candidates) -> str:
@@ -435,6 +447,35 @@ _device_lock = threading.RLock()
 # Set to request cancellation of an in-flight manual exposure.  Cleared at the
 # start of each manual exposure.
 _expose_cancel = threading.Event()
+
+# How much extra wall-clock time beyond the exposure's own duration + readout
+# budget we allow before treating the "exposing" latch as stuck rather than
+# genuinely in progress (issue #95).  Camera.expose() already fails fast with
+# its own TimeoutError at duration+readout_timeout, so this is pure margin for
+# that exception to propagate and the worker thread's `finally` to run before
+# we conclude the latch was orphaned (e.g. by a hang in a device call that
+# never raised).
+_STALE_EXPOSURE_GRACE_S = 60.0
+
+
+def _exposure_lock_is_stale(cam_state: dict) -> bool:
+    """True if ``exposing`` has been set far longer than any real capture
+    started at ``exposure_start_ts`` could plausibly still be running.
+
+    A healthy capture is never flagged: the budget is the exposure's own
+    duration plus its readout timeout plus a generous grace period, so this
+    only fires once Camera.expose()'s own fail-fast timeout should already
+    have fired and unwound the worker thread (issue #95).
+    """
+    start = cam_state.get("exposure_start_ts")
+    if start is None:
+        # exposing=True with no timestamp is an inconsistent state that can
+        # only be left over from a previous bug — never block on it.
+        return True
+    duration = cam_state.get("exposure_duration") or 0.0
+    readout_timeout = cam_state.get("exposure_readout_timeout") or 120.0
+    budget = float(duration) + float(readout_timeout) + _STALE_EXPOSURE_GRACE_S
+    return (time.time() - start) > budget
 
 _pier_cam_frame: Optional[bytes] = None
 _pier_cam_frame_lock = threading.Lock()
@@ -895,6 +936,148 @@ def _maybe_aavso_submit(result: dict, cfg: dict) -> dict:
     return sub
 
 
+def _read_exptime_s(fits_path: str) -> Optional[float]:
+    """Best-effort EXPTIME (seconds) from a FITS header, or None."""
+    try:
+        from astropy.io import fits as _fits
+        with _fits.open(fits_path, memmap=False,
+                        ignore_missing_simple=True) as hdul:
+            value = hdul[0].header.get("EXPTIME")
+            return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _handle_poor_quality_result(result: dict, fits_path: str, cfg: dict) -> None:
+    """Issue #96: quality=poor must not just mean "try a longer exposure".
+
+    A poor result is classified against the previous poor attempt on the
+    same target (if any):
+
+    - "collapse" (SNR near zero, or SNR got WORSE after a longer exposure)
+      means a failed lock / empty or wrong field. The current pointing is
+      abandoned, the mount is recentered on the named target/AUID using the
+      existing centering primitive (the same one behind node_center_start /
+      /api/center/run), and one more named frame is taken at the *original*
+      exposure — not a longer one.
+    - "borderline" (a real but faint star) is left alone: more integration
+      time / more frames from the caller is fine, still subject to the
+      unmodified quality gate in evaluate_quality().
+
+    This never submits quality=poor to AAVSO and never touches the quality
+    gate itself — _maybe_aavso_submit()/_aavso_submit() already refuse a
+    "poor" flag on their own, so last_submission stays "skipped" here
+    regardless of what this function does.
+    """
+    target = str(result.get("target_name") or "").strip()
+    if not target or result.get("quality_flag") != "poor":
+        return
+
+    snr = float(result.get("snr", 0.0))
+    exp_dur = _read_exptime_s(fits_path)
+
+    with _poor_quality_lock:
+        prior = _poor_quality_last.get(target)
+        prior_snr = prior.get("snr") if prior else None
+        prior_exp_dur = prior.get("exp_dur") if prior else None
+        _poor_quality_last[target] = {"snr": snr, "exp_dur": exp_dur}
+        retries_used = _poor_quality_retries.get(target, 0)
+
+    from src.photometry import classify_snr_failure
+    classification = classify_snr_failure(snr, exp_dur, prior_snr, prior_exp_dur)
+    logger.info(
+        "Quality=poor for %s: SNR=%.2f (prior=%s) exp=%ss (prior=%ss) → %s",
+        target, snr, prior_snr, exp_dur, prior_exp_dur, classification,
+    )
+    if classification != "collapse":
+        return  # borderline-faint: extra integration/frames is fine as-is
+
+    if retries_used >= _SNR_COLLAPSE_MAX_RETRIES:
+        logger.warning(
+            "SNR collapse on %s — auto recenter/retry budget (%d) already used "
+            "this streak; leaving frame skipped rather than looping",
+            target, _SNR_COLLAPSE_MAX_RETRIES,
+        )
+        return
+
+    with _poor_quality_lock:
+        _poor_quality_retries[target] = retries_used + 1
+
+    _telemetry.event(
+        "snr_collapse_detected", severity="warning", target=target,
+        detail={"snr": snr, "exp_dur": exp_dur,
+                "prior_snr": prior_snr, "prior_exp_dur": prior_exp_dur},
+    )
+    _recenter_and_retry_target(target, result, cfg, retry_exp_dur=prior_exp_dur or exp_dur)
+
+
+def _recenter_and_retry_target(target: str, result: dict, cfg: dict,
+                               retry_exp_dur: Optional[float]) -> None:
+    """Abort the dead pointing, recenter, and take one more named frame.
+
+    Reuses `_run_centering_bg` — the same plate-solve/correct loop behind
+    node_center_start / /api/center/run — rather than inventing new centering
+    logic. Retakes the frame at the ORIGINAL exposure duration so a bad
+    pointing doesn't just get a longer stare next time.
+    """
+    if _tel is None or _cam is None:
+        logger.warning(
+            "SNR collapse on %s but telescope/camera not connected — cannot recenter",
+            target,
+        )
+        return
+
+    tgt_cfg = (cfg.get("photometry") or {}).get("target") or {}
+    ra_deg = tgt_cfg.get("ra_deg")
+    dec_deg = tgt_cfg.get("dec_deg")
+    if ra_deg is None or dec_deg is None:
+        ra_deg = result.get("ra_deg")
+        dec_deg = result.get("dec_deg")
+    if ra_deg is None or dec_deg is None:
+        logger.warning(
+            "SNR collapse on %s but no target coordinates available — cannot recenter",
+            target,
+        )
+        return
+
+    phot = cfg.get("photometry") or {}
+    logger.warning(
+        "SNR collapse on %s — aborting pointing and recentering before retrying", target,
+    )
+    try:
+        _run_centering_bg(
+            float(ra_deg), float(dec_deg),
+            exposure_s=float(phot.get("centering_exposure_s", 3.0)),
+            tolerance_arcmin=float(phot.get("centering_tolerance_arcmin", 2.0)),
+            max_iterations=int(phot.get("centering_max_iterations", 5)),
+            settle_s=float(phot.get("centering_settle_s", 2.0)),
+        )
+    except Exception as exc:
+        logger.error("Recenter after SNR collapse failed for %s: %s", target, exc)
+        return
+
+    exp_dur = float(retry_exp_dur or 30.0)
+    safe_tgt = "".join(
+        c if c.isalnum() or c in "-_ " else "_" for c in target
+    ).strip()
+    retry_path = str(
+        pathlib.Path("data") / "fits" /
+        f"{safe_tgt}_recenter_retry_{int(time.time())}.fits"
+    )
+    try:
+        with _device_lock:
+            _cam.expose(duration=exp_dur, light=True, cancel_check=lambda: False)
+            _capture_image(fits_path=retry_path, exp_dur=exp_dur, target=target)
+    except Exception as exc:
+        logger.error("Retry exposure after recenter failed for %s: %s", target, exc)
+        return
+
+    if pathlib.Path(retry_path).exists():
+        _enqueue_photometry(retry_path, target_name=target)
+    else:
+        logger.warning("Retry exposure for %s produced no FITS file", target)
+
+
 def _frame_has_target(fits_path: str, cfg: dict) -> bool:
     """True when the frame (or config) names a target for differential
     photometry. Contributor-mode frames from NINA/ASIAIR capture dirs
@@ -1057,6 +1240,16 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                 result["target_name"], result["magnitude"],
                 result["uncertainty"], result["snr"], result["quality_flag"],
             )
+            if result.get("quality_flag") == "poor":
+                _handle_poor_quality_result(result, fits_path, cfg)
+            else:
+                # A pass (or merely "acceptable") ends any collapse streak so
+                # a later poor result on this target starts fresh (issue #96).
+                tgt = str(result.get("target_name") or "").strip()
+                if tgt:
+                    with _poor_quality_lock:
+                        _poor_quality_last.pop(tgt, None)
+                        _poor_quality_retries.pop(tgt, None)
             export_cfg = cfg.get("photometry", {}).get("fits_export", {})
             if export_cfg.get("enabled", True):
                 export_path = _export_fits(fits_path, result, cfg)
@@ -1762,6 +1955,14 @@ class _LockedDeviceProxy:
     for the whole centering run — see issue #45.
     """
 
+    # Max seconds to wait for _device_lock before giving up. A normal
+    # slew/expose/park call is seconds; if some other route is holding the
+    # lock this long it is stuck, not merely busy — without this bound, a
+    # deadlocked lock holder left centering's background thread parked in
+    # lock.acquire() forever: running:true with iterations:[] and no error,
+    # requiring a restart to clear (issue #79).
+    LOCK_TIMEOUT_S = 120.0
+
     def __init__(self, target):
         self._target = target
 
@@ -1771,8 +1972,18 @@ class _LockedDeviceProxy:
             return attr
 
         def _locked_call(*args, **kwargs):
-            with _device_lock:
+            from alpaca.platesolve import CenteringError
+
+            if not _device_lock.acquire(timeout=self.LOCK_TIMEOUT_S):
+                raise CenteringError(
+                    f"Auto-centering timed out after {self.LOCK_TIMEOUT_S:.0f}s "
+                    f"waiting for the device lock to call {name}() — another "
+                    "operation appears to be stuck holding it."
+                )
+            try:
                 return attr(*args, **kwargs)
+            finally:
+                _device_lock.release()
 
         return _locked_call
 
@@ -1818,40 +2029,58 @@ def _run_centering_bg(
                 "solved_ra": round(it.solved_ra, 5) if it.solved_ra is not None else None,
                 "solved_dec": round(it.solved_dec, 5) if it.solved_dec is not None else None,
                 "error_arcmin": round(it.error_arcmin, 3) if it.error_arcmin is not None else None,
+                "solve_error": getattr(it, "solve_error", None),
             })
 
+    # Issue #79: running:true with iterations:[] stuck forever. The previous
+    # version cleared "running" from inside each except branch below, which
+    # only helps if execution actually reaches one of those branches. A hang
+    # earlier in this thread — a device-lock acquisition that never returns,
+    # a subprocess with no timeout, anything blocking before the try/except
+    # is even entered in a future refactor — would leave "running" stuck
+    # true with no error recorded. Wrapping the whole call in try/finally
+    # guarantees "running" is cleared no matter which path is taken,
+    # including exception types not explicitly anticipated below.
     try:
-        result = center_on_target_device(
-            _LockedDeviceProxy(_tel), _LockedDeviceProxy(_cam),
-            target_ra_deg, target_dec_deg,
-            exposure_s=exposure_s,
-            tolerance_arcmin=tolerance_arcmin,
-            max_iterations=max_iterations,
-            settle_s=settle_s,
-            solver=solver_type,
-            solver_path=solver_path,
-            search_radius=radius,
-            cancel_check=_cancelled,
-            progress_cb=_progress,
-        )
+        try:
+            result = center_on_target_device(
+                _LockedDeviceProxy(_tel), _LockedDeviceProxy(_cam),
+                target_ra_deg, target_dec_deg,
+                exposure_s=exposure_s,
+                tolerance_arcmin=tolerance_arcmin,
+                max_iterations=max_iterations,
+                settle_s=settle_s,
+                solver=solver_type,
+                solver_path=solver_path,
+                search_radius=radius,
+                cancel_check=_cancelled,
+                progress_cb=_progress,
+            )
+            with _center_lock:
+                _center_state["result"] = result.as_dict()
+            if result.success:
+                logger.info("Auto-centering succeeded — target centered within %.2f′",
+                            result.error_arcmin)
+            else:
+                logger.warning("Auto-centering finished without reaching tolerance")
+        except CenteringCancelled:
+            with _center_lock:
+                _center_state["error"] = "cancelled"
+            logger.warning("Auto-centering cancelled by user")
+        except CenteringError as exc:
+            # A clean, reportable failure — includes real ASTAP solve
+            # failures like "No solution found!" (issue #79), not just the
+            # missing-binary/bad-path cases from issues #63/#76.
+            with _center_lock:
+                _center_state["error"] = str(exc)
+            logger.error("Auto-centering failed: %s", exc)
+        except Exception as exc:
+            with _center_lock:
+                _center_state["error"] = f"Auto-centering crashed: {exc}"
+            logger.error("Auto-centering crashed: %s", exc, exc_info=True)
+    finally:
         with _center_lock:
-            _center_state["result"]  = result.as_dict()
             _center_state["running"] = False
-        if result.success:
-            logger.info("Auto-centering succeeded — target centered within %.2f′",
-                        result.error_arcmin)
-        else:
-            logger.warning("Auto-centering finished without reaching tolerance")
-    except CenteringCancelled:
-        with _center_lock:
-            _center_state["error"]   = "cancelled"
-            _center_state["running"] = False
-        logger.warning("Auto-centering cancelled by user")
-    except (CenteringError, Exception) as exc:
-        with _center_lock:
-            _center_state["error"]   = str(exc)
-            _center_state["running"] = False
-        logger.error("Auto-centering failed: %s", exc)
 
 
 # ── Live stacking state ───────────────────────────────────────────────────────
@@ -3834,14 +4063,52 @@ def api_expose():
 
     # Reserve exposing atomically so concurrent requests cannot both pass the
     # in-progress check before either worker starts (and then collide on paths).
+    #
+    # A held lock is not automatically a live capture: if the worker thread
+    # that set it never reached its `finally` (e.g. a device call hung past
+    # its own timeout), the latch is stuck and would otherwise require a
+    # human to run node_abort_exposure + node_schedule_abort and restart the
+    # process before the camera became usable again (issue #95).  Detect that
+    # case here and reclaim the lock instead of rejecting the request.
+    stale_reclaim = False
     with _state_lock:
         if _state["camera"]["exposing"]:
-            return jsonify({"error": "Exposure already in progress"}), 409
+            if not _exposure_lock_is_stale(_state["camera"]):
+                return jsonify({"error": "Exposure already in progress"}), 409
+            stale_reclaim = True
+            logger.warning(
+                "Stale capture lock detected (held %.0fs, budget %.0fs) — "
+                "clearing automatically instead of requiring a manual "
+                "abort + restart (issue #95)",
+                time.time() - (_state["camera"].get("exposure_start_ts") or time.time()),
+                (_state["camera"].get("exposure_duration") or 0.0)
+                + (_state["camera"].get("exposure_readout_timeout") or 120.0)
+                + _STALE_EXPOSURE_GRACE_S,
+            )
+        # A new generation invalidates any earlier worker thread's `finally`
+        # block, so a stale thread that eventually wakes up cannot clobber
+        # this (or a later) exposure's state (issue #95).
+        my_generation = _state["camera"].get("exposure_generation", 0) + 1
+        _state["camera"]["exposure_generation"] = my_generation
         _state["camera"]["exposing"]           = True
         _state["camera"]["exposure_start_ts"]  = time.time()
         _state["camera"]["exposure_duration"]  = duration
+        _state["camera"]["exposure_readout_timeout"] = readout_timeout
         _state["camera"]["error"]              = None
         _state["image_captured"]               = False
+
+    if stale_reclaim:
+        # Best-effort: stop whatever the camera thinks it's doing and signal
+        # any surviving worker thread to stop.  Mirrors /api/camera/abort,
+        # which intentionally bypasses _device_lock so it can preempt a
+        # worker that is holding it.
+        _expose_cancel.set()
+        try:
+            _cam.abort_exposure()
+        except Exception:
+            logger.exception(
+                "Best-effort abort of stale capture lock failed (issue #95) "
+                "— proceeding with the new exposure anyway")
 
     req_id = uuid.uuid4().hex[:10]
 
@@ -3871,6 +4138,12 @@ def api_expose():
                 if _expose_cancel.is_set():
                     raise ExposureCancelled("Exposure cancelled")
                 with _state_lock:
+                    # A later request may have reclaimed the lock as stale
+                    # (issue #95) while this multi-frame capture was still
+                    # running — stop touching hardware/state for a run that
+                    # is no longer the authoritative one.
+                    if _state["camera"].get("exposure_generation") != my_generation:
+                        raise ExposureCancelled("Exposure superseded by a newer request")
                     _state["camera"]["exposure_start_ts"] = time.time()
                     _state["camera"]["exposure_duration"] = duration
                 # Request id + ns timestamp: frame counters restart at 1 and
@@ -3921,13 +4194,19 @@ def api_expose():
             logger.error("Exposure failed: %s", exc)
         finally:
             with _state_lock:
-                _state["camera"]["exposing"]          = False
-                _state["camera"]["exposure_start_ts"] = None
-                _state["camera"]["exposure_duration"] = None
-                if last_error and last_error != "cancelled":
-                    _state["camera"]["error"] = last_error[:500]
-                elif fits_written:
-                    _state["camera"]["error"] = None
+                # If a later request already reclaimed the lock as stale
+                # (issue #95), this thread no longer owns the "exposing"
+                # latch — clearing it here would clobber the newer, live
+                # exposure's state instead of this dead one's.
+                if _state["camera"].get("exposure_generation") == my_generation:
+                    _state["camera"]["exposing"]          = False
+                    _state["camera"]["exposure_start_ts"] = None
+                    _state["camera"]["exposure_duration"] = None
+                    _state["camera"]["exposure_readout_timeout"] = None
+                    if last_error and last_error != "cancelled":
+                        _state["camera"]["error"] = last_error[:500]
+                    elif fits_written:
+                        _state["camera"]["error"] = None
             _pier_cam_pause.clear()
 
     threading.Thread(target=_do, daemon=True, name="cam-expose").start()
@@ -4012,7 +4291,7 @@ def api_cloud_credentials():
                                     allow_identity_change=allow_identity_change)
     except ValueError as exc:
         logger.warning("install_credentials refused: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 409
+        return jsonify({"ok": False, "error": "invalid credentials request"}), 409
     except Exception:
         logger.exception("install_credentials failed")
         return jsonify({"ok": False, "error": "could not install credentials"}), 500
@@ -4123,25 +4402,63 @@ def api_photometry_enqueue():
         override = override_auid
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
-    abs_path = os.path.realpath(raw)
-    if not os.path.isfile(abs_path):
-        return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
-    if not abs_path.lower().endswith((".fits", ".fit")):
-        return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
-    # Allow fits_export, configured watch path, and data/fits only.
-    export_abs = os.path.realpath(_fits_export_dir())
-    allowed_roots = [export_abs, os.path.realpath("data/fits")]
+
+    # Allow fits_export, configured watch path, and data/fits only. Clients
+    # may send either an absolute path or one relative to the project root
+    # (as returned by /api/fits/list, e.g. "fits_export/2026-09-08/x.fits").
+    # Each root is tracked in two forms: `lex` (plain os.path.abspath — no
+    # filesystem access) is what the untrusted `raw` string is sliced against
+    # to derive an untrusted *relative* component, which is only ever handed
+    # to safe_join() (the actual containment guard); `resolved` (realpath, so
+    # symlinks are followed) is compared against safe_join()'s realpath'd
+    # output afterwards, to catch a root that is itself reached via a
+    # symlink. `raw` itself is never passed to realpath/relpath/join —
+    # only plain string slicing — so nothing here trusts the client's
+    # string as a filesystem path before safe_join has validated it.
+    def _root_pair(p: str) -> tuple:
+        return (os.path.abspath(p), os.path.realpath(p)) if p else ("", "")
+
+    roots = [
+        _root_pair(_fits_export_dir()),
+        _root_pair("data/fits"),
+    ]
     iw_path = ""
     with _state_lock:
         iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
     if iw_path:
-        allowed_roots.append(os.path.realpath(iw_path))
-    if not any(abs_path == root or abs_path.startswith(root + os.sep)
-               for root in allowed_roots if root):
+        roots.append(_root_pair(iw_path))
+
+    raw_norm = raw.replace("\\", "/")
+    raw_abs_str = raw_norm if raw_norm.startswith("/") else f"{os.getcwd().replace(chr(92), '/')}/{raw_norm}"
+
+    abs_path = ""
+    for lex_root, resolved_root in roots:
+        if not lex_root:
+            continue
+        lex_root_norm = lex_root.replace("\\", "/")
+        if raw_abs_str == lex_root_norm:
+            rel = ""
+        elif raw_abs_str.startswith(lex_root_norm + "/"):
+            rel = raw_abs_str[len(lex_root_norm) + 1:]
+        else:
+            continue
+        joined = safe_join(lex_root, rel)
+        if not joined:
+            continue
+        candidate = os.path.realpath(joined)
+        if candidate == resolved_root or candidate.startswith(resolved_root + os.sep):
+            abs_path = candidate
+            break
+
+    if not abs_path:
         return jsonify({
             "ok": False,
             "error": "path must be under fits_export/, data/fits/, or the image watch path",
         }), 403
+    if not os.path.isfile(abs_path):
+        return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
+    if not abs_path.lower().endswith((".fits", ".fit")):
+        return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
     _enqueue_photometry(
         abs_path,
         target_name=override or None,

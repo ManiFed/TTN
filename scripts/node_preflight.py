@@ -123,8 +123,10 @@ def main() -> int:
 
     observer = config.get("safety", {}).get("observer", {})
     lat, lon = observer.get("latitude"), observer.get("longitude")
-    check("observer_location", lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0),
-          f"lat={lat!r}, lon={lon!r}")
+    has_location = lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0)
+    # Don't echo the actual coordinates: they're the owner's home location.
+    check("observer_location", has_location,
+          "set" if has_location else "missing — set safety.observer.latitude/longitude")
 
     cloud = config.get("cloud", {})
     node_id = str(cloud.get("node_id") or "")

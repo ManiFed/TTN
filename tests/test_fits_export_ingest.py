@@ -423,5 +423,27 @@ class McpTargetOverrideSurfaceTest(unittest.TestCase):
         self.assertIn("@server.tool()\n    def node_aavso", src.replace("\r\n", "\n"))
 
 
+class Issue87ResponsePathSurfaceTest(unittest.TestCase):
+    """Issue #87: operators/MCP tooling must be able to audit a cloud AAVSO
+    batch's outcome (status + persisted response body) without disk access."""
+
+    def test_admin_aavso_batches_endpoint_selects_response_path(self):
+        src = Path("cloud/server.py").read_text()
+        # Find the admin aavso-batches listing query and confirm it selects
+        # response_path alongside the other batch fields.
+        idx = src.index("def api_admin_aavso_batches")
+        chunk = src[idx:idx + 800]
+        self.assertIn("response_path", chunk)
+
+    def test_aavso_batches_table_has_response_path_column(self):
+        src = Path("cloud/db.py").read_text()
+        self.assertIn("response_path", src)
+
+    def test_admin_aavso_batches_mcp_tool_proxies_admin_batches(self):
+        src = Path("telescope_mcp/tools/admin.py").read_text()
+        self.assertIn("def admin_aavso_batches(", src)
+        self.assertIn('"/admin/aavso-batches"', src)
+
+
 if __name__ == "__main__":
     unittest.main()

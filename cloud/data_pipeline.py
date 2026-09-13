@@ -431,10 +431,11 @@ def submit_pending_batch(config: dict) -> dict:
     file_path = audit_dir / f"batch_{stamp}.txt"
     file_path.write_text(text, encoding="utf-8")
 
+    response_path = None
     if aavso_cfg.get("dry_run", True):
         status, accepted, rejected, message = "dry_run", 0, 0, "dry_run: saved, not POSTed"
     else:
-        status, accepted, rejected, message = _post_batch(
+        status, accepted, rejected, message, response_path = _post_batch(
             text, aavso_cfg.get("username", ""), aavso_cfg.get("password", ""),
             aavso_cfg.get("submit_url", _WEBOBS_URL), file_path=file_path)
 
@@ -444,12 +445,15 @@ def submit_pending_batch(config: dict) -> dict:
 
     db.execute(
         """INSERT INTO aavso_batches
-               (submitted_at, file_path, file_text, n_obs, status, accepted, rejected, message)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-        (_now(), str(file_path), text, len(rows), status, accepted, rejected, message),
+               (submitted_at, file_path, response_path, file_text, n_obs,
+                status, accepted, rejected, message)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (_now(), str(file_path), response_path or "", text, len(rows),
+         status, accepted, rejected, message),
     )
     logger.info("AAVSO batch: %d obs, status=%s (%s)", len(rows), status, message)
     return {"status": status, "n_obs": len(rows), "file_path": str(file_path),
+            "response_path": response_path,
             "accepted": accepted, "rejected": rejected, "message": message}
 
 
@@ -532,9 +536,15 @@ def _format_batch(rows: list, observer_code: str, aavso_cfg: dict) -> str:
 
 def _post_batch(text: str, username: str, password: str, url: str,
                 file_path: Path | None = None) -> tuple:
-    """POST a batch to WebObs. Returns (status, accepted, rejected, message)."""
+    """POST a batch to WebObs.
+
+    Returns (status, accepted, rejected, message, response_path) — response_path
+    is the file the raw WebObs response body was persisted to (mirroring the
+    node's ``*_response.txt``), or None when there was no response to save
+    (credentials missing, request exception) or the save itself failed.
+    """
     if not username or not password:
-        return "skipped", 0, 0, "aavso credentials not configured"
+        return "skipped", 0, 0, "aavso credentials not configured", None
     try:
         import requests
         resp = requests.post(url, data={
@@ -543,26 +553,30 @@ def _post_batch(text: str, username: str, password: str, url: str,
         }, timeout=60)
     except Exception as exc:
         logger.error("WebObs batch POST failed: %s", exc)
-        return "error", 0, 0, f"POST failed: {exc}"
+        return "error", 0, 0, f"POST failed: {exc}", None
 
     content_type = (resp.headers.get("Content-Type") or "")[:120]
-    # Always log status + body snippet (issue #87).
+    # Always log status + body snippet, on every path — success, non-2xx or
+    # unrecognised body (issue #87).
     logger.info(
         "WebObs batch HTTP %s content-type=%s body=%.500s",
         resp.status_code, content_type or "-",
         resp.text.replace("\n", " ")[:500],
     )
 
-    # Persist raw response beside the batch file (mirror node *_response.txt).
+    # Persist raw response beside the batch file (mirror node *_response.txt),
+    # regardless of status, so operators/MCP tooling can audit outcomes.
+    response_path = None
     if file_path is not None:
         try:
             resp_path = Path(str(file_path) + "_response.txt")
             resp_path.write_text(resp.text, encoding="utf-8")
+            response_path = str(resp_path)
         except OSError as exc:
             logger.warning("Could not save WebObs batch response file: %s", exc)
 
     if resp.status_code != 200:
-        return "error", 0, 0, f"HTTP {resp.status_code}"
+        return "error", 0, 0, f"HTTP {resp.status_code}", response_path
 
     # A success is only recognised from the explicit "N observation(s)" token.
     # An HTTP 200 with no such token is NOT assumed to be a success: the
@@ -575,11 +589,12 @@ def _post_batch(text: str, username: str, password: str, url: str,
     has_error = bool(re.search(r"\b(error|reject|invalid|fail)\b",
                                resp.text, re.IGNORECASE))
     if accepted > 0:
-        return "accepted", accepted, 0, f"accepted={accepted}"
+        return "accepted", accepted, 0, f"accepted={accepted}", response_path
     if has_error:
-        return "rejected", 0, 1, "WebObs reported errors"
+        return "rejected", 0, 1, "WebObs reported errors", response_path
     logger.warning("Unrecognised WebObs response — treating as error. Raw: %.300s", resp.text)
-    return "error", 0, 0, "unrecognised WebObs response (no success token)"
+    return ("error", 0, 0, "unrecognised WebObs response (no success token)",
+            response_path)
 
 
 # ── Raw image storage ──────────────────────────────────────────────────────────

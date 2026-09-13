@@ -156,6 +156,7 @@ _SCHEMA: list[str] = [
         id            SERIAL PRIMARY KEY,
         submitted_at  TEXT NOT NULL,
         file_path     TEXT,
+        response_path TEXT DEFAULT '',
         n_obs         INTEGER DEFAULT 0,
         status        TEXT DEFAULT 'pending',
         accepted      INTEGER DEFAULT 0,
@@ -529,6 +530,11 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("aavso_batches", "file_text",             "TEXT DEFAULT ''"),
     ("aavso_batches", "manually_submitted",    "INTEGER DEFAULT 0"),
     ("aavso_batches", "manually_submitted_at", "TEXT DEFAULT ''"),
+    # Path to the raw WebObs HTTP response body persisted alongside the batch
+    # file (mirrors the node's *_response.txt) so operators/MCP tooling can
+    # audit *why* a batch's status is what it is without disk access
+    # (issue #87).
+    ("aavso_batches", "response_path",         "TEXT DEFAULT ''"),
     # Admin-only dry-run testing mode: lets a node run the full night pipeline
     # (plan generation + real hardware slew/expose) regardless of actual sun
     # position, for a bounded window. An expiring timestamp rather than a bare
