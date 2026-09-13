@@ -199,13 +199,68 @@ def _looks_like_auid(value: str) -> bool:
     return bool(re.fullmatch(r"\d{3}-[A-Za-z0-9]{2,4}-\d{3}", str(value or "").strip()))
 
 
+def _fits_evidence_source(path: str) -> str:
+    """Classify *path* as the watch path that produced it (issue #88).
+
+    Commissioning's ``science_frame`` evidence needs to know whether the
+    first genuine science FITS came in through the primary MyWorks/Seestar
+    watch path or through ``fits_export`` (manual frames, MCP enqueue,
+    scheduled/manual exposures that write there directly) so
+    ``/api/commissioning`` can report which path actually worked.
+    """
+    try:
+        abs_path = os.path.realpath(path)
+    except Exception:
+        return "unknown"
+    try:
+        export_abs = os.path.realpath(_fits_export_dir())
+        if abs_path == export_abs or abs_path.startswith(export_abs + os.sep):
+            return "fits_export"
+    except Exception:
+        pass
+    try:
+        with _state_lock:
+            iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
+        if iw_path:
+            iw_abs = os.path.realpath(iw_path)
+            if abs_path == iw_abs or abs_path.startswith(iw_abs + os.sep):
+                return "myworks"
+    except Exception:
+        pass
+    return "manual"
+
+
+def _notify_commissioning_fits(path: str) -> None:
+    """Report a genuine science FITS to commissioning, whichever path found it.
+
+    Safe to call more than once for the same file — ``observe_fits`` dedups
+    on the file's sha256, so a frame observed via both the watcher that
+    ingested it and the enqueue path it flows through is only counted once
+    (issue #88).
+    """
+    if _commissioning is None:
+        return
+    threading.Thread(
+        target=_commissioning.observe_fits,
+        args=(path,),
+        kwargs={"source": _fits_evidence_source(path)},
+        daemon=True, name="commissioning-fits",
+    ).start()
+
+
 def _enqueue_photometry(fits_path: str, target_name: str | None = None,
                         auid: str | None = None) -> None:
     """Submit a FITS file for photometry, dropping it if the queue is full.
 
     ``target_name`` / ``auid`` (optional) override FITS OBJECT for VSP / AAVSO
     identity when the header still says ``Manual RA …`` (issues #89 / #79).
+
+    Every caller of this function — the primary watcher, the fits_export
+    watcher, manual/scheduled exposures, and the MCP/API enqueue endpoint —
+    is a legitimate source of a new science frame, so this is also where
+    commissioning evidence is recorded (issue #88).
     """
+    _notify_commissioning_fits(fits_path)
     override = _normalize_target_override(target_name)
     override_auid = _normalize_target_override(auid)
     job: object
@@ -883,11 +938,11 @@ def _on_new_fits(info: dict) -> None:
     with _state_lock:
         _state["image_watcher"]["last_file"]  = os.path.basename(path)
         _state["image_watcher"]["last_header"] = header
-    if _commissioning is not None:
-        threading.Thread(
-            target=_commissioning.observe_fits, args=(path,),
-            daemon=True, name="commissioning-fits",
-        ).start()
+    # Always report evidence here (covers the phot-disabled case); the
+    # enqueue below also reports it so manual/API-only paths that never
+    # flow through a watcher still register — observe_fits dedups by
+    # sha256, so seeing the same frame twice does not double count it.
+    _notify_commissioning_fits(path)
 
     # Optionally run photometry pipeline in background thread
     with _state_lock:

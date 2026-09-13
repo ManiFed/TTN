@@ -88,6 +88,98 @@ class OnNewFitsExportSkipTest(unittest.TestCase):
         self.assertEqual(len(called), 1)
 
 
+class CommissioningEvidenceWiringTest(unittest.TestCase):
+    """Issue #88: commissioning's science_frame evidence must fire whichever
+    path (MyWorks primary watcher or fits_export) legitimately ingests the
+    first real science FITS — not just the primary watch path."""
+
+    def test_fits_export_only_frame_flips_science_frame_ok(self):
+        from astropy.io import fits
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as td:
+            export_dir = os.path.join(td, "fits_export")
+            date_dir = os.path.join(export_dir, "2026-09-13")
+            os.makedirs(date_dir)
+            path = os.path.join(date_dir, "manual.fits")
+            hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32))
+            hdu.header["OBJECT"] = "Manual RA 15.8h"
+            hdu.writeto(path)
+
+            calls = []
+
+            class _FakeCommissioning:
+                def observe_fits(self, fits_path, source="unknown"):
+                    calls.append((fits_path, source))
+
+            with patch.object(dash, "_fits_export_dir", return_value=export_dir), \
+                 patch.object(dash, "_commissioning", _FakeCommissioning()), \
+                 patch.object(dash, "_enqueue_photometry"):
+                dash._on_new_fits_export({"path": path, "header": {}})
+
+            # observe_fits is dispatched on a background thread; give it a
+            # moment to land before asserting.
+            import time as _time
+            for _ in range(50):
+                if calls:
+                    break
+                _time.sleep(0.02)
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0], (path, "fits_export"))
+
+    def test_myworks_frame_still_reports_myworks_source(self):
+        from astropy.io import fits
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as td:
+            watch_dir = os.path.join(td, "myworks")
+            os.makedirs(watch_dir)
+            path = os.path.join(watch_dir, "science.fits")
+            hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32))
+            hdu.writeto(path)
+
+            calls = []
+
+            class _FakeCommissioning:
+                def observe_fits(self, fits_path, source="unknown"):
+                    calls.append((fits_path, source))
+
+            with dash._state_lock:
+                dash._state["image_watcher"]["watch_path"] = watch_dir
+            try:
+                with patch.object(dash, "_fits_export_dir",
+                                   return_value=os.path.join(td, "fits_export")), \
+                     patch.object(dash, "_commissioning", _FakeCommissioning()), \
+                     patch.object(dash, "_enqueue_photometry"):
+                    dash._on_new_fits({"path": path, "header": {}, "size_kb": 1.0})
+
+                import time as _time
+                for _ in range(50):
+                    if calls:
+                        break
+                    _time.sleep(0.02)
+
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0], (path, "myworks"))
+            finally:
+                with dash._state_lock:
+                    dash._state["image_watcher"]["watch_path"] = ""
+
+    def test_enhanced_reexport_does_not_spuriously_reinvoke(self):
+        """The dedup filter that stops fits_export watching its own output
+        must still short-circuit before commissioning is ever notified for
+        that re-export — the original ingest already reported it."""
+        called = []
+        with patch.object(dash, "_fits_already_photometered", return_value=True), \
+             patch.object(dash, "_notify_commissioning_fits",
+                           side_effect=lambda p: called.append(p)), \
+             patch.object(dash, "_on_new_fits",
+                           side_effect=lambda info: called.append(info)):
+            dash._on_new_fits_export({"path": "/tmp/enhanced.fits"})
+        self.assertEqual(called, [])
+
+
 class PhotometryTargetOverrideApiTest(unittest.TestCase):
     """Issue #89: MCP/manual photometry must accept target name / AUID override."""
 
