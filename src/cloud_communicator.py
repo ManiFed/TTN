@@ -457,11 +457,10 @@ class CloudCommunicator:
                     _KEYRING_ACCOUNT, self._api_key)
                 if backend != "keyring":
                     logger.warning(
-                        "Cloud API key persisted via %s fallback after keyring "
+                        "Cloud API key persisted via fallback after keyring "
                         "failure — node identity will survive restart, but fix "
                         "keychain access for this LaunchAgent/user if possible "
                         "(%s)",
-                        backend,
                         credential_store.last_error() or "keyring unavailable",
                     )
             except keyring.errors.KeyringError as exc:
