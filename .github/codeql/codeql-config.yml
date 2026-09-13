@@ -2,3 +2,8 @@
 # Scan authored application code; the bundle is regenerated from app/ source.
 paths-ignore:
   - app/build/**
+  # Fuzz-harness credentials are fuzz-test-only placeholders or keys minted
+  # by an ephemeral in-process cloud + throwaway Postgres torn down at the
+  # end of the run (see the comment in tests/fuzz/harness.py) — not real
+  # secrets, so exclude this harness from clear-text-storage scanning.
+  - tests/fuzz/harness.py

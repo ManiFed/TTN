@@ -212,7 +212,7 @@ class NodeHarness:
         # carries none of the exposure that flags this pattern normally.
         creds = (f"  node_id: {node_id}\n  api_key: {api_key}\n"
                  if self.registered else "")
-        (self.workdir / "config.yaml").write_text(_CONFIG_TEMPLATE.format(  # lgtm[py/clear-text-storage-sensitive-data]
+        (self.workdir / "config.yaml").write_text(_CONFIG_TEMPLATE.format(
             cloud_url=self.cloud.url, credentials=creds,
             disconnect_timeout=self.disconnect_timeout))
 
