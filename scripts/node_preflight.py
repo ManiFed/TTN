@@ -177,7 +177,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         for item in checks:
-            print(f"{'PASS' if item['ok'] else 'FAIL'} {item['name']}: {item['detail']}")
+            print(f"{'PASS' if item['ok'] else 'FAIL'} {item['name']}")
         print("READY" if report["ready"] else f"NOT READY ({len(required_failures)} failed)")
     return 0 if report["ready"] else 1
 
