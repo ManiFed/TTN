@@ -66,6 +66,7 @@ class CommissioningManager:
             "checks": {},
             "capabilities": {},
             "evidence": [],
+            "science_frame_source": None,
             "certification": "uncommissioned",
         }
 
@@ -99,6 +100,7 @@ class CommissioningManager:
                 "checks": {},
                 "capabilities": {},
                 "evidence": [],
+                "science_frame_source": None,
                 "certification": "uncommissioned",
             })
             self._save()
@@ -175,10 +177,7 @@ class CommissioningManager:
                 else "Cloud credentials persisted to system keychain",
                 blocking=False,
             ),
-            "science_frame": self._check(
-                bool(self._state.get("evidence")), "Waiting for first science FITS",
-                blocking=False,
-            ),
+            "science_frame": self._science_frame_check(),
         }
         blocking_failed = [v for v in checks.values() if v["blocking"] and not v["ok"]]
         certification = "operational" if not blocking_failed else "pending"
@@ -195,8 +194,29 @@ class CommissioningManager:
             self._save()
             return self.status_unlocked()
 
-    def observe_fits(self, fits_path: str) -> None:
-        """Add passive scientific evidence from a newly observed FITS file."""
+    def _science_frame_check(self) -> dict:
+        source = self._state.get("science_frame_source")
+        has_evidence = bool(self._state.get("evidence"))
+        detail = (
+            f"First science FITS observed via {source}" if has_evidence and source
+            else "First science FITS observed" if has_evidence
+            else "Waiting for first science FITS"
+        )
+        check = self._check(has_evidence, detail, blocking=False)
+        if source:
+            check["source"] = source
+        return check
+
+    def observe_fits(self, fits_path: str, source: str = "unknown") -> None:
+        """Add passive scientific evidence from a newly observed FITS file.
+
+        ``source`` identifies which ingest path produced *fits_path* (e.g.
+        "myworks" for the primary Seestar watch path or "fits_export" for
+        manual/exported frames — issue #88), so commissioning can report
+        which path actually delivered the first science frame. Evidence is
+        deduplicated on the file's sha256, so it is safe for more than one
+        ingest path to observe the same physical frame.
+        """
         path = Path(fits_path)
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -218,12 +238,16 @@ class CommissioningManager:
                 "shape": list(data.shape),
                 "peak_adu": round(peak, 2),
                 "p99_9_adu": round(p999, 2),
+                "source": source,
             }
             with self._lock:
                 existing = self._state.setdefault("evidence", [])
-                if not any(item.get("sha256") == digest for item in existing):
+                is_new = not any(item.get("sha256") == digest for item in existing)
+                if is_new:
                     existing.append(evidence)
                     del existing[:-20]
+                if is_new and not self._state.get("science_frame_source"):
+                    self._state["science_frame_source"] = source
                 caps = self._state.setdefault("capabilities", {})
                 caps.update({
                     "science_frame_shape": list(data.shape),
