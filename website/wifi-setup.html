@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Connect your telescope to Wi-Fi — TTN</title>
+<meta name="description" content="How to put your smart telescope on your home Wi-Fi (Station Mode) so The Telescope Net can find it — Seestar, Vespera, Dwarf, Unistellar, Celestron Origin, and ASCOM/ALPACA setups." />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&family=Inter:wght@800;900&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#F2F5FF; --ink-2:rgba(242,245,255,.66); --ink-3:rgba(242,245,255,.40);
+    --accent:#8FD9FF; --warm:#FFC07A;
+    --font:"Geist", system-ui, -apple-system, sans-serif;
+    --glass-bd:rgba(215,228,255,.24);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    background:#02030A; color:var(--ink); font-family:var(--font); -webkit-font-smoothing:antialiased;
+    letter-spacing:-0.01em; font-feature-settings:'kern' 1, 'liga' 1;
+    background-image:
+      radial-gradient(60% 50% at 15% -10%, rgba(143,217,255,.10), transparent 60%),
+      radial-gradient(50% 40% at 100% 0%, rgba(255,192,122,.06), transparent 60%);
+    background-attachment:fixed;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:0 24px}
+
+  .brandmark{position:fixed; top:24px; left:32px; z-index:30;
+    display:flex; align-items:center; gap:12px; color:#fff; text-decoration:none; line-height:1}
+  .brandmark .brand-symbol{width:34px;height:34px;flex:0 0 auto;filter:drop-shadow(0 0 16px rgba(143,217,255,.35))}
+  .brandmark .brand-type{display:flex;align-items:baseline;gap:10px}
+  .brandmark strong{font-family:'Inter',system-ui,sans-serif;font-size:18px;font-weight:900;letter-spacing:-.055em}
+  .brandmark small{font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+  .topnav{position:fixed;top:24px;right:32px;z-index:30;display:flex;align-items:center;gap:6px;padding:5px;
+    border:1px solid rgba(215,228,255,.16);border-radius:100px;background:rgba(4,8,20,.5);backdrop-filter:blur(18px)}
+  .topnav a{color:var(--ink-2);text-decoration:none;font-size:12px;font-weight:500;padding:9px 13px;border-radius:100px;transition:.2s ease}
+  .topnav a:hover{color:#fff;background:rgba(255,255,255,.09)}
+  .topnav .nav-cta{color:#06121c;background:var(--accent)}
+  .topnav .nav-cta:hover{color:#06121c;background:#dff5ff}
+
+  main{padding:132px 0 100px}
+  .kicker{font-size:12px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent)}
+  h1{font-weight:600; letter-spacing:-.04em; line-height:1.05; font-size:clamp(30px,4.4vw,46px); margin-top:14px; max-width:20ch}
+  .lede{margin-top:18px; font-size:17px; line-height:1.6; color:var(--ink-2); max-width:56ch}
+  .lede b{color:var(--ink); font-weight:500}
+
+  h2{font-weight:600; letter-spacing:-.03em; font-size:22px; margin:0 0 4px}
+  section.block{margin-top:56px}
+
+  .glass{position:relative; background:rgba(8,14,30,.68);
+    backdrop-filter:blur(14px) saturate(190%) brightness(1.08); -webkit-backdrop-filter:blur(14px) saturate(190%) brightness(1.08);
+    border:1px solid var(--glass-bd); border-radius:22px;
+    box-shadow:0 28px 80px rgba(0,0,10,.40), inset 0 1.5px 0 rgba(255,255,255,.52);
+    padding:28px 30px;}
+
+  .steps{list-style:none; margin-top:20px; display:flex; flex-direction:column; gap:16px}
+  .steps li{display:flex; gap:14px; align-items:flex-start}
+  .steps .nm{flex:0 0 30px; height:30px; border-radius:50%; border:1px solid rgba(143,217,255,.30);
+    display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; color:var(--accent);
+    background:rgba(143,217,255,.09); box-shadow:0 0 12px rgba(143,217,255,.15); font-feature-settings:'tnum' 1}
+  .steps .tx{font-size:15.5px; line-height:1.55; color:var(--ink-2); padding-top:4px}
+  .steps .tx b{color:var(--ink); font-weight:500}
+
+  .cost{margin-top:22px; font-size:13.5px; line-height:1.55; color:var(--ink-3); padding:14px 16px; border-radius:12px; background:rgba(143,217,255,.05); border:1px solid rgba(143,217,255,.10)}
+  .cost b{color:var(--accent); font-weight:500}
+  .warn{margin-top:16px; font-size:13.5px; line-height:1.55; color:var(--ink-2); padding:14px 16px; border-radius:12px; background:rgba(255,192,122,.06); border:1px solid rgba(255,192,122,.18)}
+  .warn b{color:var(--warm); font-weight:500}
+
+  .vendor-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:20px}
+  .vendor-item{padding:16px 18px; border-radius:14px; background:rgba(143,217,255,.055); border:1px solid rgba(143,217,255,.13)}
+  .vendor-item b{display:block; color:var(--ink); font-size:14px; font-weight:550; margin-bottom:6px}
+  .vendor-item span{display:block; color:var(--ink-2); font-size:13px; line-height:1.5}
+
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; background:rgba(180,210,255,.10); padding:2px 6px; border-radius:5px; color:var(--ink)}
+
+  .btn{display:inline-flex; align-items:center; gap:9px; font-family:var(--font); font-weight:500; font-size:15px;
+    padding:15px 26px; border-radius:100px; cursor:pointer; border:1px solid transparent; text-decoration:none;
+    transition:transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s, background .22s}
+  .btn-p{color:#04121c; background:#CFefff; box-shadow:0 8px 30px rgba(143,217,255,.30), inset 0 1px 0 rgba(255,255,255,.7)}
+  .btn-p:hover{transform:translateY(-2px); background:#e6f7ff; box-shadow:0 14px 44px rgba(143,217,255,.45)}
+  .btn-g{color:var(--ink); background:rgba(170,195,245,.10); border-color:var(--glass-bd); backdrop-filter:blur(14px)}
+  .btn-g:hover{transform:translateY(-2px); background:rgba(170,195,245,.18)}
+  .cta-row{display:flex; gap:14px; margin-top:16px; flex-wrap:wrap}
+
+  footer{margin-top:70px; font-size:13px; color:var(--ink-3)}
+  footer a{color:var(--ink-2)}
+
+  :focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+  .skip-link{position:fixed; top:-100px; left:20px; z-index:999; padding:10px 18px; background:var(--accent); color:#04121c; border-radius:8px; font-size:14px; font-weight:500; text-decoration:none; transition:top .15s}
+  .skip-link:focus{top:12px}
+
+  @media (max-width:720px){
+    .brandmark{top:16px; left:18px}
+    .brandmark small{display:none}
+    .topnav{top:16px; right:18px; padding:3px}
+    .topnav a:not(.nav-cta){display:none}
+    .topnav .nav-cta{padding:8px 12px; font-size:11px}
+    main{padding:104px 0 70px}
+    .vendor-grid{grid-template-columns:1fr}
+    .glass{padding:22px 20px; border-radius:18px}
+  }
+</style>
+</head>
+<body>
+  <a href="#top" class="skip-link">Skip to content</a>
+
+  <a class="brandmark" href="/tour.html" aria-label="TTN — The Telescope Net, home">
+    <span class="brand-type">The Telescope Net</span>
+  </a>
+  <nav class="topnav" aria-label="Primary navigation">
+    <a href="/tour.html">Home</a><a href="/tour.html#how">How it works</a><a class="nav-cta" href="/tour.html#join">Join TTN</a>
+  </nav>
+
+  <main id="top">
+    <div class="wrap">
+      <span class="kicker">Setup guide</span>
+      <h1>Get your telescope on your home Wi-Fi</h1>
+      <p class="lede">This is the one step that trips people up, so it gets its own page. Do it <b>before</b> installing the node software or asking Claude to connect your telescope — everything else depends on it.</p>
+
+      <section class="block">
+        <div class="glass">
+          <span class="kicker">The one thing to understand</span>
+          <h2 style="margin-top:14px">Two different kinds of Wi-Fi</h2>
+          <p style="margin-top:12px; font-size:15.5px; line-height:1.6; color:var(--ink-2)">Out of the box, most smart telescopes broadcast their <b style="color:var(--ink)">own</b> Wi-Fi network so your phone can talk to them directly — this is usually called <b style="color:var(--ink)">Access Point mode</b> (or AP mode, or hotspot mode). While it's doing that, your computer can't see it, because it isn't on your home network at all.</p>
+          <p style="margin-top:12px; font-size:15.5px; line-height:1.6; color:var(--ink-2)">What you need instead is <b style="color:var(--ink)">Station Mode</b> — the telescope joining <b style="color:var(--ink)">your</b> home Wi-Fi, the same network your computer is on. That's what lets the node software (and Claude) find it.</p>
+          <div class="warn"><b>The catch:</b> the telescope's own phone app will say &ldquo;connected&rdquo; in either mode. It's telling you your <em>phone</em> is connected to the telescope — not which kind of network the telescope is on. So it won't warn you if you're still in Access Point mode.</div>
+        </div>
+      </section>
+
+      <section class="block">
+        <span class="kicker">Step by step</span>
+        <h2 style="margin-top:14px">Switch it to Station Mode</h2>
+        <ol class="steps">
+          <li><span class="nm">1</span><span class="tx">Open the telescope's own app (Seestar, Vespera, Dwarf, Unistellar, or whichever came with it) and connect to the telescope as usual — this part still uses its own hotspot the first time.</span></li>
+          <li><span class="nm">2</span><span class="tx">Find the Wi-Fi or network settings inside that app. Look for wording like <b>&ldquo;Station Mode&rdquo;</b>, <b>&ldquo;Join network&rdquo;</b>, <b>&ldquo;Connect to router&rdquo;</b>, or <b>&ldquo;Home network&rdquo;</b> — every vendor phrases it slightly differently.</span></li>
+          <li><span class="nm">3</span><span class="tx">Select your home Wi-Fi network from the list and enter its password. The telescope will join it directly — you don't need your phone connected to it after this.</span></li>
+          <li><span class="nm">4</span><span class="tx">Make sure the computer that will run the node software is on <b>the same Wi-Fi network</b> — not a guest network, and not a different band the router splits out as its own name.</span></li>
+          <li><span class="nm">5</span><span class="tx">If the telescope is far from the router and the signal is weak, a Wi-Fi extender or mesh point near the telescope helps — a weak link here is the most common reason a connection drops mid-session.</span></li>
+        </ol>
+      </section>
+
+      <section class="block">
+        <span class="kicker">By telescope</span>
+        <h2 style="margin-top:14px">Where to look, per vendor</h2>
+        <div class="vendor-grid">
+          <div class="vendor-item"><b>ZWO Seestar</b><span>In the ZWO Seestar app: Settings → Wi-Fi → Station Mode. The Seestar's own control server only runs once it's in Station Mode — this is the single most common setup snag we see.</span></div>
+          <div class="vendor-item"><b>Vaonis Vespera</b><span>In the Vaonis Singularity app, under the telescope's Wi-Fi settings, choose to join your home network instead of using the Vespera's own hotspot.</span></div>
+          <div class="vendor-item"><b>Dwarf Lab Dwarf</b><span>In the DwarfLab app: telescope settings → STA (station) mode, then select your home network.</span></div>
+          <div class="vendor-item"><b>Unistellar</b><span>In the Unistellar app's telescope Wi-Fi settings, switch from the telescope's own hotspot to your home network.</span></div>
+          <div class="vendor-item"><b>Celestron Origin</b><span>In the Celestron Origin app: Settings → Network → join your home Wi-Fi, rather than connecting directly to the Origin's hotspot.</span></div>
+          <div class="vendor-item"><b>ASCOM / ALPACA mounts</b><span>These typically connect over your existing network already — make sure the mount, the ALPACA/ASCOM Remote server, and the node computer are all on the same subnet.</span></div>
+        </div>
+        <div class="cost">Exact menu wording changes with app updates — if you can't find it, search the app for <b>&ldquo;Wi-Fi&rdquo;</b> or <b>&ldquo;network&rdquo;</b> and look for anything that isn't the telescope's own hotspot name.</div>
+      </section>
+
+      <section class="block">
+        <span class="kicker">Stuck?</span>
+        <h2 style="margin-top:14px">Once it's on your Wi-Fi</h2>
+        <p style="margin-top:12px; font-size:15.5px; line-height:1.6; color:var(--ink-2)">Install the node software, open Claude Desktop, and say <b style="color:var(--ink)">&ldquo;connect my telescope&rdquo;</b>. It finds the telescope on the network, links your account, and tells you once it's online — you don't need to do anything else by hand.</p>
+        <p style="margin-top:12px; font-size:15.5px; line-height:1.6; color:var(--ink-2)">If Claude still can't find it after this: quit Claude Desktop completely and reopen it (it only notices new tools on launch), confirm the telescope's app still shows it joined to your home network rather than its own hotspot, and confirm the node computer is on that same network.</p>
+        <div class="cta-row">
+          <a class="btn btn-p" href="/tour.html#join">Back to setup &amp; download</a>
+          <a class="btn btn-g" href="mailto:info@boundlessskies.org?subject=Telescope%20Wi-Fi%20setup%20help">Email us for help</a>
+        </div>
+      </section>
+
+      <footer>
+        <a href="/tour.html">&larr; The Telescope Net</a>
+      </footer>
+    </div>
+  </main>
+</body>
+</html>
