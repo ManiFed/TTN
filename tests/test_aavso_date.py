@@ -7,6 +7,8 @@ what goes into a submission has to be converted rather than relabelled. These
 tests pin both emitters (node single-observation, cloud batch) to that.
 """
 
+from pathlib import Path
+
 import pytest
 
 from cloud import data_pipeline as DP
@@ -84,3 +86,113 @@ def test_node_converts_when_only_a_bjd_is_present():
 def test_node_refuses_to_report_a_bjd_as_an_hjd():
     with pytest.raises(ValueError):
         A.aavso_date({"bjd": BJD})
+
+
+# ── issue #87: WebObs status+body logging and response persistence ─────────────
+#
+# Operators could not tell why a node/cloud submission claimed success while
+# AAVSO's "My Observations" was empty, because only a truncated warning was
+# logged for *unrecognised* bodies and the cloud batch response was never
+# written to disk at all. Every POST attempt must now leave an auditable
+# trail: an HTTP status + bounded body snippet in the logs, and (cloud) a
+# persisted response file whose path is recorded and surfaced.
+
+class _FakeResp:
+    def __init__(self, status_code, text, content_type="text/html; charset=utf-8"):
+        self.status_code = status_code
+        self.text = text
+        self.headers = {"Content-Type": content_type}
+
+
+def test_cloud_post_batch_logs_status_and_body_on_success(monkeypatch, tmp_path, caplog):
+    resp = _FakeResp(200, "Thanks! 2 observation(s) were uploaded successfully.")
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+
+    file_path = tmp_path / "batch_20260101T000000.txt"
+    file_path.write_text("dummy", encoding="utf-8")
+
+    with caplog.at_level("INFO", logger="cloud.data_pipeline"):
+        status, accepted, rejected, message, response_path = DP._post_batch(
+            "text", "user", "pass", "https://example.test/webobs", file_path=file_path)
+
+    assert status == "accepted"
+    assert accepted == 2
+    assert any("HTTP 200" in r.message and "body=" in r.message for r in caplog.records)
+    assert response_path == str(file_path) + "_response.txt"
+    assert Path(response_path).read_text(encoding="utf-8") == resp.text
+
+
+def test_cloud_post_batch_logs_status_and_body_on_unrecognised_response(
+        monkeypatch, tmp_path, caplog):
+    resp = _FakeResp(200, "<html>please sign in</html>")
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+
+    file_path = tmp_path / "batch_20260101T010000.txt"
+    file_path.write_text("dummy", encoding="utf-8")
+
+    with caplog.at_level("INFO", logger="cloud.data_pipeline"):
+        status, accepted, rejected, message, response_path = DP._post_batch(
+            "text", "user", "pass", "https://example.test/webobs", file_path=file_path)
+
+    assert status == "error"
+    # Status+body must be logged even though the body could not be parsed.
+    assert any("HTTP 200" in r.message and "body=" in r.message for r in caplog.records)
+    assert response_path is not None
+    assert Path(response_path).exists()
+
+
+def test_cloud_post_batch_logs_status_on_non_2xx(monkeypatch, tmp_path, caplog):
+    resp = _FakeResp(500, "internal server error")
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+
+    file_path = tmp_path / "batch_20260101T020000.txt"
+    file_path.write_text("dummy", encoding="utf-8")
+
+    with caplog.at_level("INFO", logger="cloud.data_pipeline"):
+        status, accepted, rejected, message, response_path = DP._post_batch(
+            "text", "user", "pass", "https://example.test/webobs", file_path=file_path)
+
+    assert status == "error"
+    assert "HTTP 500" in message
+    assert any("HTTP 500" in r.message and "body=" in r.message for r in caplog.records)
+    assert response_path is not None
+
+
+def test_submit_pending_batch_persists_and_returns_response_path(monkeypatch, tmp_path):
+    """submit_pending_batch must record the response file both in its return
+    value and in the aavso_batches row, so operators/MCP tooling can find it
+    without touching the filesystem directly (issue #87)."""
+    row = _row(id=1)
+    monkeypatch.setattr(DP.db, "query", lambda *a, **k: [row])
+    monkeypatch.setattr(DP.db, "executemany", lambda *a, **k: None)
+
+    inserted = {}
+
+    def _fake_execute(sql, params):
+        if "INSERT INTO aavso_batches" in sql:
+            inserted["sql"] = sql
+            inserted["params"] = params
+
+    monkeypatch.setattr(DP.db, "execute", _fake_execute)
+
+    resp = _FakeResp(200, "Thanks! 1 observation(s) were uploaded successfully.")
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+
+    config = {"aavso": {
+        "observer_code": "EGBA", "dry_run": False,
+        "username": "user", "password": "pass",
+        "audit_dir": str(tmp_path),
+    }}
+
+    result = DP.submit_pending_batch(config)
+
+    assert result["status"] == "accepted"
+    assert result["response_path"]
+    assert Path(result["response_path"]).exists()
+    # response_path must have been persisted into the aavso_batches insert too.
+    assert "response_path" in inserted["sql"]
+    assert result["response_path"] in inserted["params"]

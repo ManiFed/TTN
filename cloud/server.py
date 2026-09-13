@@ -1560,7 +1560,7 @@ def api_admin_aavso_batches():
     limit = min(int(request.args.get("limit", 20)), 100)
     rows = db.query(
         """SELECT id, submitted_at, n_obs, status, accepted, rejected, message,
-                  manually_submitted, manually_submitted_at,
+                  manually_submitted, manually_submitted_at, response_path,
                   (file_text <> '') AS has_text
              FROM aavso_batches
             ORDER BY submitted_at DESC LIMIT %s""",

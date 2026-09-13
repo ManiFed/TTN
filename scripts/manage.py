@@ -172,6 +172,8 @@ def cmd_batch(config: dict, submit: bool = False) -> None:
     print(f"n_obs   : {result.get('n_obs', 0)}")
     if result.get("file_path"):
         print(f"File    : {result['file_path']}")
+        if result.get("response_path"):
+            print(f"Response: {result['response_path']}")
         if not submit:
             print("\n--- Formatted batch (first 40 lines) ---")
             try:
