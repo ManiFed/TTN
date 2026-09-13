@@ -66,8 +66,7 @@ def _verify_api_key(api_key: str, stored_hash: str) -> bool:
             return hmac.compare_digest(actual, expected)
         except Exception:
             return False
-    legacy = hashlib.sha256(raw).hexdigest()
-    return hmac.compare_digest(legacy, stored_hash or "")
+    return False
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
