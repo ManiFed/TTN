@@ -833,6 +833,45 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
     return "good", reasons
 
 
+def classify_snr_failure(
+    snr: float,
+    exp_dur: Optional[float] = None,
+    prior_snr: Optional[float] = None,
+    prior_exp_dur: Optional[float] = None,
+    collapse_snr_floor: float = 2.0,
+) -> str:
+    """Classify *why* a quality=poor frame failed on SNR, for issue #96.
+
+    A quality=poor result can mean two very different things:
+
+    - "collapse": the field is empty, the pointing is wrong, or the lock
+      failed. Signature: SNR is near zero, or SNR got WORSE despite a
+      *longer* exposure (more integration time should only ever help a real
+      but faint star). The fix is to abort the pointing and recenter, not to
+      linger on a dead field with an even longer exposure.
+    - "borderline": a real but faint star. SNR is low but plausible, and
+      either there is no prior attempt to compare against or SNR is moving
+      the right direction. More integration time / more frames is fine here
+      — it's still subject to the quality gate.
+
+    ``exp_dur``/``prior_exp_dur`` are exposure durations in seconds for the
+    current and previous attempt on the same target (``None`` when unknown).
+    Never used to weaken ``evaluate_quality`` itself — this only decides the
+    retry strategy for a result that has already been flagged poor.
+    """
+    if snr <= collapse_snr_floor:
+        return "collapse"
+    if (
+        prior_snr is not None
+        and prior_exp_dur is not None
+        and exp_dur is not None
+        and exp_dur > prior_exp_dur
+        and snr <= prior_snr
+    ):
+        return "collapse"
+    return "borderline"
+
+
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────
 
 def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
