@@ -90,9 +90,15 @@ def auto_tier(filter_set) -> int:
     return 2 if len(bands & {"B", "V", "R", "I"}) >= 3 else 1
 
 
-def register_node(info: dict, lp_api_key: str = "") -> dict:
+def register_node(info: dict, lp_api_key: str = "", trusted_relink: bool = False) -> dict:
     """
     Register a new node (or re-register an existing one by node_id + api_key).
+
+    trusted_relink skips the api_key check and mints a fresh key instead of
+    trying to preserve the old one. It's for the ghost-node reuse path in
+    server.py: a node with no heartbeat has never had its key installed on
+    real hardware, so the caller can't supply the original plaintext key, but
+    ownership is already established out-of-band (node_members + user_id).
 
     Returns {"node_id": ..., "api_key": ...}.
     Raises ValueError on missing/invalid location.
@@ -108,15 +114,21 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     existing = None
     if node.node_id:
         existing = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node.node_id,))
-        if existing and not _verify_api_key(info.get("api_key", ""), existing["api_key"]):
-            raise ValueError("node_id already registered with a different API key")
-        if existing and isinstance(existing.get("api_key"), str) and not existing["api_key"].startswith("scrypt$"):
-            db.execute(
-                "UPDATE nodes SET api_key = %s WHERE node_id = %s",
-                (_hash_api_key(info.get("api_key", "")), existing["node_id"]),
-            )
+        if existing and not trusted_relink:
+            if not _verify_api_key(info.get("api_key", ""), existing["api_key"]):
+                raise ValueError("node_id already registered with a different API key")
+            if isinstance(existing.get("api_key"), str) and not existing["api_key"].startswith("scrypt$"):
+                db.execute(
+                    "UPDATE nodes SET api_key = %s WHERE node_id = %s",
+                    (_hash_api_key(info.get("api_key", "")), existing["node_id"]),
+                )
 
-    if existing:
+    if existing and trusted_relink:
+        node_id = existing["node_id"]
+        api_key = secrets.token_urlsafe(32)
+        api_key_hash = _hash_api_key(api_key)
+        recovery_token = existing.get("recovery_token") or secrets.token_urlsafe(32)
+    elif existing:
         node_id = existing["node_id"]
         api_key = info.get("api_key", "")
         api_key_hash = existing["api_key"]
@@ -167,6 +179,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                portable, status, vacation_until, vacation_from, registered_at, last_heartbeat)
            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT(node_id) DO UPDATE SET
+               api_key=excluded.api_key,
                owner_name=excluded.owner_name, owner_email=excluded.owner_email,
                latitude=excluded.latitude, longitude=excluded.longitude,
                elevation=excluded.elevation, city=excluded.city,
@@ -199,7 +212,7 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
                portable=excluded.portable,
                last_heartbeat=excluded.last_heartbeat""",
         (
-            node_id, api_key, recovery_token, node.owner_name, node.owner_email,
+            node_id, api_key_hash, recovery_token, node.owner_name, node.owner_email,
             node.latitude, node.longitude, node.elevation,
             node.city, node.country, node.utc_offset_hours,
             mpsas, bortle,
@@ -238,12 +251,26 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
 # ── Authentication ─────────────────────────────────────────────────────────────
 
 def authenticate(node_id: str, api_key: str) -> Optional[dict]:
-    """Return the node row when node_id + api_key are valid, else None."""
+    """Return the node row when node_id + api_key are valid, else None.
+
+    Rows written before hashing was introduced still hold the plaintext key;
+    those are verified with a direct comparison and transparently upgraded to
+    a hash on successful auth, so no separate migration pass is needed.
+    """
     if not node_id or not api_key:
         return None
     row = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node_id,))
-    if row is None or not secrets.compare_digest(row["api_key"], api_key):
+    if row is None:
         return None
+    stored = row.get("api_key")
+    if isinstance(stored, str) and stored.startswith("scrypt$"):
+        if not _verify_api_key(api_key, stored):
+            return None
+    else:
+        if not isinstance(stored, str) or not secrets.compare_digest(stored, api_key):
+            return None
+        db.execute("UPDATE nodes SET api_key = %s WHERE node_id = %s",
+                   (_hash_api_key(api_key), node_id))
     return row
 
 
@@ -267,7 +294,7 @@ def rekey_node(node_id: str, recovery_token: str) -> Optional[dict]:
     new_recovery_token = secrets.token_urlsafe(32)
     db.execute(
         "UPDATE nodes SET api_key = %s, recovery_token = %s WHERE node_id = %s",
-        (new_api_key, new_recovery_token, node_id),
+        (_hash_api_key(new_api_key), new_recovery_token, node_id),
     )
     logger.info("Node %s recovered via recovery_token — issued fresh api_key", node_id)
     return {"api_key": new_api_key, "recovery_token": new_recovery_token}
@@ -288,7 +315,7 @@ def reissue_api_key(node_id: str) -> Optional[str]:
         return None
     new_api_key = secrets.token_urlsafe(32)
     db.execute("UPDATE nodes SET api_key = %s WHERE node_id = %s",
-               (new_api_key, node_id))
+               (_hash_api_key(new_api_key), node_id))
     logger.info("Node %s api_key reissued via member credential repair", node_id)
     return new_api_key
 
