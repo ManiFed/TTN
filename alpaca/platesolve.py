@@ -89,6 +89,8 @@ class CenterIteration:
     solved_ra: Optional[float]   # deg, where the frame actually pointed (None=solve failed)
     solved_dec: Optional[float]  # deg
     error_arcmin: Optional[float]  # angular separation from target
+    solve_error: Optional[str] = None  # reason the solve failed, e.g. ASTAP's
+                                        # own "No solution found!" (issue #79)
 
 
 @dataclass
@@ -119,6 +121,7 @@ class CenterResult:
                     "solved_ra": _r(it.solved_ra),
                     "solved_dec": _r(it.solved_dec),
                     "error_arcmin": _r(it.error_arcmin, 3),
+                    "solve_error": it.solve_error,
                 }
                 for it in self.iterations
             ],
@@ -187,6 +190,7 @@ def center_on_target(
     any_solved = False
     last_solved: Optional[tuple] = None
     last_error: Optional[float] = None
+    last_solve_error: Optional[str] = None
 
     def _check_cancel():
         if cancel_check is not None and cancel_check():
@@ -232,8 +236,17 @@ def center_on_target(
             raise
 
         if solved is None:
-            logger.warning("Centering iteration %d: plate solve failed", i)
-            it = CenterIteration(i, commanded_ra, commanded_dec, None, None, None)
+            # solve_image_array (ASTAP/astrometry.net backed) records the
+            # specific failure reason — e.g. ASTAP's own "No solution
+            # found!" — in this module-level slot so it can flow through to
+            # the centering status/error field instead of a generic
+            # "plate solve failed" (issue #79). Injected solve_fn callables
+            # used by tests never touch it, so it stays None there.
+            last_solve_error = _LAST_SOLVE_ERROR
+            detail = f" ({last_solve_error})" if last_solve_error else ""
+            logger.warning("Centering iteration %d: plate solve failed%s", i, detail)
+            it = CenterIteration(i, commanded_ra, commanded_dec, None, None, None,
+                                 solve_error=last_solve_error)
             iterations.append(it)
             if progress_cb:
                 _safe_progress(progress_cb, it)
@@ -272,9 +285,11 @@ def center_on_target(
         commanded_dec = _clamp(commanded_dec + d_dec, -90.0, 90.0)
 
     if not any_solved:
+        detail = f" Last solver error: {last_solve_error}" if last_solve_error else ""
         raise CenteringError(
             "Auto-centering failed: no frame could be plate-solved. Check ASTAP is "
             "installed, the star database covers this field, and the exposure shows stars."
+            + detail
         )
 
     final_ra, final_dec = (last_solved if last_solved else (None, None))
@@ -282,6 +297,13 @@ def center_on_target(
                    "(last error %.2f′)", max_iterations, last_error or float("nan"))
     return CenterResult(False, target_ra, target_dec, final_ra, final_dec,
                         last_error, iterations)
+
+
+# Reason the most recent solve_image_array() call failed, if any (e.g. ASTAP's
+# own "No solution found!"). Auto-centering runs one solve at a time on a
+# single background thread, so a plain module global is sufficient here —
+# center_on_target reads it right after solve_fn returns None. See issue #79.
+_LAST_SOLVE_ERROR: Optional[str] = None
 
 
 def _clamp(v, lo, hi):
@@ -319,6 +341,9 @@ def solve_image_array(
     search_radius – search radius in degrees
     pixel_scale   – arcsec/px hint (speeds up astrometry.net solve)
     """
+    global _LAST_SOLVE_ERROR
+    _LAST_SOLVE_ERROR = None
+
     if solver_path is None:
         solver_path = astap_path or ("astap" if solver != "astrometry" else "solve-field")
     elif astap_path and solver_path == "solve-field" and solver != "astrometry":
@@ -346,7 +371,10 @@ def solve_image_array(
             ok = _run_astrometry_net(tmp_path, ra_deg, dec_deg,
                                      solver_path, search_radius, pixel_scale)
         else:
-            ok = _run_astap(tmp_path, ra_deg, dec_deg, solver_path, search_radius)
+            astap_result = _run_astap(tmp_path, ra_deg, dec_deg, solver_path, search_radius)
+            ok = bool(astap_result)
+            if not ok:
+                _LAST_SOLVE_ERROR = getattr(astap_result, "message", None)
 
         if not ok:
             return None
