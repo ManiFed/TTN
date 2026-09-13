@@ -11,6 +11,7 @@ the node's location.
 import json
 import logging
 import secrets
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -28,6 +29,10 @@ HEARTBEAT_STALE_S = 900
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _hash_api_key(api_key: str) -> str:
+    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
@@ -69,15 +74,18 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     existing = None
     if node.node_id:
         existing = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node.node_id,))
-        if existing and existing["api_key"] != info.get("api_key", ""):
+        if existing and existing["api_key"] != _hash_api_key(info.get("api_key", "")):
             raise ValueError("node_id already registered with a different API key")
 
     if existing:
-        node_id, api_key = existing["node_id"], existing["api_key"]
+        node_id = existing["node_id"]
+        api_key = info.get("api_key", "")
+        api_key_hash = existing["api_key"]
         recovery_token = existing.get("recovery_token") or secrets.token_urlsafe(32)
     else:
         node_id = node.node_id or f"node_{secrets.token_hex(4)}"
         api_key = secrets.token_urlsafe(32)
+        api_key_hash = _hash_api_key(api_key)
         # Lets the node agent silently recover from a revoked api_key later
         # (see rekey_node) without losing this node_id's history -- kept
         # separately from api_key so routine traffic never exposes it.
