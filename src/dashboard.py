@@ -5590,7 +5590,7 @@ def _resync_schedule_from_cloud() -> tuple[dict, int]:
         result = _cloud.force_redeliver_current_plan()
     except Exception as exc:
         logger.exception("schedule resync failed")
-        return {"ok": False, "error": str(exc)[:300]}, 500
+        return {"ok": False, "error": "Schedule resync failed"}, 500
     with _sched_lock:
         running = bool(_sched_state.get("running"))
         total = int(_sched_state.get("total") or 0)
