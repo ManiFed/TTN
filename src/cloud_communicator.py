@@ -983,11 +983,11 @@ class CloudCommunicator:
         self.status["plan_pending_review"] = False
         try:
             self._poll_plan()
-        except Exception as exc:
-            logger.warning("force_redeliver_current_plan failed: %s", exc)
+        except Exception:
+            logger.exception("force_redeliver_current_plan failed")
             return {
                 "ok": False,
-                "error": "Cloud plan redelivery failed",
+                "error": "Failed to resync plan from cloud",
                 "previous_plan_id": previous,
                 "plan_id": self._last_plan_id,
                 "plan_items": int(self.status.get("plan_items") or 0),
