@@ -117,6 +117,8 @@ _state: dict[str, Any] = {
         "exposing":         False,
         "exposure_start_ts": None,
         "exposure_duration": None,
+        "exposure_readout_timeout": None,
+        "exposure_generation": 0,
     },
     "focuser": {
         "enabled":   False,
@@ -435,6 +437,35 @@ _device_lock = threading.RLock()
 # Set to request cancellation of an in-flight manual exposure.  Cleared at the
 # start of each manual exposure.
 _expose_cancel = threading.Event()
+
+# How much extra wall-clock time beyond the exposure's own duration + readout
+# budget we allow before treating the "exposing" latch as stuck rather than
+# genuinely in progress (issue #95).  Camera.expose() already fails fast with
+# its own TimeoutError at duration+readout_timeout, so this is pure margin for
+# that exception to propagate and the worker thread's `finally` to run before
+# we conclude the latch was orphaned (e.g. by a hang in a device call that
+# never raised).
+_STALE_EXPOSURE_GRACE_S = 60.0
+
+
+def _exposure_lock_is_stale(cam_state: dict) -> bool:
+    """True if ``exposing`` has been set far longer than any real capture
+    started at ``exposure_start_ts`` could plausibly still be running.
+
+    A healthy capture is never flagged: the budget is the exposure's own
+    duration plus its readout timeout plus a generous grace period, so this
+    only fires once Camera.expose()'s own fail-fast timeout should already
+    have fired and unwound the worker thread (issue #95).
+    """
+    start = cam_state.get("exposure_start_ts")
+    if start is None:
+        # exposing=True with no timestamp is an inconsistent state that can
+        # only be left over from a previous bug — never block on it.
+        return True
+    duration = cam_state.get("exposure_duration") or 0.0
+    readout_timeout = cam_state.get("exposure_readout_timeout") or 120.0
+    budget = float(duration) + float(readout_timeout) + _STALE_EXPOSURE_GRACE_S
+    return (time.time() - start) > budget
 
 _pier_cam_frame: Optional[bytes] = None
 _pier_cam_frame_lock = threading.Lock()
@@ -3834,14 +3865,52 @@ def api_expose():
 
     # Reserve exposing atomically so concurrent requests cannot both pass the
     # in-progress check before either worker starts (and then collide on paths).
+    #
+    # A held lock is not automatically a live capture: if the worker thread
+    # that set it never reached its `finally` (e.g. a device call hung past
+    # its own timeout), the latch is stuck and would otherwise require a
+    # human to run node_abort_exposure + node_schedule_abort and restart the
+    # process before the camera became usable again (issue #95).  Detect that
+    # case here and reclaim the lock instead of rejecting the request.
+    stale_reclaim = False
     with _state_lock:
         if _state["camera"]["exposing"]:
-            return jsonify({"error": "Exposure already in progress"}), 409
+            if not _exposure_lock_is_stale(_state["camera"]):
+                return jsonify({"error": "Exposure already in progress"}), 409
+            stale_reclaim = True
+            logger.warning(
+                "Stale capture lock detected (held %.0fs, budget %.0fs) — "
+                "clearing automatically instead of requiring a manual "
+                "abort + restart (issue #95)",
+                time.time() - (_state["camera"].get("exposure_start_ts") or time.time()),
+                (_state["camera"].get("exposure_duration") or 0.0)
+                + (_state["camera"].get("exposure_readout_timeout") or 120.0)
+                + _STALE_EXPOSURE_GRACE_S,
+            )
+        # A new generation invalidates any earlier worker thread's `finally`
+        # block, so a stale thread that eventually wakes up cannot clobber
+        # this (or a later) exposure's state (issue #95).
+        my_generation = _state["camera"].get("exposure_generation", 0) + 1
+        _state["camera"]["exposure_generation"] = my_generation
         _state["camera"]["exposing"]           = True
         _state["camera"]["exposure_start_ts"]  = time.time()
         _state["camera"]["exposure_duration"]  = duration
+        _state["camera"]["exposure_readout_timeout"] = readout_timeout
         _state["camera"]["error"]              = None
         _state["image_captured"]               = False
+
+    if stale_reclaim:
+        # Best-effort: stop whatever the camera thinks it's doing and signal
+        # any surviving worker thread to stop.  Mirrors /api/camera/abort,
+        # which intentionally bypasses _device_lock so it can preempt a
+        # worker that is holding it.
+        _expose_cancel.set()
+        try:
+            _cam.abort_exposure()
+        except Exception:
+            logger.exception(
+                "Best-effort abort of stale capture lock failed (issue #95) "
+                "— proceeding with the new exposure anyway")
 
     req_id = uuid.uuid4().hex[:10]
 
@@ -3871,6 +3940,12 @@ def api_expose():
                 if _expose_cancel.is_set():
                     raise ExposureCancelled("Exposure cancelled")
                 with _state_lock:
+                    # A later request may have reclaimed the lock as stale
+                    # (issue #95) while this multi-frame capture was still
+                    # running — stop touching hardware/state for a run that
+                    # is no longer the authoritative one.
+                    if _state["camera"].get("exposure_generation") != my_generation:
+                        raise ExposureCancelled("Exposure superseded by a newer request")
                     _state["camera"]["exposure_start_ts"] = time.time()
                     _state["camera"]["exposure_duration"] = duration
                 # Request id + ns timestamp: frame counters restart at 1 and
@@ -3921,13 +3996,19 @@ def api_expose():
             logger.error("Exposure failed: %s", exc)
         finally:
             with _state_lock:
-                _state["camera"]["exposing"]          = False
-                _state["camera"]["exposure_start_ts"] = None
-                _state["camera"]["exposure_duration"] = None
-                if last_error and last_error != "cancelled":
-                    _state["camera"]["error"] = last_error[:500]
-                elif fits_written:
-                    _state["camera"]["error"] = None
+                # If a later request already reclaimed the lock as stale
+                # (issue #95), this thread no longer owns the "exposing"
+                # latch — clearing it here would clobber the newer, live
+                # exposure's state instead of this dead one's.
+                if _state["camera"].get("exposure_generation") == my_generation:
+                    _state["camera"]["exposing"]          = False
+                    _state["camera"]["exposure_start_ts"] = None
+                    _state["camera"]["exposure_duration"] = None
+                    _state["camera"]["exposure_readout_timeout"] = None
+                    if last_error and last_error != "cancelled":
+                        _state["camera"]["error"] = last_error[:500]
+                    elif fits_written:
+                        _state["camera"]["error"] = None
             _pier_cam_pause.clear()
 
     threading.Thread(target=_do, daemon=True, name="cam-expose").start()
