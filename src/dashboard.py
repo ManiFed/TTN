@@ -4123,11 +4123,12 @@ def api_photometry_enqueue():
         override = override_auid
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
-    abs_path = os.path.realpath(raw)
-    if not os.path.isfile(abs_path):
-        return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
-    if not abs_path.lower().endswith((".fits", ".fit")):
-        return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
+
+    # Only accept relative paths from clients; resolve under trusted roots.
+    raw_rel = raw.replace("\\", "/").lstrip("/")
+    if not raw_rel or raw_rel.startswith("../") or "/../" in f"/{raw_rel}/" or os.path.isabs(raw):
+        return jsonify({"ok": False, "error": "path must be a relative path under an allowed root"}), 400
+
     # Allow fits_export, configured watch path, and data/fits only.
     export_abs = os.path.realpath(_fits_export_dir())
     allowed_roots = [export_abs, os.path.realpath("data/fits")]
@@ -4136,12 +4137,26 @@ def api_photometry_enqueue():
         iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
     if iw_path:
         allowed_roots.append(os.path.realpath(iw_path))
-    if not any(abs_path == root or abs_path.startswith(root + os.sep)
-               for root in allowed_roots if root):
+
+    abs_path = ""
+    for root in (r for r in allowed_roots if r):
+        joined = safe_join(root, raw_rel)
+        if not joined:
+            continue
+        candidate = os.path.realpath(joined)
+        if candidate == root or candidate.startswith(root + os.sep):
+            abs_path = candidate
+            break
+
+    if not abs_path:
         return jsonify({
             "ok": False,
             "error": "path must be under fits_export/, data/fits/, or the image watch path",
         }), 403
+    if not os.path.isfile(abs_path):
+        return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
+    if not abs_path.lower().endswith((".fits", ".fit")):
+        return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
     _enqueue_photometry(
         abs_path,
         target_name=override or None,
