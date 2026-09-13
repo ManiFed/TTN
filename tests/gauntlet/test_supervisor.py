@@ -166,6 +166,84 @@ class SupervisorGauntletTest(TempCwdTestCase):
         self.assertNotIn(("10.0.0.8", 5555), self.h.connect_calls)
         self.assertEqual(self.h.persisted, [("10.0.0.9", 5555)])
 
+    # ── Identity verification (issue #97: reject NINA/ASCOM decoys) ──────────
+
+    def test_rediscovery_rejects_nina_and_ascom_sim_then_finds_real_seestar(self):
+        """LAN full of decoys: NINA on :32330, ASCOM sim on :32323, and the
+        real Seestar rediscovered on a fresh DHCP address. No saved serial
+        yet (first reconnect after install), so identity must gate the
+        candidate list -- the decoys must never even be dialed."""
+        self.h.connect_results_by_host = {
+            ("10.0.0.5", 5555): False,     # stale saved host
+            ("172.22.23.176", 32330): True,   # N.I.N.A. -- must be rejected
+            ("172.22.5.248", 32323): True,    # ASCOM/Alpaca sim -- rejected
+            ("172.22.5.229", 32323): True,    # the real Seestar
+        }
+        self.h.discovered = [
+            {"address": "172.22.23.176", "port": 32330,
+             "device_name": "N.I.N.A. Telescope Simulator"},
+            {"address": "172.22.5.248", "port": 32323,
+             "device_name": "ASCOM Simulator Telescope"},
+            {"address": "172.22.5.229", "port": 32323,
+             "device_name": "Seestar S50 Telescope"},
+        ]
+        sup = self.h.make()
+        sup.tick()
+        self.assertNotIn(("172.22.23.176", 32330), self.h.connect_calls)
+        self.assertNotIn(("172.22.5.248", 32323), self.h.connect_calls)
+        self.assertIn(("172.22.5.229", 32323), self.h.connect_calls)
+        self.assertEqual(self.h.persisted, [("172.22.5.229", 32323)])
+        self.assertEqual(telemetry.counters().get("device_reconnected"), 1)
+
+    def test_rediscovery_rejects_unnamed_candidate_with_no_saved_serial(self):
+        """An LAN responder that never returns a recognizable device name
+        must not be treated as the telescope just because it isn't an
+        obviously-named decoy."""
+        self.h.connect_results_by_host = {
+            ("10.0.0.5", 5555): False,
+            ("10.0.0.8", 5555): True,
+        }
+        self.h.discovered = [{"address": "10.0.0.8", "port": 5555}]
+        sup = self.h.make()
+        sup.tick()
+        self.assertNotIn(("10.0.0.8", 5555), self.h.connect_calls)
+        self.assertEqual(self.h.persisted, [])
+
+    def test_saved_host_now_answering_as_nina_is_rejected_and_rescanned(self):
+        """Starfront scenario: the saved IP is reachable again but it's now
+        a NINA responder that grabbed the old lease, not the Seestar. The
+        supervisor must probe identity even on a successful connect, reject
+        it, and fall back to a verified LAN candidate."""
+        self.h.connect_result = True  # every connect_default call "succeeds"
+        self.h.discovered = [
+            {"address": "10.0.0.9", "port": 5555,
+             "device_name": "Seestar S30PROSF Telescope"},
+        ]
+        identities = {
+            ("10.0.0.5", 5555): {"device_name": "N.I.N.A. Telescope Simulator"},
+            ("10.0.0.9", 5555): {"device_name": "Seestar S30PROSF Telescope"},
+        }
+        sup = self.h.make(fetch_identity=lambda h, p: identities.get((h, p), {}))
+        sup.tick()
+        self.assertEqual(
+            self.h.connect_calls, [("10.0.0.5", 5555), ("10.0.0.9", 5555)])
+        self.assertEqual(self.h.persisted, [("10.0.0.9", 5555)])
+        self.assertEqual(telemetry.counters().get("device_reconnected"), 1)
+
+    def test_identity_probe_failure_does_not_block_a_good_reconnect(self):
+        """A raised exception from the identity probe (e.g. a transient
+        request timeout right after connecting) must fail open, not flap an
+        otherwise-successful reconnect."""
+        self.h.connect_result = True
+
+        def explode(host, port):
+            raise RuntimeError("management API timeout")
+
+        sup = self.h.make(fetch_identity=explode)
+        sup.tick()
+        self.assertEqual(self.h.connect_calls, [("10.0.0.5", 5555)])
+        self.assertEqual(telemetry.counters().get("device_reconnected"), 1)
+
     def test_discovery_skips_same_dead_saved_host(self):
         self.h.connect_result = False
         self.h.discovered = [{"address": "10.0.0.5", "port": 5555}]

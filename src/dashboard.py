@@ -6413,6 +6413,10 @@ def launch(port: int = 5173) -> None:
             {"alpaca": {"default_server": {"address": host, "port": port}}})
         logger.info("Supervisor: default ALPACA server updated to %s:%d", host, port)
 
+    def _supervisor_fetch_identity(host: str, port: int) -> dict:
+        from alpaca.discovery import _fetch_device_info
+        return _fetch_device_info(host, port)
+
     _supervisor = NodeSupervisor(
         load_config=_load_config,
         devices_connected=_supervisor_devices_ok,
@@ -6421,6 +6425,7 @@ def launch(port: int = 5173) -> None:
         restart_watcher=_revive_image_watcher,
         discover_servers=_supervisor_discover,
         persist_default_server=_supervisor_persist_default,
+        fetch_identity=_supervisor_fetch_identity,
     )
     _supervisor.start()
 

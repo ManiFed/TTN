@@ -18,6 +18,45 @@ logger = logging.getLogger(__name__)
 DISCOVERY_MESSAGE = b"alpacadiscovery1"
 BROADCAST_ADDR = "255.255.255.255"
 
+# A Starfront-night LAN is full of ALPACA decoys that will happily answer the
+# discovery broadcast and accept a connection: N.I.N.A.'s built-in Alpaca
+# server (commonly on :32330) and the ASCOM/Alpaca simulator (commonly on
+# :32323). Reconnecting to either wastes a night. Identity is verified from
+# the device name/description string returned by the ALPACA management API
+# (see _fetch_device_info below) — reject anything that names a simulator or
+# NINA, and only accept strings that positively name a ZWO Seestar.
+_REJECT_IDENTITY_SUBSTRINGS = (
+    "nina",
+    "n.i.n.a",
+    "ascom simulator",
+    "alpaca simulator",
+    "simulator",
+)
+_ACCEPT_IDENTITY_SUBSTRINGS = (
+    "seestar",
+    "zwo",
+    "s50",
+    "s30",
+)
+
+
+def is_verified_seestar(device_name: str) -> bool:
+    """Return True only when *device_name* positively identifies a real ZWO
+    Seestar (S50 / S30PROSF).
+
+    Identity is unknown-by-default: a blank name, a name that doesn't
+    mention Seestar/ZWO/S50/S30, or one that names a known decoy (NINA, an
+    ASCOM or Alpaca simulator) is rejected. This is deliberately stricter
+    than "not a known decoy" — an unrecognized responder on the LAN is not
+    assumed to be the telescope just because it isn't obviously a simulator.
+    """
+    name = (device_name or "").strip().lower()
+    if not name:
+        return False
+    if any(bad in name for bad in _REJECT_IDENTITY_SUBSTRINGS):
+        return False
+    return any(good in name for good in _ACCEPT_IDENTITY_SUBSTRINGS)
+
 
 def _fetch_device_info(address: str, port: int) -> dict:
     """Query the ALPACA management API for device name and serial (UniqueID)."""
