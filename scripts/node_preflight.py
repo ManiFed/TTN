@@ -123,8 +123,10 @@ def main() -> int:
 
     observer = config.get("safety", {}).get("observer", {})
     lat, lon = observer.get("latitude"), observer.get("longitude")
-    check("observer_location", lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0),
-          f"lat={lat!r}, lon={lon!r}")
+    has_location = lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0)
+    # Don't echo the actual coordinates: they're the owner's home location.
+    check("observer_location", has_location,
+          "set" if has_location else "missing — set safety.observer.latitude/longitude")
 
     cloud = config.get("cloud", {})
     node_id = str(cloud.get("node_id") or "")
@@ -177,7 +179,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         for item in checks:
-            print(f"{'PASS' if item['ok'] else 'FAIL'} {item['name']}")
+            print(f"{'PASS' if item['ok'] else 'FAIL'} {item['name']}: {item['detail']}")
         print("READY" if report["ready"] else f"NOT READY ({len(required_failures)} failed)")
     return 0 if report["ready"] else 1
 
