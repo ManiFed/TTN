@@ -4124,12 +4124,14 @@ def api_photometry_enqueue():
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
 
-    # Only accept relative paths from clients; resolve under trusted roots.
-    raw_rel = raw.replace("\\", "/").lstrip("/")
-    if not raw_rel or raw_rel.startswith("../") or "/../" in f"/{raw_rel}/" or os.path.isabs(raw):
-        return jsonify({"ok": False, "error": "path must be a relative path under an allowed root"}), 400
+    # Resolve symlinks/".." before validating containment, so the check below
+    # is the actual security boundary rather than trusting the raw string.
+    candidate = os.path.realpath(raw)
 
-    # Allow fits_export, configured watch path, and data/fits only.
+    # Allow fits_export, configured watch path, and data/fits only. Accept
+    # both absolute paths and paths relative to the project root (as
+    # returned by /api/fits/list), since realpath resolves either the same
+    # way relative to cwd.
     export_abs = os.path.realpath(_fits_export_dir())
     allowed_roots = [export_abs, os.path.realpath("data/fits")]
     iw_path = ""
@@ -4140,10 +4142,6 @@ def api_photometry_enqueue():
 
     abs_path = ""
     for root in (r for r in allowed_roots if r):
-        joined = safe_join(root, raw_rel)
-        if not joined:
-            continue
-        candidate = os.path.realpath(joined)
         if candidate == root or candidate.startswith(root + os.sep):
             abs_path = candidate
             break
