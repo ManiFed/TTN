@@ -1762,6 +1762,14 @@ class _LockedDeviceProxy:
     for the whole centering run — see issue #45.
     """
 
+    # Max seconds to wait for _device_lock before giving up. A normal
+    # slew/expose/park call is seconds; if some other route is holding the
+    # lock this long it is stuck, not merely busy — without this bound, a
+    # deadlocked lock holder left centering's background thread parked in
+    # lock.acquire() forever: running:true with iterations:[] and no error,
+    # requiring a restart to clear (issue #79).
+    LOCK_TIMEOUT_S = 120.0
+
     def __init__(self, target):
         self._target = target
 
@@ -1771,8 +1779,18 @@ class _LockedDeviceProxy:
             return attr
 
         def _locked_call(*args, **kwargs):
-            with _device_lock:
+            from alpaca.platesolve import CenteringError
+
+            if not _device_lock.acquire(timeout=self.LOCK_TIMEOUT_S):
+                raise CenteringError(
+                    f"Auto-centering timed out after {self.LOCK_TIMEOUT_S:.0f}s "
+                    f"waiting for the device lock to call {name}() — another "
+                    "operation appears to be stuck holding it."
+                )
+            try:
                 return attr(*args, **kwargs)
+            finally:
+                _device_lock.release()
 
         return _locked_call
 
@@ -1818,40 +1836,58 @@ def _run_centering_bg(
                 "solved_ra": round(it.solved_ra, 5) if it.solved_ra is not None else None,
                 "solved_dec": round(it.solved_dec, 5) if it.solved_dec is not None else None,
                 "error_arcmin": round(it.error_arcmin, 3) if it.error_arcmin is not None else None,
+                "solve_error": getattr(it, "solve_error", None),
             })
 
+    # Issue #79: running:true with iterations:[] stuck forever. The previous
+    # version cleared "running" from inside each except branch below, which
+    # only helps if execution actually reaches one of those branches. A hang
+    # earlier in this thread — a device-lock acquisition that never returns,
+    # a subprocess with no timeout, anything blocking before the try/except
+    # is even entered in a future refactor — would leave "running" stuck
+    # true with no error recorded. Wrapping the whole call in try/finally
+    # guarantees "running" is cleared no matter which path is taken,
+    # including exception types not explicitly anticipated below.
     try:
-        result = center_on_target_device(
-            _LockedDeviceProxy(_tel), _LockedDeviceProxy(_cam),
-            target_ra_deg, target_dec_deg,
-            exposure_s=exposure_s,
-            tolerance_arcmin=tolerance_arcmin,
-            max_iterations=max_iterations,
-            settle_s=settle_s,
-            solver=solver_type,
-            solver_path=solver_path,
-            search_radius=radius,
-            cancel_check=_cancelled,
-            progress_cb=_progress,
-        )
+        try:
+            result = center_on_target_device(
+                _LockedDeviceProxy(_tel), _LockedDeviceProxy(_cam),
+                target_ra_deg, target_dec_deg,
+                exposure_s=exposure_s,
+                tolerance_arcmin=tolerance_arcmin,
+                max_iterations=max_iterations,
+                settle_s=settle_s,
+                solver=solver_type,
+                solver_path=solver_path,
+                search_radius=radius,
+                cancel_check=_cancelled,
+                progress_cb=_progress,
+            )
+            with _center_lock:
+                _center_state["result"] = result.as_dict()
+            if result.success:
+                logger.info("Auto-centering succeeded — target centered within %.2f′",
+                            result.error_arcmin)
+            else:
+                logger.warning("Auto-centering finished without reaching tolerance")
+        except CenteringCancelled:
+            with _center_lock:
+                _center_state["error"] = "cancelled"
+            logger.warning("Auto-centering cancelled by user")
+        except CenteringError as exc:
+            # A clean, reportable failure — includes real ASTAP solve
+            # failures like "No solution found!" (issue #79), not just the
+            # missing-binary/bad-path cases from issues #63/#76.
+            with _center_lock:
+                _center_state["error"] = str(exc)
+            logger.error("Auto-centering failed: %s", exc)
+        except Exception as exc:
+            with _center_lock:
+                _center_state["error"] = f"Auto-centering crashed: {exc}"
+            logger.error("Auto-centering crashed: %s", exc, exc_info=True)
+    finally:
         with _center_lock:
-            _center_state["result"]  = result.as_dict()
             _center_state["running"] = False
-        if result.success:
-            logger.info("Auto-centering succeeded — target centered within %.2f′",
-                        result.error_arcmin)
-        else:
-            logger.warning("Auto-centering finished without reaching tolerance")
-    except CenteringCancelled:
-        with _center_lock:
-            _center_state["error"]   = "cancelled"
-            _center_state["running"] = False
-        logger.warning("Auto-centering cancelled by user")
-    except (CenteringError, Exception) as exc:
-        with _center_lock:
-            _center_state["error"]   = str(exc)
-            _center_state["running"] = False
-        logger.error("Auto-centering failed: %s", exc)
 
 
 # ── Live stacking state ───────────────────────────────────────────────────────
