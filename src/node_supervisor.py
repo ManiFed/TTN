@@ -9,9 +9,12 @@ person intervened.  This supervisor closes those gaps with one periodic loop:
 
 * **Device connection** — when no telescope/camera is connected and a default
   ALPACA server is saved in config, retry the connection with backoff.  If the
-  saved host stays unreachable (common after a Seestar DHCP lease change),
-  optionally rediscover ALPACA servers on the LAN and promote a working one.
-  This makes "power blip → service restart → observing resumes" true headless.
+  saved host stays unreachable, or answers but isn't the real Seestar (common
+  on a LAN full of decoys: NINA on :32330, ASCOM/Alpaca simulators on
+  :32323), rediscover ALPACA servers on the LAN, verify each candidate's
+  identity, and promote only a confirmed real Seestar.  This makes "power
+  blip → service restart → observing resumes" true headless without ever
+  reconnecting to a simulator.
 * **Image watcher** — re-mount the Seestar SMB share and restart the watcher
   if the watch path vanished (Seestar reboot, stale CIFS mount).
 * **Disk health** — emit telemetry when free space is low and prune old
@@ -33,6 +36,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from alpaca.discovery import is_verified_seestar
 from src import telemetry
 
 logger = logging.getLogger("node_supervisor")
@@ -60,6 +64,7 @@ class NodeSupervisor:
         interval_s: float = 30.0,
         discover_servers: Optional[Callable[[], list]] = None,
         persist_default_server: Optional[Callable[[str, int], None]] = None,
+        fetch_identity: Optional[Callable[[str, int], dict]] = None,
     ) -> None:
         self._load_config = load_config
         self._devices_connected = devices_connected
@@ -71,6 +76,11 @@ class NodeSupervisor:
         # change / power cycle, rediscover on the LAN and try alternatives.
         self._discover_servers = discover_servers
         self._persist_default_server = persist_default_server
+        # Optional: probe a live connection's device identity (ALPACA
+        # management API DeviceName) so a NINA responder or ASCOM/Alpaca
+        # simulator that happens to occupy the saved IP/port is rejected
+        # rather than accepted as "reconnected".
+        self._fetch_identity = fetch_identity
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -158,6 +168,16 @@ class NodeSupervisor:
             ok = False
             logger.warning("Supervisor: reconnect raised: %s", exc)
 
+        if ok:
+            identity_ok, seen_name = self._verify_identity(host, port)
+            if not identity_ok:
+                logger.warning(
+                    "Supervisor: saved server %s:%d answered but identified as "
+                    "'%s' — not a verified Seestar (NINA/simulator?); rejecting "
+                    "and rescanning the LAN",
+                    host, port, seen_name or "(unknown)")
+                ok = False
+
         used_host, used_port = host, port
         if not ok and self._discover_servers is not None:
             try:
@@ -175,20 +195,47 @@ class NodeSupervisor:
                     continue
                 if alt_host == host and alt_port == port:
                     continue
+                device_name = str(entry.get("device_name") or "")
                 got_serial = str(entry.get("serial") or "").strip().lower()
-                if want_serial and got_serial != want_serial:
+                if want_serial:
+                    # A known serial (UniqueID) is the strongest identifier —
+                    # trust an exact match even if the device name wasn't
+                    # returned, but never trust a mismatch or a missing one.
+                    if got_serial != want_serial:
+                        logger.info(
+                            "Supervisor: skipping discovered %s:%d serial %s "
+                            "(want %s)",
+                            alt_host, alt_port, got_serial or "(none)",
+                            want_serial)
+                        continue
+                elif not is_verified_seestar(device_name):
+                    # No saved serial to key off yet (e.g. first reconnect
+                    # after install) — do not blindly accept the first LAN
+                    # responder. Reject NINA/ASCOM/Alpaca simulators and
+                    # anything that isn't positively identified as a Seestar.
                     logger.info(
-                        "Supervisor: skipping discovered %s:%d serial %s (want %s)",
-                        alt_host, alt_port, got_serial or "(none)", want_serial)
+                        "Supervisor: skipping discovered %s:%d — not a "
+                        "verified Seestar (identified as '%s')",
+                        alt_host, alt_port, device_name or "(unknown)")
                     continue
                 logger.info(
                     "Supervisor: saved server unreachable — trying discovered %s:%d",
                     alt_host, alt_port)
                 try:
-                    ok = self._connect_default(alt_host, alt_port)
+                    candidate_ok = self._connect_default(alt_host, alt_port)
                 except Exception as exc:
-                    ok = False
+                    candidate_ok = False
                     logger.warning("Supervisor: rediscovered reconnect raised: %s", exc)
+                if candidate_ok:
+                    identity_ok, seen_name = self._verify_identity(
+                        alt_host, alt_port, device_name)
+                    if not identity_ok:
+                        logger.warning(
+                            "Supervisor: discovered %s:%d connected but "
+                            "identified as '%s' — not a verified Seestar; "
+                            "rejecting", alt_host, alt_port, seen_name or "(unknown)")
+                        candidate_ok = False
+                ok = candidate_ok
                 if ok:
                     used_host, used_port = alt_host, alt_port
                     if self._persist_default_server is not None:
@@ -209,6 +256,29 @@ class NodeSupervisor:
                 "device_connect_failed", severity="warning",
                 detail={"host": host, "port": port,
                         "retry_in_s": int(self._reconnect_backoff_s)})
+
+    def _verify_identity(self, host: str, port: int,
+                          known_name: str = "") -> tuple[bool, str]:
+        """Confirm *host:port* is a real Seestar, not a NINA/Alpaca decoy.
+
+        If no ``fetch_identity`` hook was wired in, verification is skipped
+        (backward compatible — a caller that doesn't care about identity
+        just gets the old reachability-only behaviour). A probe that raises
+        (network hiccup while calling the management API right after a
+        successful ALPACA connect) fails open rather than flapping a
+        genuinely-fine reconnect; a probe that succeeds but names something
+        else — or nothing — fails closed.
+        """
+        if self._fetch_identity is None:
+            return True, known_name
+        try:
+            info = self._fetch_identity(host, port) or {}
+        except Exception as exc:
+            logger.warning(
+                "Supervisor: identity probe raised for %s:%d: %s", host, port, exc)
+            return True, known_name
+        name = str(info.get("device_name") or known_name or "")
+        return is_verified_seestar(name), name
 
     # ── Image watcher ──────────────────────────────────────────────────────────
 
