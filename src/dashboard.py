@@ -4124,31 +4124,52 @@ def api_photometry_enqueue():
     if not raw:
         return jsonify({"ok": False, "error": "path is required"}), 400
 
-    # Resolve symlinks/".." before validating containment, so the check below
-    # is the actual security boundary rather than trusting the raw string.
-    candidate_path = pathlib.Path(raw).expanduser().resolve(strict=False)
+    # Allow fits_export, configured watch path, and data/fits only. Clients
+    # may send either an absolute path or one relative to the project root
+    # (as returned by /api/fits/list, e.g. "fits_export/2026-09-08/x.fits").
+    # Each root is tracked in two forms: `lex` (plain os.path.abspath — no
+    # filesystem access) is what the untrusted `raw` string is sliced against
+    # to derive an untrusted *relative* component, which is only ever handed
+    # to safe_join() (the actual containment guard); `resolved` (realpath, so
+    # symlinks are followed) is compared against safe_join()'s realpath'd
+    # output afterwards, to catch a root that is itself reached via a
+    # symlink. `raw` itself is never passed to realpath/relpath/join —
+    # only plain string slicing — so nothing here trusts the client's
+    # string as a filesystem path before safe_join has validated it.
+    def _root_pair(p: str) -> tuple:
+        return (os.path.abspath(p), os.path.realpath(p)) if p else ("", "")
 
-    # Allow fits_export, configured watch path, and data/fits only. Accept
-    # both absolute paths and paths relative to the project root (as
-    # returned by /api/fits/list), since resolve() canonicalizes either way.
-    allowed_root_paths = [
-        pathlib.Path(_fits_export_dir()).expanduser().resolve(strict=False),
-        pathlib.Path("data/fits").expanduser().resolve(strict=False),
+    roots = [
+        _root_pair(_fits_export_dir()),
+        _root_pair("data/fits"),
     ]
     iw_path = ""
     with _state_lock:
         iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
     if iw_path:
-        allowed_root_paths.append(pathlib.Path(iw_path).expanduser().resolve(strict=False))
+        roots.append(_root_pair(iw_path))
+
+    raw_norm = raw.replace("\\", "/")
+    raw_abs_str = raw_norm if raw_norm.startswith("/") else f"{os.getcwd().replace(chr(92), '/')}/{raw_norm}"
 
     abs_path = ""
-    for root in (r for r in allowed_root_paths if str(r)):
-        try:
-            candidate_path.relative_to(root)
-            abs_path = str(candidate_path)
-            break
-        except ValueError:
+    for lex_root, resolved_root in roots:
+        if not lex_root:
             continue
+        lex_root_norm = lex_root.replace("\\", "/")
+        if raw_abs_str == lex_root_norm:
+            rel = ""
+        elif raw_abs_str.startswith(lex_root_norm + "/"):
+            rel = raw_abs_str[len(lex_root_norm) + 1:]
+        else:
+            continue
+        joined = safe_join(lex_root, rel)
+        if not joined:
+            continue
+        candidate = os.path.realpath(joined)
+        if candidate == resolved_root or candidate.startswith(resolved_root + os.sep):
+            abs_path = candidate
+            break
 
     if not abs_path:
         return jsonify({
