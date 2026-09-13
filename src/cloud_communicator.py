@@ -987,7 +987,7 @@ class CloudCommunicator:
             logger.warning("force_redeliver_current_plan failed: %s", exc)
             return {
                 "ok": False,
-                "error": str(exc)[:300],
+                "error": "Cloud plan redelivery failed",
                 "previous_plan_id": previous,
                 "plan_id": self._last_plan_id,
                 "plan_items": int(self.status.get("plan_items") or 0),
