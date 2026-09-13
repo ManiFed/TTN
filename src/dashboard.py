@@ -4012,7 +4012,7 @@ def api_cloud_credentials():
                                     allow_identity_change=allow_identity_change)
     except ValueError as exc:
         logger.warning("install_credentials refused: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 409
+        return jsonify({"ok": False, "error": "invalid credentials request"}), 409
     except Exception:
         logger.exception("install_credentials failed")
         return jsonify({"ok": False, "error": "could not install credentials"}), 500
@@ -5590,7 +5590,7 @@ def _resync_schedule_from_cloud() -> tuple[dict, int]:
         result = _cloud.force_redeliver_current_plan()
     except Exception as exc:
         logger.exception("schedule resync failed")
-        return {"ok": False, "error": str(exc)[:300]}, 500
+        return {"ok": False, "error": "Schedule resync failed"}, 500
     with _sched_lock:
         running = bool(_sched_state.get("running"))
         total = int(_sched_state.get("total") or 0)
