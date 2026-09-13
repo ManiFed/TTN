@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -31,8 +32,42 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_SCRYPT_N = 2**14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+
+
 def _hash_api_key(api_key: str) -> str:
-    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
+    raw = (api_key or "").encode("utf-8")
+    salt = secrets.token_bytes(16)
+    dk = hashlib.scrypt(
+        raw,
+        salt=salt,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=_SCRYPT_DKLEN,
+    )
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${dk.hex()}"
+
+
+def _verify_api_key(api_key: str, stored_hash: str) -> bool:
+    raw = (api_key or "").encode("utf-8")
+    if isinstance(stored_hash, str) and stored_hash.startswith("scrypt$"):
+        try:
+            _, n_s, r_s, p_s, salt_hex, dk_hex = stored_hash.split("$", 5)
+            n = int(n_s)
+            r = int(r_s)
+            p = int(p_s)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(dk_hex)
+            actual = hashlib.scrypt(raw, salt=salt, n=n, r=r, p=p, dklen=len(expected))
+            return hmac.compare_digest(actual, expected)
+        except Exception:
+            return False
+    legacy = hashlib.sha256(raw).hexdigest()
+    return hmac.compare_digest(legacy, stored_hash or "")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
@@ -74,8 +109,13 @@ def register_node(info: dict, lp_api_key: str = "") -> dict:
     existing = None
     if node.node_id:
         existing = db.query_one("SELECT * FROM nodes WHERE node_id = %s", (node.node_id,))
-        if existing and existing["api_key"] != _hash_api_key(info.get("api_key", "")):
+        if existing and not _verify_api_key(info.get("api_key", ""), existing["api_key"]):
             raise ValueError("node_id already registered with a different API key")
+        if existing and isinstance(existing.get("api_key"), str) and not existing["api_key"].startswith("scrypt$"):
+            db.execute(
+                "UPDATE nodes SET api_key = %s WHERE node_id = %s",
+                (_hash_api_key(info.get("api_key", "")), existing["node_id"]),
+            )
 
     if existing:
         node_id = existing["node_id"]
