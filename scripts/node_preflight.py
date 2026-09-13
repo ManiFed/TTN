@@ -123,8 +123,9 @@ def main() -> int:
 
     observer = config.get("safety", {}).get("observer", {})
     lat, lon = observer.get("latitude"), observer.get("longitude")
-    check("observer_location", lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0),
-          f"lat={lat!r}, lon={lon!r}")
+    has_location = lat not in (None, 0, 0.0) or lon not in (None, 0, 0.0)
+    check("observer_location", has_location,
+          "configured" if has_location else "missing")
 
     cloud = config.get("cloud", {})
     node_id = str(cloud.get("node_id") or "")
