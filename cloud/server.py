@@ -2265,8 +2265,14 @@ def api_me_node_night_respond(user, node_id, night):
         return error
     try:
         night = nightly.validate_night(node, night)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        logger.warning(
+            "Invalid night in member response for node %s: %r",
+            node_id,
+            night,
+            exc_info=True,
+        )
+        return jsonify({"error": "Invalid night value."}), 400
     body = _json_body()
     try:
         hours = body.get("research_hours")
