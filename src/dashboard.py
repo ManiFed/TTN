@@ -4126,25 +4126,29 @@ def api_photometry_enqueue():
 
     # Resolve symlinks/".." before validating containment, so the check below
     # is the actual security boundary rather than trusting the raw string.
-    candidate = os.path.realpath(raw)
+    candidate_path = pathlib.Path(raw).expanduser().resolve(strict=False)
 
     # Allow fits_export, configured watch path, and data/fits only. Accept
     # both absolute paths and paths relative to the project root (as
-    # returned by /api/fits/list), since realpath resolves either the same
-    # way relative to cwd.
-    export_abs = os.path.realpath(_fits_export_dir())
-    allowed_roots = [export_abs, os.path.realpath("data/fits")]
+    # returned by /api/fits/list), since resolve() canonicalizes either way.
+    allowed_root_paths = [
+        pathlib.Path(_fits_export_dir()).expanduser().resolve(strict=False),
+        pathlib.Path("data/fits").expanduser().resolve(strict=False),
+    ]
     iw_path = ""
     with _state_lock:
         iw_path = str(_state.get("image_watcher", {}).get("watch_path") or "")
     if iw_path:
-        allowed_roots.append(os.path.realpath(iw_path))
+        allowed_root_paths.append(pathlib.Path(iw_path).expanduser().resolve(strict=False))
 
     abs_path = ""
-    for root in (r for r in allowed_roots if r):
-        if candidate == root or candidate.startswith(root + os.sep):
-            abs_path = candidate
+    for root in (r for r in allowed_root_paths if str(r)):
+        try:
+            candidate_path.relative_to(root)
+            abs_path = str(candidate_path)
             break
+        except ValueError:
+            continue
 
     if not abs_path:
         return jsonify({
