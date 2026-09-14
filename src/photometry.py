@@ -357,6 +357,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             n_comp_candidates=len(comp_stars),
             vsp_id=vsp_id,
             override_auid=override_auid or None,
+            ra_deg=ra_deg, dec_deg=dec_deg,
         )
 
     if not comp_stars:
@@ -366,7 +367,8 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
                                 fits_path, target_name,
                                 catalogs=[str(c) for c in catalogs],
                                 wcs_source=wcs_source,
-                                vsp_id=vsp_id)
+                                vsp_id=vsp_id,
+                                ra_deg=ra_deg, dec_deg=dec_deg)
 
     # Filter to stars within the image frame
     comp_in_field = []
@@ -396,7 +398,8 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
                                 n_in_field=len(comp_in_field),
                                 n_candidates=len(comp_stars),
                                 wcs_source=wcs_source,
-                                vsp_id=vsp_id)
+                                vsp_id=vsp_id,
+                                ra_deg=ra_deg, dec_deg=dec_deg)
 
     # ── Step 5a: Centroid-refine positions onto actual source peaks ───────────
     # The pointing-WCS can be off by tens of pixels; snap each position to the
@@ -870,6 +873,30 @@ def classify_snr_failure(
     ):
         return "collapse"
     return "borderline"
+
+# Reason codes that mean the frame is an empty / wrong field (issue #116),
+# not a faint-but-real star. These must take the same recenter+retry path as
+# SNR collapse (issue #96 / PR #114) rather than leaving last_submission null
+# with no retry.
+EMPTY_FIELD_REASON_CODES = frozenset({
+    "too_few_comparison_stars",
+    "no_comparison_stars",
+    "target_off_frame",
+})
+
+
+def is_empty_field_rejection(rejection: Optional[dict]) -> bool:
+    """True when *rejection* means no usable stars in the field (issue #116).
+
+    Empty-field rejects happen *before* SNR/quality scoring, so they never
+    reach ``classify_snr_failure`` / ``_handle_poor_quality_result``. Callers
+    must route them onto the same recenter+retry path themselves.
+    """
+    if not isinstance(rejection, dict):
+        return False
+    code = str(rejection.get("reason_code") or "").strip()
+    return code in EMPTY_FIELD_REASON_CODES
+
 
 
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────

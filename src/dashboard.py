@@ -183,6 +183,124 @@ _poor_quality_last: dict[str, dict] = {}     # target -> {"snr":, "exp_dur":}
 _poor_quality_retries: dict[str, int] = {}   # target -> auto-recenter attempts used
 _SNR_COLLAPSE_MAX_RETRIES = 1                # one automatic recenter+retry per streak
 
+# ── Issue #116: uncommanded slew / empty-field / preview-during-capture ─────
+# Tolerance for "still on the commanded target" checks. ~1° catches Vega
+# (~RA 279°, Dec +38.8) and the Cygnus-ish Starfront pointing
+# (RA 20.22h / Dec +38.4) vs T CrB (RA 15.99h / Dec +25.9) without
+# false-alarming on normal Seestar settle error.
+_POINTING_TOLERANCE_DEG = 1.0
+
+
+def _science_capture_active() -> bool:
+    """True while a science expose owns the camera (manual or schedule).
+
+    NodeAgent does **not** issue Seestar firmware ``SET_PREVIEW_PAGE`` /
+    IA / bright-star calibration itself (that command comes from the Seestar
+    iOS/Mac app or onboard firmware — confirmed on the 2026-09-13 T CrB
+    night when the app was concurrently commanding the mount). What we *can*
+    do is refuse our own preview-like camera work (live stacking, centering
+    exposures, autofocus frames) while a science expose is active, so we do
+    not compound a capture-is-active race.
+    """
+    with _state_lock:
+        if _state["camera"].get("exposing"):
+            return True
+    with _sched_lock:
+        if (_sched_state.get("running")
+                and _sched_state.get("current_phase") == "exposing"):
+            return True
+    return False
+
+
+def _preview_commands_allowed() -> bool:
+    """False when SET_PREVIEW_PAGE-like / preview / IA work must be gated."""
+    return not _science_capture_active()
+
+
+def _pointing_off_target(
+    actual_ra_h: float,
+    actual_dec_deg: float,
+    commanded_ra_h: float,
+    commanded_dec_deg: float,
+    tol_deg: float = _POINTING_TOLERANCE_DEG,
+) -> bool:
+    """True when ALPACA pointing is farther than *tol_deg* from commanded.
+
+    Inputs are ALPACA convention: RA in hours, Dec in degrees. Pure — safe
+    to unit-test with the T CrB vs Vega / Cygnus Starfront numbers.
+    """
+    from alpaca.platesolve import angular_separation_arcmin
+    sep_arcmin = angular_separation_arcmin(
+        float(actual_ra_h) * 15.0, float(actual_dec_deg),
+        float(commanded_ra_h) * 15.0, float(commanded_dec_deg),
+    )
+    return sep_arcmin > (float(tol_deg) * 60.0)
+
+
+def _read_mount_radec() -> tuple:
+    """Best-effort (ra_h, dec_deg) from the live telescope, or (None, None)."""
+    if _tel is None:
+        return None, None
+    try:
+        return float(_tel.ra()), float(_tel.dec())
+    except Exception as exc:
+        logger.warning("Could not read mount RA/Dec: %s", exc)
+        return None, None
+
+
+def _mount_left_target(commanded_ra_h: float, commanded_dec_deg: float,
+                       tol_deg: float = _POINTING_TOLERANCE_DEG) -> bool:
+    """True if the mount is slewing or pointed far from the commanded target."""
+    if _tel is None:
+        return False
+    try:
+        if _tel.is_slewing():
+            return True
+    except Exception:
+        pass
+    ra_h, dec = _read_mount_radec()
+    if ra_h is None or dec is None:
+        return False
+    return _pointing_off_target(ra_h, dec, commanded_ra_h, commanded_dec_deg, tol_deg)
+
+
+def _verify_pointing(
+    commanded_ra_h: float,
+    commanded_dec_deg: float,
+    *,
+    label: str = "",
+    tol_deg: float = _POINTING_TOLERANCE_DEG,
+) -> bool:
+    """Log and return True when the mount is still on the commanded target."""
+    ra_h, dec = _read_mount_radec()
+    if ra_h is None or dec is None:
+        return True  # cannot verify — do not fail open into a false abort
+    if _pointing_off_target(ra_h, dec, commanded_ra_h, commanded_dec_deg, tol_deg):
+        from alpaca.platesolve import angular_separation_arcmin
+        sep = angular_separation_arcmin(
+            ra_h * 15.0, dec, commanded_ra_h * 15.0, commanded_dec_deg,
+        )
+        logger.error(
+            "Pointing off-target%s: mount RA=%.4fh Dec=%+.4f° vs commanded "
+            "RA=%.4fh Dec=%+.4f° (Δ=%.2f′ > %.0f°) — aborting rather than "
+            "photometrying a wrong/empty field (issue #116)",
+            f" [{label}]" if label else "",
+            ra_h, dec, commanded_ra_h, commanded_dec_deg, sep, tol_deg,
+        )
+        return False
+    try:
+        if _tel is not None and _tel.is_slewing():
+            logger.error(
+                "Mount is slewing%s while on a science target — treating as "
+                "off-target (issue #116)",
+                f" [{label}]" if label else "",
+            )
+            return False
+    except Exception:
+        pass
+    return True
+
+
 
 def _normalize_target_override(*candidates) -> str:
     """First non-empty target name / AUID from caller-supplied candidates."""
@@ -249,11 +367,18 @@ def _notify_commissioning_fits(path: str) -> None:
 
 
 def _enqueue_photometry(fits_path: str, target_name: str | None = None,
-                        auid: str | None = None) -> None:
+                        auid: str | None = None,
+                        ra_deg: float | None = None,
+                        dec_deg: float | None = None) -> None:
     """Submit a FITS file for photometry, dropping it if the queue is full.
 
     ``target_name`` / ``auid`` (optional) override FITS OBJECT for VSP / AAVSO
     identity when the header still says ``Manual RA …`` (issues #89 / #79).
+
+    ``ra_deg`` / ``dec_deg`` (optional) are the *commanded* target coordinates.
+    Passing them matters when the mount has drifted (issue #116): FITS RA/DEC
+    written from the live ALPACA pointing would be wrong, and recenter needs
+    the named target's real position — not Vega / Cygnus.
 
     Every caller of this function — the primary watcher, the fits_export
     watcher, manual/scheduled exposures, and the MCP/API enqueue endpoint —
@@ -264,12 +389,16 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
     override = _normalize_target_override(target_name)
     override_auid = _normalize_target_override(auid)
     job: object
-    if override or override_auid:
+    if override or override_auid or ra_deg is not None or dec_deg is not None:
         job = {"path": fits_path}
         if override:
             job["target_name"] = override
         if override_auid:
             job["auid"] = override_auid
+        if ra_deg is not None:
+            job["ra_deg"] = float(ra_deg)
+        if dec_deg is not None:
+            job["dec_deg"] = float(dec_deg)
     else:
         job = fits_path
     try:
@@ -297,10 +426,20 @@ def _phot_worker() -> None:
             _state["photometry"]["queued"] = _phot_queue.qsize()
         target_name = None
         auid = None
+        ra_deg = None
+        dec_deg = None
         if isinstance(job, dict):
             fits_path = str(job.get("path") or "")
             target_name = _normalize_target_override(job.get("target_name"))
             auid = _normalize_target_override(job.get("auid"))
+            try:
+                ra_deg = float(job["ra_deg"]) if job.get("ra_deg") is not None else None
+            except (TypeError, ValueError):
+                ra_deg = None
+            try:
+                dec_deg = float(job["dec_deg"]) if job.get("dec_deg") is not None else None
+            except (TypeError, ValueError):
+                dec_deg = None
         else:
             fits_path = str(job)
         try:
@@ -309,6 +448,8 @@ def _phot_worker() -> None:
                     fits_path,
                     target_name=target_name or None,
                     auid=auid or None,
+                    ra_deg=ra_deg,
+                    dec_deg=dec_deg,
                 )
         finally:
             _phot_queue.task_done()
@@ -1066,6 +1207,89 @@ def _handle_poor_quality_result(result: dict, fits_path: str, cfg: dict) -> None
     _recenter_and_retry_target(target, result, cfg, retry_exp_dur=prior_exp_dur or exp_dur)
 
 
+def _handle_empty_field_rejection(rejection: dict, fits_path: str, cfg: dict) -> None:
+    """Empty-field reject → same recenter+retry path as SNR collapse (#116).
+
+    Photometry can reject *before* SNR/quality scoring with
+    ``too_few_comparison_stars`` / ``no_comparison_stars`` / ``target_off_frame``
+    (the 2026-09-13 T CrB signature: "no target/comparison stars in the field").
+    Those never reach ``_handle_poor_quality_result``, so without this hook the
+    night ends with ``last_submission`` null and no retry — exactly what #96's
+    recenter path was meant to fix for SNR collapse.
+    """
+    from src.photometry import is_empty_field_rejection
+    if not is_empty_field_rejection(rejection):
+        return
+
+    target = str(
+        rejection.get("target_name")
+        or ((cfg.get("photometry") or {}).get("target") or {}).get("name")
+        or ""
+    ).strip()
+    if not target:
+        logger.warning(
+            "Empty-field rejection on %s but no target name — cannot recenter",
+            os.path.basename(fits_path),
+        )
+        return
+
+    detail = rejection.get("detail") or {}
+    # Prefer commanded coords carried on the rejection / config over FITS
+    # mount pointing (which may already be Vega/Cygnus after an uncommanded slew).
+    ra_deg = detail.get("ra_deg")
+    dec_deg = detail.get("dec_deg")
+    tgt_cfg = (cfg.get("photometry") or {}).get("target") or {}
+    if ra_deg is None:
+        ra_deg = tgt_cfg.get("ra_deg")
+    if dec_deg is None:
+        dec_deg = tgt_cfg.get("dec_deg")
+    if ra_deg is None or dec_deg is None:
+        with _sched_lock:
+            sra = _sched_state.get("current_ra")
+            sdec = _sched_state.get("current_dec")
+        if sra is not None and sdec is not None:
+            ra_deg = float(sra) * 15.0
+            dec_deg = float(sdec)
+
+    with _poor_quality_lock:
+        retries_used = _poor_quality_retries.get(target, 0)
+        # Seed the streak so a later SNR-collapse on the same target shares
+        # the one-retry budget rather than looping forever.
+        _poor_quality_last.setdefault(target, {"snr": 0.0, "exp_dur": None})
+
+    if retries_used >= _SNR_COLLAPSE_MAX_RETRIES:
+        logger.warning(
+            "Empty-field reject on %s — auto recenter/retry budget (%d) already "
+            "used this streak; leaving frame skipped rather than looping",
+            target, _SNR_COLLAPSE_MAX_RETRIES,
+        )
+        return
+
+    with _poor_quality_lock:
+        _poor_quality_retries[target] = retries_used + 1
+
+    exp_dur = _read_exptime_s(fits_path)
+    synthetic = {
+        "target_name": target,
+        "ra_deg": ra_deg,
+        "dec_deg": dec_deg,
+        "quality_flag": "poor",
+        "snr": 0.0,
+    }
+    logger.warning(
+        "Empty-field reject on %s (reason=%s) — aborting pointing and "
+        "recentering before retrying (issue #116)",
+        target, rejection.get("reason_code"),
+    )
+    _telemetry.event(
+        "empty_field_recenter", severity="warning", target=target,
+        detail={"reason_code": rejection.get("reason_code"),
+                "ra_deg": ra_deg, "dec_deg": dec_deg,
+                "file": os.path.basename(fits_path)},
+    )
+    _recenter_and_retry_target(target, synthetic, cfg, retry_exp_dur=exp_dur)
+
+
 def _recenter_and_retry_target(target: str, result: dict, cfg: dict,
                                retry_exp_dur: Optional[float]) -> None:
     """Abort the dead pointing, recenter, and take one more named frame.
@@ -1074,6 +1298,8 @@ def _recenter_and_retry_target(target: str, result: dict, cfg: dict,
     node_center_start / /api/center/run — rather than inventing new centering
     logic. Retakes the frame at the ORIGINAL exposure duration so a bad
     pointing doesn't just get a longer stare next time.
+
+    Shared by SNR-collapse (#96) and empty-field (#116) reject paths.
     """
     if _tel is None or _cam is None:
         logger.warning(
@@ -1189,12 +1415,18 @@ def _run_survey_only(fits_path: str, cfg: dict) -> None:
 
 
 def _run_photometry_bg(fits_path: str, target_name: str | None = None,
-                       auid: str | None = None) -> None:
+                       auid: str | None = None,
+                       ra_deg: float | None = None,
+                       dec_deg: float | None = None) -> None:
     """Run the photometry pipeline in a background thread and store the result.
 
     ``target_name`` / ``auid`` override FITS OBJECT via config photometry.target
-    so VSP receives a real star id (issues #89 / #79). Stale configured
-    ra_deg/dec_deg are cleared on per-frame override so FITS pointing wins.
+    so VSP receives a real star id (issues #89 / #79).
+
+    ``ra_deg`` / ``dec_deg``, when supplied, are the *commanded* target
+    coordinates (issue #116). They override both stale config coords and FITS
+    RA/DEC written from a drifted mount pointing, so empty-field recenter
+    aims at the named target rather than Vega/Cygnus.
     """
     with _state_lock:
         _state["photometry"]["running"] = True
@@ -1207,7 +1439,7 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
         # _frame_has_target both see it.
         if override and not override_auid and _looks_like_auid(override):
             override_auid = override
-        if override or override_auid:
+        if override or override_auid or ra_deg is not None or dec_deg is not None:
             # Shallow-copy the nested photometry/target dicts so we do not mutate
             # the cached config object shared with other threads.
             phot = dict(cfg.get("photometry") or {})
@@ -1217,15 +1449,21 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
             if override_auid:
                 tgt["auid"] = override_auid
             # Per-frame identity override must not keep coordinates from a
-            # previous target in config.yaml (Codex P2 on #90).
-            tgt.pop("ra_deg", None)
-            tgt.pop("dec_deg", None)
+            # previous target in config.yaml (Codex P2 on #90) — unless the
+            # caller supplied commanded coords for this frame (issue #116).
+            if ra_deg is not None and dec_deg is not None:
+                tgt["ra_deg"] = float(ra_deg)
+                tgt["dec_deg"] = float(dec_deg)
+            else:
+                tgt.pop("ra_deg", None)
+                tgt.pop("dec_deg", None)
             phot["target"] = tgt
             cfg = dict(cfg)
             cfg["photometry"] = phot
             logger.info(
-                "Photometry target override for %s: name=%r auid=%r",
+                "Photometry target override for %s: name=%r auid=%r ra=%s dec=%s",
                 os.path.basename(fits_path), override or None, override_auid or None,
+                ra_deg, dec_deg,
             )
         if (cfg.get("photometry", {}).get("survey_enabled", False)
                 and not _frame_has_target(fits_path, cfg)):
@@ -1268,8 +1506,13 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                     rejection.get("stage"), rejection.get("reason_code"),
                     rejection.get("message"),
                 )
-                with _state_lock:
-                    _state["photometry"]["last_rejection"] = rejection
+        elif rejection:
+            logger.warning(
+                "Photometry rejected for %s: stage=%s reason=%s — %s",
+                os.path.basename(fits_path),
+                rejection.get("stage"), rejection.get("reason_code"),
+                rejection.get("message"),
+            )
         # Survey sources ride the result out of the pipeline but travel to the
         # cloud on their own endpoint — pop them before the result is stored in
         # dashboard state or the measurement payload (up to ~800 entries).
@@ -1289,6 +1532,10 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                 })
                 if len(hist) > 20:
                     del hist[:-20]
+            elif rejection:
+                # Always surface the rejection (override or not) so empty-field
+                # nights are auditable and can trigger recenter (issue #116).
+                _state["photometry"]["last_rejection"] = rejection
         if result:
             logger.info(
                 "Photometry: %s  mag=%.3f±%.3f  SNR=%.1f  quality=%s",
@@ -1362,7 +1609,10 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                            os.path.basename(fits_path))
             _telemetry.event("photometry_failed", severity="warning",
                              detail={"file": os.path.basename(fits_path),
-                                     "reason": "pipeline returned no result"})
+                                     "reason": (rejection or {}).get("reason_code")
+                                               or "pipeline returned no result"})
+            if rejection:
+                _handle_empty_field_rejection(rejection, fits_path, cfg)
     except Exception as exc:
         logger.error("Photometry pipeline crashed: %s", exc)
         _telemetry.event("photometry_failed", severity="error",
@@ -2180,6 +2430,16 @@ def _run_stacking_bg(n_frames: int, exposure_s: float, preview_every: int) -> No
         for i in range(n_frames):
             if _cancelled():
                 logger.info("Live stacking cancelled after %d frames", stacker.frames_stacked)
+                break
+            if not _preview_commands_allowed():
+                logger.warning(
+                    "Live stacking: science capture became active — stopping "
+                    "preview frames (issue #116)"
+                )
+                with _stack_lock:
+                    _stack_state["error"] = (
+                        "stopped: science capture active (issue #116)"
+                    )
                 break
             try:
                 with _device_lock:
@@ -4802,6 +5062,9 @@ def api_autofocus_start():
     with _sched_lock:
         if _sched_state.get("running"):
             return jsonify({"error": "Schedule running — abort it before autofocus"}), 409
+    if not _preview_commands_allowed():
+        return jsonify({"error": "Science capture active — refusing autofocus/"
+                                 "preview frames (issue #116)"}), 409
 
     data = request.get_json(force=True) or {}
     cfg  = _load_config().get("autofocus", {}) or {}
@@ -4873,6 +5136,9 @@ def api_center_start():
     with _sched_lock:
         if _sched_state.get("running"):
             return jsonify({"error": "Schedule running — abort it first"}), 409
+    if not _preview_commands_allowed():
+        return jsonify({"error": "Science capture active — refusing centering/"
+                                 "preview exposures (issue #116)"}), 409
 
     data = request.get_json(force=True) or {}
     # RA accepted in hours (UI/catalog convention); Dec in degrees.
@@ -4955,6 +5221,12 @@ def api_stack_start():
     with _sched_lock:
         if _sched_state.get("running"):
             return jsonify({"error": "Schedule running — abort it first"}), 409
+    if not _preview_commands_allowed():
+        # Live stacking is NodeAgent's preview-capture path. The Seestar
+        # firmware/app SET_PREVIEW_PAGE command is external, but we must not
+        # start our own preview frames while a science expose owns the camera.
+        return jsonify({"error": "Science capture active — refusing live-stack "
+                                 "preview captures (issue #116)"}), 409
 
     data = request.get_json(force=True) or {}
     cfg  = _load_config().get("stacking", {}) or {}
@@ -5419,6 +5691,10 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             "cancel_after_frame": False,
             "current_item_outcome": "started",
             "current_failure_reason": "",
+            # Commanded equatorial target (hours / degrees) for issue #116
+            # pointing checks — independent of live ALPACA RA/Dec.
+            "current_ra": ra,
+            "current_dec": dec,
         })
 
     # Upgraded agents use absolute UTC. Legacy HH:MM remains a fallback.
@@ -5469,6 +5745,22 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
             slew_ok = _wait_slew_complete(timeout=180.0)
+            if slew_ok and not _verify_pointing(ra, dec, label=f"post-slew {target}"):
+                logger.warning(
+                    "Schedule: post-slew pointing off target for %s — "
+                    "commanding one reslew (issue #116)", target,
+                )
+                try:
+                    with _device_lock:
+                        _tel.begin_slew(ra, dec)
+                    slew_ok = _wait_slew_complete(timeout=180.0)
+                    if slew_ok:
+                        slew_ok = _verify_pointing(
+                            ra, dec, label=f"post-reslew {target}")
+                except Exception as exc:
+                    logger.error("Schedule: reslew after off-target failed for %s: %s",
+                                 target, exc)
+                    slew_ok = False
             if slew_ok:
                 logger.info("Schedule: slew complete → %s", target)
             else:
@@ -5544,24 +5836,147 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"
             )
 
-        try:
-            _pier_cam_pause.set()
-            _expose_cancel.clear()
-            time.sleep(0.1)
+        def _cancel_if_off_target() -> bool:
+            # Abort mid-expose if the schedule was cancelled, a human abort
+            # arrived, OR the mount started slewing / left the commanded
+            # field (Seestar app / firmware uncommanded slew — issue #116).
+            if _sched_cancelled() or _expose_cancel.is_set():
+                return True
+            if _mount_left_target(ra, dec):
+                logger.error(
+                    "Schedule: mount left %s mid-expose — aborting frame "
+                    "(issue #116)", target,
+                )
+                return True
+            return False
+
+        def _reslew_to_target(reason: str) -> bool:
+            if _tel is None:
+                return False
+            logger.warning(
+                "Schedule: reslewing to %s after %s (issue #116)", target, reason,
+            )
+            try:
+                with _device_lock:
+                    _tel.begin_slew(ra, dec)
+                if not _wait_slew_complete(timeout=180.0):
+                    return False
+                return _verify_pointing(ra, dec, label=f"reslew-{reason} {target}")
+            except Exception as exc:
+                logger.error("Schedule: reslew to %s failed: %s", target, exc)
+                return False
+
+        def _do_one_expose() -> Optional[str]:
+            """Run one expose+capture under the device lock. Returns b64 or None.
+
+            Raises ExposureCancelled when cancel_check trips (including
+            mid-expose off-target). Caller verifies pointing *outside* the
+            lock so a reslew cannot deadlock on ``_device_lock``.
+            """
             with _device_lock:
                 _cam.set_binning(binning)
                 _cam.expose(
                     duration=exp_dur, light=True,
-                    cancel_check=lambda: _sched_cancelled() or _expose_cancel.is_set(),
+                    cancel_check=_cancel_if_off_target,
                 )
-                b64 = _capture_image(fits_path=fits_save_path, exp_dur=exp_dur, target=target)
+                return _capture_image(
+                    fits_path=fits_save_path, exp_dur=exp_dur, target=target,
+                )
+
+        def _discard_fits() -> None:
+            if fits_save_path and pathlib.Path(fits_save_path).exists():
+                try:
+                    pathlib.Path(fits_save_path).unlink()
+                except Exception:
+                    pass
+
+        try:
+            _pier_cam_pause.set()
+            _expose_cancel.clear()
+            time.sleep(0.1)
+            # Pre-expose pointing check: do not open the shutter on a wrong field.
+            if not _verify_pointing(ra, dec, label=f"pre-expose {target} f{frame}"):
+                if not _reslew_to_target("pre-expose-off-target"):
+                    with _sched_lock:
+                        _sched_state["current_item_outcome"] = "failed"
+                        _sched_state["current_failure_reason"] = (
+                            "pointing off-target before expose (issue #116)"
+                        )
+                    return False
+
+            b64 = _do_one_expose()
+
+            # Post-expose: if the mount drifted (or an external app stole it),
+            # do NOT photometry the wrong/empty field — discard, reslew, retry.
+            if not _verify_pointing(ra, dec, label=f"post-expose {target} f{frame}"):
+                _discard_fits()
+                b64 = None
+                if not _reslew_to_target("post-expose-off-target"):
+                    raise RuntimeError(
+                        "pointing off-target after expose; reslew failed "
+                        "(issue #116)"
+                    )
+                b64 = _do_one_expose()
+                if not _verify_pointing(ra, dec, label=f"retry {target} f{frame}"):
+                    _discard_fits()
+                    raise RuntimeError(
+                        "pointing still off-target after reslew retry "
+                        "(issue #116)"
+                    )
+
             if b64:
                 _store_history_image(target, exp_dur, binning, frame, total, b64)
             if fits_save_path and pathlib.Path(fits_save_path).exists():
-                _enqueue_photometry(fits_save_path)
+                # Pass commanded coords so photometry/recenter aim at the named
+                # target even if FITS RA/DEC recorded a drifted mount.
+                _enqueue_photometry(
+                    fits_save_path,
+                    target_name=target,
+                    ra_deg=float(ra) * 15.0,
+                    dec_deg=float(dec),
+                )
         except ExposureCancelled:
             logger.warning("Schedule: frame %d of %s aborted", frame, target)
             if _sched_cancelled():
+                return False
+            # Mid-expose uncommanded slew: attempt one reslew + retry so the
+            # night does not silently skip the target (issue #116).
+            _discard_fits()
+            if _reslew_to_target("mid-expose-abort"):
+                try:
+                    b64 = _do_one_expose()
+                    if not _verify_pointing(
+                            ra, dec, label=f"mid-retry {target} f{frame}"):
+                        _discard_fits()
+                        raise RuntimeError(
+                            "pointing off-target after mid-expose retry"
+                        )
+                    if b64:
+                        _store_history_image(
+                            target, exp_dur, binning, frame, total, b64,
+                        )
+                    if fits_save_path and pathlib.Path(fits_save_path).exists():
+                        _enqueue_photometry(
+                            fits_save_path,
+                            target_name=target,
+                            ra_deg=float(ra) * 15.0,
+                            dec_deg=float(dec),
+                        )
+                except Exception as retry_exc:
+                    logger.error(
+                        "Schedule: mid-expose retry failed for %s: %s",
+                        target, retry_exc,
+                    )
+                    with _sched_lock:
+                        _sched_state["current_item_outcome"] = "failed"
+                        _sched_state["current_failure_reason"] = str(retry_exc)[:500]
+                    return False
+            else:
+                with _sched_lock:
+                    _sched_state["current_item_outcome"] = "failed"
+                    _sched_state["current_failure_reason"] = (
+                        "mount left target mid-expose (issue #116)"
+                    )
                 return False
         except Exception as exc:
             logger.error("Schedule: exposure failed %s frame %d: %s", target, frame, exc)
