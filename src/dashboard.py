@@ -5862,8 +5862,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 if not _wait_slew_complete(timeout=180.0):
                     return False
                 return _verify_pointing(ra, dec, label=f"reslew-{reason} {target}")
-            except Exception as exc:
-                logger.error("Schedule: reslew to %s failed: %s", target, exc)
+            except Exception as reslew_exc:
+                logger.error("Schedule: reslew to %s failed: %s", target, reslew_exc)
                 return False
 
         def _do_one_expose() -> Optional[str]:
