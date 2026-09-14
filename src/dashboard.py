@@ -283,7 +283,7 @@ def _verify_pointing(
         logger.error(
             "Pointing off-target%s: mount RA=%.4fh Dec=%+.4f° vs commanded "
             "RA=%.4fh Dec=%+.4f° (Δ=%.2f′ > %.0f°) — aborting rather than "
-            "photometrying a wrong/empty field (issue #116)",
+            "photometrying a wrong/empty field (issues #116/#120)",
             f" [{label}]" if label else "",
             ra_h, dec, commanded_ra_h, commanded_dec_deg, sep, tol_deg,
         )
@@ -301,6 +301,18 @@ def _verify_pointing(
     return True
 
 
+
+
+
+def _post_readout_slew_poisons_fits(on_target_at_image_ready: bool) -> bool:
+    """Issue #120: a park/slew *after* ImageReady must not discard an on-target FITS.
+
+    Seestar firmware can goto a Cygnus-ish park after readout even with the
+    phone app quit. If ALPACA was on the commanded target when ImageReady
+    fired, the science frame is good — keep it and run photometry on the
+    ``fits_export`` path. Mid-expose / at-ImageReady off-target still poisons.
+    """
+    return not bool(on_target_at_image_ready)
 
 def _normalize_target_override(*candidates) -> str:
     """First non-empty target name / AUID from caller-supplied candidates."""
@@ -5828,24 +5840,28 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
         with _state_lock:
             phot_enabled = _state["photometry"]["enabled"]
         if phot_enabled:
+            # Prefer NodeAgent fits_export/ over ad-hoc Desktop saves (issue #120).
             safe_tgt = "".join(
                 c if c.isalnum() or c in "-_ " else "_" for c in target
             ).strip()
+            export_dir = _fits_export_dir()
+            date_dir = pathlib.Path(export_dir) / time.strftime(
+                "%Y-%m-%d", time.gmtime()
+            )
             fits_save_path = str(
-                pathlib.Path("data") / "fits" /
-                f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"
+                date_dir / f"{safe_tgt}_{frame:02d}_{int(time.time())}.fits"
             )
 
         def _cancel_if_off_target() -> bool:
             # Abort mid-expose if the schedule was cancelled, a human abort
             # arrived, OR the mount started slewing / left the commanded
-            # field (Seestar app / firmware uncommanded slew — issue #116).
+            # field (Seestar app / firmware uncommanded slew — issues #116/#120).
             if _sched_cancelled() or _expose_cancel.is_set():
                 return True
             if _mount_left_target(ra, dec):
                 logger.error(
                     "Schedule: mount left %s mid-expose — aborting frame "
-                    "(issue #116)", target,
+                    "(issues #116/#120)", target,
                 )
                 return True
             return False
@@ -5854,7 +5870,8 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             if _tel is None:
                 return False
             logger.warning(
-                "Schedule: reslewing to %s after %s (issue #116)", target, reason,
+                "Schedule: reslewing to %s after %s (issues #116/#120)",
+                target, reason,
             )
             try:
                 with _device_lock:
@@ -5867,11 +5884,16 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 return False
 
         def _do_one_expose() -> Optional[str]:
-            """Run one expose+capture under the device lock. Returns b64 or None.
+            """Expose, gate pointing at ImageReady, then download.
 
-            Raises ExposureCancelled when cancel_check trips (including
-            mid-expose off-target). Caller verifies pointing *outside* the
+            Raises ExposureCancelled when cancel_check trips mid-expose OR
+            when ALPACA is off-target / slewing immediately after readout
+            (ImageReady). Caller verifies / reslews *outside* the device
             lock so a reslew cannot deadlock on ``_device_lock``.
+
+            A later post-download park slew is *not* raised here — once we
+            confirm on-target at ImageReady the FITS is kept for photometry
+            (issue #120).
             """
             with _device_lock:
                 _cam.set_binning(binning)
@@ -5879,6 +5901,12 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                     duration=exp_dur, light=True,
                     cancel_check=_cancel_if_off_target,
                 )
+                # Immediately after readout — before the slow imagearray pull.
+                if not _verify_pointing(
+                        ra, dec, label=f"at-ImageReady {target} f{frame}"):
+                    raise ExposureCancelled(
+                        "pointing off-target at ImageReady (issue #120)"
+                    )
                 return _capture_image(
                     fits_path=fits_save_path, exp_dur=exp_dur, target=target,
                 )
@@ -5890,6 +5918,29 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 except Exception:
                     pass
 
+        def _enqueue_on_target_frame(b64: Optional[str]) -> None:
+            # on_target_at_image_ready=True by construction of _do_one_expose.
+            # A post-readout park slew must not poison this FITS (issue #120).
+            if (_mount_left_target(ra, dec)
+                    and not _post_readout_slew_poisons_fits(True)):
+                logger.info(
+                    "Schedule: mount left %s after ImageReady (post-readout "
+                    "slew) — keeping on-target fits_export frame for "
+                    "photometry (issue #120)",
+                    target,
+                )
+            if b64:
+                _store_history_image(target, exp_dur, binning, frame, total, b64)
+            if fits_save_path and pathlib.Path(fits_save_path).exists():
+                # Pass commanded coords so photometry/recenter aim at the named
+                # target even if FITS RA/DEC later recorded a parked mount.
+                _enqueue_photometry(
+                    fits_save_path,
+                    target_name=target,
+                    ra_deg=float(ra) * 15.0,
+                    dec_deg=float(dec),
+                )
+
         try:
             _pier_cam_pause.set()
             _expose_cancel.clear()
@@ -5900,68 +5951,25 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                     with _sched_lock:
                         _sched_state["current_item_outcome"] = "failed"
                         _sched_state["current_failure_reason"] = (
-                            "pointing off-target before expose (issue #116)"
+                            "pointing off-target before expose (issues #116/#120)"
                         )
                     return False
 
             b64 = _do_one_expose()
-
-            # Post-expose: if the mount drifted (or an external app stole it),
-            # do NOT photometry the wrong/empty field — discard, reslew, retry.
-            if not _verify_pointing(ra, dec, label=f"post-expose {target} f{frame}"):
-                _discard_fits()
-                b64 = None
-                if not _reslew_to_target("post-expose-off-target"):
-                    raise RuntimeError(
-                        "pointing off-target after expose; reslew failed "
-                        "(issue #116)"
-                    )
-                b64 = _do_one_expose()
-                if not _verify_pointing(ra, dec, label=f"retry {target} f{frame}"):
-                    _discard_fits()
-                    raise RuntimeError(
-                        "pointing still off-target after reslew retry "
-                        "(issue #116)"
-                    )
-
-            if b64:
-                _store_history_image(target, exp_dur, binning, frame, total, b64)
-            if fits_save_path and pathlib.Path(fits_save_path).exists():
-                # Pass commanded coords so photometry/recenter aim at the named
-                # target even if FITS RA/DEC recorded a drifted mount.
-                _enqueue_photometry(
-                    fits_save_path,
-                    target_name=target,
-                    ra_deg=float(ra) * 15.0,
-                    dec_deg=float(dec),
-                )
+            # Reaching here means on-target at ImageReady — do not discard if
+            # firmware parks during/after download (issue #120).
+            _enqueue_on_target_frame(b64)
         except ExposureCancelled:
             logger.warning("Schedule: frame %d of %s aborted", frame, target)
             if _sched_cancelled():
                 return False
-            # Mid-expose uncommanded slew: attempt one reslew + retry so the
-            # night does not silently skip the target (issue #116).
+            # Mid-expose or at-ImageReady uncommanded slew: one reslew + retry
+            # so the night does not silently skip the target (issues #116/#120).
             _discard_fits()
             if _reslew_to_target("mid-expose-abort"):
                 try:
                     b64 = _do_one_expose()
-                    if not _verify_pointing(
-                            ra, dec, label=f"mid-retry {target} f{frame}"):
-                        _discard_fits()
-                        raise RuntimeError(
-                            "pointing off-target after mid-expose retry"
-                        )
-                    if b64:
-                        _store_history_image(
-                            target, exp_dur, binning, frame, total, b64,
-                        )
-                    if fits_save_path and pathlib.Path(fits_save_path).exists():
-                        _enqueue_photometry(
-                            fits_save_path,
-                            target_name=target,
-                            ra_deg=float(ra) * 15.0,
-                            dec_deg=float(dec),
-                        )
+                    _enqueue_on_target_frame(b64)
                 except Exception as retry_exc:
                     logger.error(
                         "Schedule: mid-expose retry failed for %s: %s",
@@ -5975,7 +5983,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
                 with _sched_lock:
                     _sched_state["current_item_outcome"] = "failed"
                     _sched_state["current_failure_reason"] = (
-                        "mount left target mid-expose (issue #116)"
+                        "mount left target mid-expose (issues #116/#120)"
                     )
                 return False
         except Exception as exc:
