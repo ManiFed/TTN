@@ -179,3 +179,64 @@ class ConclusionTest(unittest.TestCase):
 
     def test_it_says_where_to_go_when_stuck(self):
         self.assertIn("info@boundlessskies.org", CONCLUSION)
+
+
+import xml.etree.ElementTree as ET
+
+
+class DistributionResourcesTest(unittest.TestCase):
+    """distribution.xml must only name installer resources that exist (#118).
+
+    v1.0.82's GUI install failed on Starfront with Installer complaining about a
+    missing license and background image. The checked-in resources directory
+    only has welcome.html + conclusion.html; the distribution heredoc must not
+    grow license/background tags without those files, and every file= attribute
+    must resolve.
+    """
+
+    def _distribution_xml_template(self) -> str:
+        """The heredoc body productbuild consumes (VERSION left as the shell var)."""
+        text = BUILD_DMG
+        start = text.index('cat > "${DIST_DIR}/distribution.xml" <<EOF\n') + len(
+            'cat > "${DIST_DIR}/distribution.xml" <<EOF\n')
+        end = text.index("\nEOF\n", start)
+        return text[start:end].replace("${VERSION}", "0.0.0").replace(
+            "${APP_NAME}", "TelescopeNetNode")
+
+    def test_distribution_xml_is_well_formed(self):
+        root = ET.fromstring(self._distribution_xml_template())
+        self.assertTrue(root.tag.endswith("installer-gui-script"))
+
+    def test_no_license_or_background_elements(self):
+        """Do not reference resources we do not ship."""
+        root = ET.fromstring(self._distribution_xml_template())
+        tags = {elem.tag.split("}")[-1] for elem in root.iter()}
+        for forbidden in ("license", "background", "background-darkAqua"):
+            self.assertNotIn(forbidden, tags)
+
+    def test_every_file_attribute_exists_in_resources(self):
+        root = ET.fromstring(self._distribution_xml_template())
+        resources = REPO / "build/macos/resources"
+        missing = []
+        for elem in root.iter():
+            path = elem.get("file")
+            if path is None:
+                continue
+            if not (resources / path).is_file():
+                missing.append(path)
+        self.assertEqual(missing, [], f"distribution references missing files: {missing}")
+
+    def test_build_script_stages_only_existing_welcome_and_conclusion(self):
+        """Fail-loud checks so a deleted resource breaks the build, not install."""
+        self.assertIn("welcome.html", BUILD_DMG)
+        self.assertIn("conclusion.html", BUILD_DMG)
+        self.assertIn("refusing to build a broken installer", BUILD_DMG)
+        self.assertIn("pkg_resources", BUILD_DMG)
+
+    def test_resources_dir_has_no_orphan_license_or_background(self):
+        """If someone adds license/background files later, wire them into the XML
+        deliberately — do not leave half of the pair around to confuse the next
+        editor."""
+        resources = REPO / "build/macos/resources"
+        names = {p.name for p in resources.iterdir() if p.is_file()}
+        self.assertEqual(names, {"welcome.html", "conclusion.html"})

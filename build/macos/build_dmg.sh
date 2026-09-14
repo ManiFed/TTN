@@ -10,6 +10,10 @@
 #
 # Outputs:
 #   dist/TelescopeNetNode-X.Y.Z-macOS.pkg   (GUI installer)
+#
+# Signing is optional. CI builds unsigned pkgs; the distribution XML must still
+# be self-contained so Installer.app can open them (no license/background
+# references to files that are not shipped under build/macos/resources/).
 
 set -e
 cd "$(dirname "$0")/../.."   # repo root
@@ -127,25 +131,34 @@ pkgbuild \
     "${COMPONENT_PKG}"
 
 # ── Build GUI installer .pkg via productbuild ──────────────────────────────────
+# Checked-in installer UI resources. Only ship files we actually reference in
+# distribution.xml — productbuild will happily embed a Resources tree that
+# Installer.app then fails to load when the XML points at a missing license or
+# background (see #118: "Could not load resource license: (null)", "Failed to
+# load specified background image").
 RESOURCES_SRC="${BUILD_DIR}/resources"
-mkdir -p "${RESOURCES_SRC}"
+RESOURCES_STAGING="${DIST_DIR}/pkg_resources"
+rm -rf "${RESOURCES_STAGING}"
+mkdir -p "${RESOURCES_STAGING}"
 
-# The real welcome screen is checked into the repo, not generated here — see
-# build/macos/resources/welcome.html. Fail loudly if it ever goes missing
-# rather than silently falling back to stale, hand-rolled copy.
-if [ ! -f "${RESOURCES_SRC}/welcome.html" ]; then
-    echo "ERROR: welcome.html not found at ${RESOURCES_SRC}/welcome.html"
-    exit 1
-fi
+for required in welcome.html conclusion.html; do
+    if [ ! -f "${RESOURCES_SRC}/${required}" ]; then
+        echo "ERROR: ${required} not found at ${RESOURCES_SRC}/${required}"
+        echo "distribution.xml references this file; refusing to build a broken installer."
+        exit 1
+    fi
+    cp "${RESOURCES_SRC}/${required}" "${RESOURCES_STAGING}/${required}"
+done
+
+# Intentionally omit <license> and <background>: build/macos/resources/ has
+# welcome.html + conclusion.html only. Do not reintroduce those tags unless the
+# matching files are added here and copied into RESOURCES_STAGING above.
 
 cat > "${DIST_DIR}/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
     <title>The Telescope Net ${VERSION}</title>
     <welcome file="welcome.html" mime-type="text/html"/>
-    <!-- The last thing a member sees. Everything postinstall.sh echoes goes to
-         an installer log nobody opens, so without this the install ends on
-         macOS's generic "successful" and no idea what to do next. -->
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
     <choices-outline>
@@ -163,14 +176,46 @@ cat > "${DIST_DIR}/distribution.xml" <<EOF
 </installer-gui-script>
 EOF
 
+# Guardrail: refuse to ship a distribution that names license/background (or any
+# other resource file) we did not stage. Catches regressions without needing a
+# macOS runner in unit tests.
+python3 - "${DIST_DIR}/distribution.xml" "${RESOURCES_STAGING}" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+dist_path = Path(sys.argv[1])
+resources = Path(sys.argv[2])
+root = ET.parse(dist_path).getroot()
+# ElementTree expands the default ns oddly for this doctype-free XML; tags are local.
+forbidden = {"license", "background", "background-darkAqua"}
+errors = []
+for elem in root.iter():
+    tag = elem.tag.split("}")[-1]
+    path = elem.get("file")
+    if tag in forbidden:
+        errors.append(f"<{tag}> must not appear unless its resource is shipped (see #118)")
+    if path is None:
+        continue
+    if not (resources / path).is_file():
+        errors.append(f"<{tag} file={path!r}> missing under {resources}")
+if errors:
+    print("ERROR: distribution.xml resource check failed:")
+    for e in errors:
+        print(f"  - {e}")
+    sys.exit(1)
+print(f"distribution.xml OK — {len(list(resources.iterdir()))} staged resource(s)")
+PY
+
 productbuild \
     --distribution "${DIST_DIR}/distribution.xml" \
     --package-path "${DIST_DIR}" \
-    --resources "${RESOURCES_SRC}" \
+    --resources "${RESOURCES_STAGING}" \
     "${FINAL_PKG}"
 
 # Clean up staging artifacts
-rm -rf "${PKG_STAGING}" "${SCRIPTS_STAGING}" "${COMPONENT_PKG}" "${DIST_DIR}/distribution.xml"
+rm -rf "${PKG_STAGING}" "${SCRIPTS_STAGING}" "${RESOURCES_STAGING}" \
+    "${COMPONENT_PKG}" "${DIST_DIR}/distribution.xml"
 
 echo ""
 echo "=== Build complete ==="
