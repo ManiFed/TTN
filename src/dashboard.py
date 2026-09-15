@@ -314,6 +314,122 @@ def _post_readout_slew_poisons_fits(on_target_at_image_ready: bool) -> bool:
     """
     return not bool(on_target_at_image_ready)
 
+
+def _fits_export_night_utc(ts: float | None = None) -> str:
+    """UTC calendar date used for fits_export/YYYY-MM-DD/ (same as expose writers)."""
+    return time.strftime("%Y-%m-%d", time.gmtime(ts if ts is not None else time.time()))
+
+
+def _fits_path_night_utc(fits_path: str) -> str | None:
+    """Return YYYY-MM-DD from a fits_export/<date>/... path, else None."""
+    try:
+        parts = pathlib.Path(os.path.normpath(fits_path)).parts
+        for i, part in enumerate(parts):
+            if part == "fits_export" and i + 1 < len(parts):
+                night = parts[i + 1]
+                if (len(night) == 10 and night[4] == "-" and night[7] == "-"
+                        and night[:4].isdigit() and night[5:7].isdigit()
+                        and night[8:10].isdigit()):
+                    return night
+        # Fallback: parent dir is YYYY-MM-DD (common for fits_export listings).
+        parent = pathlib.Path(fits_path).parent.name
+        if (len(parent) == 10 and parent[4] == "-" and parent[7] == "-"
+                and parent[:4].isdigit() and parent[5:7].isdigit()
+                and parent[8:10].isdigit()):
+            return parent
+    except Exception:
+        return None
+    return None
+
+
+def _is_previous_night_fits(fits_path: str, *, tonight: str | None = None) -> bool:
+    """True when *fits_path* lives under an older fits_export/YYYY-MM-DD night.
+
+    Issue #123: operators must not enqueue yesterday's FITS as tonight's data.
+    """
+    night = _fits_path_night_utc(fits_path)
+    if not night:
+        return False
+    today = tonight or _fits_export_night_utc()
+    return night < today
+
+
+def _camera_unreachable_exc(exc: BaseException) -> bool:
+    """True when an ALPACA call failed because the camera dropped off the LAN."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    needles = (
+        "timed out", "timeout", "refused", "no route to host",
+        "network is unreachable", "connectionerror", "connection aborted",
+        "failed to establish a new connection", "remotodisconnected",
+        "can't reach", "cannot connect", "name or service not known",
+        "broken pipe", "connection reset",
+    )
+    return any(n in text for n in needles)
+
+
+def _remember_commanded_slew(ra_h: float, dec_deg: float, *, label: str = "") -> None:
+    """Persist the last operator/schedule commanded RA/Dec for mid-expose gates."""
+    with _state_lock:
+        _state["last_commanded_slew"] = {
+            "ra": float(ra_h),
+            "dec": float(dec_deg),
+            "label": str(label or ""),
+            "ts": time.time(),
+        }
+
+
+def _commanded_slew_radec() -> tuple:
+    """Best (ra_h, dec_deg) for mid-expose park detection, or (None, None)."""
+    with _state_lock:
+        last = _state.get("last_commanded_slew") or {}
+        ra = last.get("ra")
+        dec = last.get("dec")
+        ts = last.get("ts") or 0.0
+    if ra is None or dec is None:
+        return None, None
+    # Stale commanded slew (>6 h) is not useful for tonight's expose.
+    if time.time() - float(ts) > 6 * 3600:
+        return None, None
+    return float(ra), float(dec)
+
+
+def _reconnect_camera_after_drop(*, reason: str = "") -> bool:
+    """Best-effort reconnect when the camera drops mid-expose (issue #123).
+
+    Reuses the currently configured ALPACA host/port from dashboard state /
+    config. Returns True when a live Camera is available again.
+    """
+    global _cam
+    host = port = None
+    with _state_lock:
+        srv = _state.get("server") or {}
+        host = srv.get("address")
+        port = srv.get("port")
+    if not host or not port:
+        cfg = _load_config()
+        default = (cfg.get("alpaca") or {}).get("default_server") or {}
+        host = host or default.get("address")
+        port = port or default.get("port")
+    if not host or not port:
+        logger.error(
+            "Camera reconnect skipped — no ALPACA host/port (%s)", reason or "drop")
+        return False
+    logger.warning(
+        "Camera unreachable mid-expose — reconnecting to %s:%s (%s) (issue #123)",
+        host, port, reason or "drop",
+    )
+    try:
+        body, status = _do_connect(str(host), int(port), set_as_default=False)
+    except Exception as exc:
+        logger.error("Camera reconnect raised: %s", exc)
+        return False
+    if status >= 400 or _cam is None:
+        logger.error("Camera reconnect failed: %s", body)
+        return False
+    logger.info("Camera reconnected after drop (%s)", reason or "ok")
+    return True
+
+
 def _normalize_target_override(*candidates) -> str:
     """First non-empty target name / AUID from caller-supplied candidates."""
     for raw in candidates:
@@ -396,7 +512,23 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
     watcher, manual/scheduled exposures, and the MCP/API enqueue endpoint —
     is a legitimate source of a new science frame, so this is also where
     commissioning evidence is recorded (issue #88).
+
+    Issue #123: refuse previous-night fits_export/YYYY-MM-DD paths so a stale
+    frame cannot be treated as tonight's science / AAVSO submission.
     """
+    if _is_previous_night_fits(fits_path):
+        logger.error(
+            "Photometry enqueue refused for previous-night FITS %s (issue #123)",
+            fits_path,
+        )
+        _telemetry.event(
+            "photometry_enqueue_refused_previous_night",
+            severity="warning",
+            detail={"path": os.path.basename(fits_path),
+                    "night": _fits_path_night_utc(fits_path),
+                    "tonight": _fits_export_night_utc()},
+        )
+        return
     _notify_commissioning_fits(fits_path)
     override = _normalize_target_override(target_name)
     override_auid = _normalize_target_override(auid)
@@ -830,6 +962,13 @@ def _capture_image(fits_path: Optional[str] = None,
         raise
     except Exception as exc:
         logger.error("Image capture failed: %s", exc)
+        # Issue #122: ImageReady with a requested science path must not fail
+        # silently — surface a clear error so camera.error is set and the
+        # operator knows fits_export never got a frame.
+        if fits_path:
+            raise RuntimeError(
+                f"ImageReady but FITS download/write failed for '{fits_path}': {exc}"
+            ) from exc
         return None
 
 
@@ -4270,6 +4409,7 @@ def api_slew():
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
+            _remember_commanded_slew(ra, dec, label="api_slew")
         except Exception as exc:
             logger.error("Slew failed: %s", exc)
             logger.exception("Telescope slew failed")
@@ -4445,6 +4585,116 @@ def api_expose():
         time.sleep(0.15)
         fits_written: list[str] = []
         last_error: Optional[str] = None
+        # Commanded pointing for mid-expose park detection (issues #120/#123).
+        # Prefer the last successful /api/slew; fall back to live ALPACA RA/Dec
+        # at expose start (operator just slewed to SS Cyg / T CrB).
+        cmd_ra, cmd_dec = _commanded_slew_radec()
+        if cmd_ra is None or cmd_dec is None:
+            cmd_ra, cmd_dec = _read_mount_radec()
+        if cmd_ra is not None and cmd_dec is not None:
+            _remember_commanded_slew(cmd_ra, cmd_dec, label="api_expose")
+
+        def _cancel_if_parked_or_abort() -> bool:
+            if _expose_cancel.is_set():
+                return True
+            if (cmd_ra is not None and cmd_dec is not None
+                    and _mount_left_target(cmd_ra, cmd_dec)):
+                logger.error(
+                    "Manual expose: mount left target mid-expose "
+                    "(park/uncommanded slew) — aborting (issues #120/#123)",
+                )
+                return True
+            return False
+
+        def _reslew_manual(reason: str) -> bool:
+            if _tel is None or cmd_ra is None or cmd_dec is None:
+                return False
+            logger.warning(
+                "Manual expose: reslewing to RA=%.4fh Dec=%+.4f° after %s "
+                "(issues #120/#123)",
+                cmd_ra, cmd_dec, reason,
+            )
+            try:
+                with _device_lock:
+                    _tel.begin_slew(cmd_ra, cmd_dec)
+                if not _wait_slew_complete(timeout=180.0):
+                    return False
+                return _verify_pointing(
+                    cmd_ra, cmd_dec, label=f"manual-reslew-{reason}")
+            except Exception as reslew_exc:
+                logger.error("Manual expose reslew failed: %s", reslew_exc)
+                return False
+
+        def _one_frame(fits_save_path: str) -> Optional[str]:
+            """Expose + at-ImageReady gate + download. May raise."""
+            with _device_lock:
+                _cam.set_binning(binning)
+                _cam.expose(
+                    duration=duration, light=True,
+                    readout_timeout=readout_timeout,
+                    cancel_check=_cancel_if_parked_or_abort,
+                )
+                if (cmd_ra is not None and cmd_dec is not None
+                        and not _verify_pointing(
+                            cmd_ra, cmd_dec,
+                            label=f"at-ImageReady manual {expose_target or ''}")):
+                    raise ExposureCancelled(
+                        "pointing off-target at ImageReady (issues #120/#123)"
+                    )
+                return _capture_image(
+                    fits_path=fits_save_path, exp_dur=duration, target=target)
+
+        def _run_frame_with_recovery(fits_save_path: str) -> Optional[str]:
+            """One science frame with park-reslew + camera-drop reconnect (issue #123)."""
+            attempts = 0
+            while attempts < 2:
+                attempts += 1
+                try:
+                    return _one_frame(fits_save_path)
+                except ExposureCancelled:
+                    if _expose_cancel.is_set():
+                        raise
+                    # Park / uncommanded slew mid-expose or at ImageReady.
+                    if pathlib.Path(fits_save_path).exists():
+                        try:
+                            pathlib.Path(fits_save_path).unlink()
+                        except Exception:
+                            pass
+                    if attempts >= 2:
+                        raise
+                    if not _reslew_manual("mid-expose-abort"):
+                        raise
+                    logger.info(
+                        "Manual expose: retrying frame after reslew (issue #123)")
+                except Exception as exc:
+                    if not _camera_unreachable_exc(exc):
+                        raise
+                    logger.error(
+                        "Manual expose: camera dropped (%s) — attempting "
+                        "reconnect (issue #123)", exc,
+                    )
+                    if pathlib.Path(fits_save_path).exists():
+                        try:
+                            pathlib.Path(fits_save_path).unlink()
+                        except Exception:
+                            pass
+                    if attempts >= 2:
+                        raise
+                    if not _reconnect_camera_after_drop(reason=str(exc)[:200]):
+                        raise
+                    # Firmware often parks when the camera link drops.
+                    if (cmd_ra is not None and cmd_dec is not None
+                            and _mount_left_target(cmd_ra, cmd_dec)):
+                        if not _reslew_manual("camera-drop-park"):
+                            raise RuntimeError(
+                                "Camera reconnected but reslew after park failed "
+                                f"(issues #120/#123): {exc}"
+                            ) from exc
+                    logger.info(
+                        "Manual expose: retrying frame after camera reconnect "
+                        "(issue #123)")
+            return None
+
         try:
             with _state_lock:
                 ra = _state["telescope"].get("ra")
@@ -4459,7 +4709,7 @@ def api_expose():
             cfg = _load_config()
             export_dir = (cfg.get("photometry", {}) or {}).get("fits_export", {}).get(
                 "export_dir", "fits_export")
-            date_dir = pathlib.Path(export_dir) / time.strftime("%Y-%m-%d", time.gmtime())
+            date_dir = pathlib.Path(export_dir) / _fits_export_night_utc()
 
             for frame in range(1, count + 1):
                 if _expose_cancel.is_set():
@@ -4478,15 +4728,7 @@ def api_expose():
                 fits_save_path = str(
                     date_dir / f"{safe_tgt}_{frame:02d}_{req_id}_{time.time_ns()}.fits"
                 )
-                with _device_lock:
-                    _cam.set_binning(binning)
-                    _cam.expose(
-                        duration=duration, light=True,
-                        readout_timeout=readout_timeout,
-                        cancel_check=_expose_cancel.is_set,
-                    )
-                    b64 = _capture_image(
-                        fits_path=fits_save_path, exp_dur=duration, target=target)
+                b64 = _run_frame_with_recovery(fits_save_path)
                 if b64:
                     _store_history_image(target, duration, binning, frame, count, b64)
                     with _state_lock:
@@ -4498,18 +4740,27 @@ def api_expose():
                         frame, count, fits_save_path)
                     # Manual frames land in fits_export/; also enqueue so
                     # photometry does not depend solely on the MyWorks watcher
-                    # (issue #70).
-                    try:
-                        _enqueue_photometry(
+                    # (issue #70). Never enqueue a previous night's FITS (#123).
+                    if _is_previous_night_fits(fits_save_path):
+                        logger.error(
+                            "Refusing to enqueue previous-night FITS %s (issue #123)",
                             fits_save_path,
-                            target_name=expose_target or None,
                         )
-                    except Exception as exc:
-                        logger.warning("Manual FITS photometry enqueue failed: %s", exc)
+                    else:
+                        try:
+                            _enqueue_photometry(
+                                fits_save_path,
+                                target_name=expose_target or None,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Manual FITS photometry enqueue failed: %s", exc)
                 else:
                     last_error = (
-                        f"Exposure {frame}/{count} finished but FITS was not written "
-                        f"({fits_save_path})"
+                        f"Exposure {frame}/{count} finished (ImageReady) but "
+                        f"no FITS was written to fits_export "
+                        f"({fits_save_path}) — photometry not enqueued "
+                        f"(issue #122)"
                     )
                     logger.error(last_error)
                     break
@@ -4532,6 +4783,17 @@ def api_expose():
                     _state["camera"]["exposure_readout_timeout"] = None
                     if last_error and last_error != "cancelled":
                         _state["camera"]["error"] = last_error[:500]
+                    elif not fits_written and last_error != "cancelled":
+                        # Issue #122: ImageReady / expose finished with an
+                        # empty fits_written must never leave camera.error
+                        # silent — operators otherwise see a green expose
+                        # with no science frame and no photometry.
+                        silent = (
+                            "Exposure finished (ImageReady) but fits_written empty "
+                            "— no science FITS under fits_export (issue #122)"
+                        )
+                        _state["camera"]["error"] = silent
+                        logger.error(silent)
                     elif fits_written:
                         _state["camera"]["error"] = None
             _pier_cam_pause.clear()
@@ -4697,8 +4959,25 @@ def pier_cam_stream():
     )
 
 
-@app.route("/api/photometry")
+@app.route("/api/photometry", methods=["GET", "POST"])
 def api_photometry():
+    """Photometry status (GET) or enqueue alias (POST with path) — issue #122.
+
+    Historically this route was GET-only, so ``POST /api/photometry`` returned
+    a bare Flask 405. Operators hitting the parent path (instead of
+    ``/api/photometry/enqueue``) could not start NodeAgent photometry from
+    :5173 / MCP. POST with a path/fits_path aliases to enqueue; POST without
+    a path returns a JSON 405 pointing at the enqueue endpoint.
+    """
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        raw = str(data.get("path") or data.get("fits_path") or "").strip()
+        if raw:
+            return api_photometry_enqueue()
+        return jsonify({
+            "error": "use POST /api/photometry/enqueue",
+            "enqueue": "/api/photometry/enqueue",
+        }), 405
     with _state_lock:
         snap = {
             "enabled":     _state["photometry"]["enabled"],
@@ -4786,6 +5065,23 @@ def api_photometry_enqueue():
         return jsonify({"ok": False, "error": f"file not found: {raw}"}), 404
     if not abs_path.lower().endswith((".fits", ".fit")):
         return jsonify({"ok": False, "error": "path must be a FITS file"}), 400
+    # Issue #123: never enqueue a previous night's FITS as tonight's science.
+    if _is_previous_night_fits(abs_path):
+        night = _fits_path_night_utc(abs_path) or "unknown"
+        tonight = _fits_export_night_utc()
+        logger.error(
+            "Refusing previous-night photometry enqueue: %s (night=%s tonight=%s) "
+            "(issue #123)", abs_path, night, tonight,
+        )
+        return jsonify({
+            "ok": False,
+            "error": (
+                f"refusing previous-night FITS (night={night}, tonight={tonight}); "
+                "expose a new frame for tonight instead"
+            ),
+            "night": night,
+            "tonight": tonight,
+        }), 409
     _enqueue_photometry(
         abs_path,
         target_name=override or None,
@@ -5756,6 +6052,7 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
+            _remember_commanded_slew(ra, dec, label=f"schedule:{target}")
             slew_ok = _wait_slew_complete(timeout=180.0)
             if slew_ok and not _verify_pointing(ra, dec, label=f"post-slew {target}"):
                 logger.warning(
@@ -5870,12 +6167,13 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             if _tel is None:
                 return False
             logger.warning(
-                "Schedule: reslewing to %s after %s (issues #116/#120)",
+                "Schedule: reslewing to %s after %s (issues #116/#120/#123)",
                 target, reason,
             )
             try:
                 with _device_lock:
                     _tel.begin_slew(ra, dec)
+                _remember_commanded_slew(ra, dec, label=f"schedule:{target}")
                 if not _wait_slew_complete(timeout=180.0):
                     return False
                 return _verify_pointing(ra, dec, label=f"reslew-{reason} {target}")
@@ -5894,22 +6192,41 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             A later post-download park slew is *not* raised here — once we
             confirm on-target at ImageReady the FITS is kept for photometry
             (issue #120).
+
+            Camera-drop mid-expose (issue #123): reconnect once, then raise
+            ExposureCancelled so the existing abort+reslew+retry path runs.
             """
-            with _device_lock:
-                _cam.set_binning(binning)
-                _cam.expose(
-                    duration=exp_dur, light=True,
-                    cancel_check=_cancel_if_off_target,
-                )
-                # Immediately after readout — before the slow imagearray pull.
-                if not _verify_pointing(
-                        ra, dec, label=f"at-ImageReady {target} f{frame}"):
-                    raise ExposureCancelled(
-                        "pointing off-target at ImageReady (issue #120)"
+            try:
+                with _device_lock:
+                    _cam.set_binning(binning)
+                    _cam.expose(
+                        duration=exp_dur, light=True,
+                        cancel_check=_cancel_if_off_target,
                     )
-                return _capture_image(
-                    fits_path=fits_save_path, exp_dur=exp_dur, target=target,
+                    # Immediately after readout — before the slow imagearray pull.
+                    if not _verify_pointing(
+                            ra, dec, label=f"at-ImageReady {target} f{frame}"):
+                        raise ExposureCancelled(
+                            "pointing off-target at ImageReady (issue #120)"
+                        )
+                    return _capture_image(
+                        fits_path=fits_save_path, exp_dur=exp_dur, target=target,
+                    )
+            except ExposureCancelled:
+                raise
+            except Exception as cam_drop_exc:
+                if not _camera_unreachable_exc(cam_drop_exc):
+                    raise
+                logger.error(
+                    "Schedule: camera dropped during expose of %s (%s) — "
+                    "reconnecting (issue #123)", target, cam_drop_exc,
                 )
+                if not _reconnect_camera_after_drop(reason=str(cam_drop_exc)[:200]):
+                    raise
+                # Treat as mid-expose abort so caller reslews + retries once.
+                raise ExposureCancelled(
+                    f"camera dropped mid-expose; reconnected ({cam_drop_exc})"
+                ) from cam_drop_exc
 
         def _discard_fits() -> None:
             if fits_save_path and pathlib.Path(fits_save_path).exists():

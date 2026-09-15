@@ -46,7 +46,7 @@ class PhotometryEnqueueApiTest(unittest.TestCase):
         import numpy as np
         client = dash.app.test_client()
         with tempfile.TemporaryDirectory() as td:
-            export = os.path.join(td, "fits_export", "2026-09-08")
+            export = os.path.join(td, "fits_export", "2026-09-15")
             os.makedirs(export)
             path = os.path.join(export, "Manual.fits")
             fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32)).writeto(path)
@@ -188,7 +188,7 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
         import numpy as np
         client = dash.app.test_client()
         with tempfile.TemporaryDirectory() as td:
-            export = os.path.join(td, "fits_export", "2026-09-09")
+            export = os.path.join(td, "fits_export", "2026-09-15")
             os.makedirs(export)
             path = os.path.join(export, "Manual_RA.fits")
             hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32))
@@ -220,7 +220,7 @@ class PhotometryTargetOverrideApiTest(unittest.TestCase):
         import numpy as np
         client = dash.app.test_client()
         with tempfile.TemporaryDirectory() as td:
-            export = os.path.join(td, "fits_export", "2026-09-09")
+            export = os.path.join(td, "fits_export", "2026-09-15")
             os.makedirs(export)
             path = os.path.join(export, "Manual.fits")
             fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32)).writeto(path)
