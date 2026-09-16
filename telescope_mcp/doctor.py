@@ -116,13 +116,11 @@ def _command_starts(base: str = "") -> dict:
                 "the telescope answers Claude", False,
                 "Claude is running a source-checkout MCP command that cannot "
                 "import `src`.",
-                "On the Mac run the installed binary:
-"
+                "On the Mac run the installed binary "
                 "/Applications/TelescopeNetNode.app/Contents/MacOS/"
-                "TelescopeNetNode --register-mcp
-"
-                "Then fully quit Claude (Cmd-Q) and reopen it. Do not register "
-                "with `python -m src.main_service`.")
+                "TelescopeNetNode --register-mcp. Then fully quit Claude "
+                "(Cmd-Q) and reopen it. Do not register with "
+                "`python -m src.main_service`.")
         return _result(
             "the telescope answers Claude", False,
             "It started but said nothing back.",
