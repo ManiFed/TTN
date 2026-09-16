@@ -2093,6 +2093,12 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
                        len(valid), reason)
         if _cloud is not None:
             _cloud.status["plan_pending_review"] = True
+            # _poll_plan already consumed this plan_id; rearm so resume/accept
+            # can redeliver the same plan without a fresh plan_id (Codex P1).
+            try:
+                _cloud.rearm_plan_delivery()
+            except Exception:
+                _cloud._last_plan_id = None
         _telemetry.event("plan_deferred_stood_down", severity="warning",
                          detail={"items": len(valid), "reason": str(reason)[:200]})
         return
@@ -6535,13 +6541,34 @@ def _run_schedule_bg(items: list, source: str = "manual",
     if source in ("cloud", "interrupt") and _tel is None and items:
         logger.info("Schedule: telescope not connected yet — waiting up to 180 s")
         deadline = time.monotonic() + 180
-        while _tel is None and time.monotonic() < deadline and not _sched_cancelled():
+        while (_tel is None and time.monotonic() < deadline
+               and not _sched_cancelled() and _tonight_allows_observing()):
             time.sleep(2)
-        if _tel is None and not _sched_cancelled():
+        if _tel is None and not _sched_cancelled() and _tonight_allows_observing():
             _telemetry.event(
                 "device_disconnect", severity="error",
                 detail={"reason": "telescope never connected before schedule start",
                         "waited_s": 180})
+
+    # Recheck after the reconnect wait: stand-down can land mid-wait and park,
+    # and prepare_mount would otherwise unpark again (Codex P1).
+    if _sched_cancelled() or not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "cancelled or stood down")
+        logger.info("Schedule: skipping mount prep after wait (%s)", reason)
+        with _sched_lock:
+            cancelled = _sched_state["cancelled"] or not _tonight_allows_observing()
+            _sched_state["running"] = False
+            _sched_state["current_phase"] = (
+                "stood_down" if not _tonight_allows_observing()
+                else ("cancelled" if cancelled else "done"))
+            if not _tonight_allows_observing():
+                _sched_state["error"] = f"stood down: {reason}"[:300]
+        _telemetry.event("schedule_blocked_stood_down", severity="info",
+                         detail={"source": source, "reason": str(reason)[:200],
+                                 "after_reconnect_wait": True})
+        return
 
     _sched_prepare_mount()
 
