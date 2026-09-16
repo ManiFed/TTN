@@ -152,8 +152,21 @@ class Camera:
             if state == _STATE_ERROR:
                 raise RuntimeError("Camera entered error state during exposure")
             if self.image_ready():
-                logger.info("Exposure complete — image ready for download (camera state=%d)", state)
-                return
+                # Seestar can flip ImageReady while still reporting EXPOSING (2);
+                # imagearray then returns "no image available" (Starfront 2026-09-16).
+                # Accept ImageReady in IDLE/READING/DOWNLOAD; keep waiting if still
+                # EXPOSING/WAITING so the buffer can finish filling.
+                if state in (_STATE_EXPOSING, _STATE_WAITING):
+                    logger.info(
+                        "ImageReady with camera still state=%d — waiting for readout",
+                        state,
+                    )
+                else:
+                    logger.info(
+                        "Exposure complete — image ready for download (camera state=%d)",
+                        state,
+                    )
+                    return
             now = time.monotonic()
             if state == _STATE_IDLE and now >= (deadline - readout_timeout) + idle_grace:
                 if idle_since is None:
@@ -173,13 +186,49 @@ class Camera:
             f"({duration:.1f} s exposure + {readout_timeout:.0f} s readout budget)"
         )
 
-    def abort_exposure(self) -> None:
+    def abort_exposure(self, settle_s: float = 15.0) -> None:
         self._c._put("abortexposure")
         logger.warning("Exposure aborted")
+        # Drain a stuck EXPOSING/DOWNLOAD state so the next StartExposure is not
+        # rejected with SET_PREVIEW_PAGE / capture-is-active (Starfront nights).
+        deadline = time.monotonic() + max(0.0, settle_s)
+        while time.monotonic() < deadline:
+            try:
+                state = self.camera_state()
+            except Exception:
+                break
+            if state in (_STATE_IDLE, _STATE_ERROR):
+                break
+            time.sleep(0.25)
 
     def image_array(self, timeout: float = 300.0) -> list:
-        """Return the last image as a nested list (row-major). Large frames will be slow over HTTP."""
+        """Return the last image as a nested list (row-major). Large frames will be slow over HTTP.
+
+        Seestar ALPACA sometimes reports ImageReady before the download buffer
+        is actually readable; the first imagearray call then fails with
+        "no image available" while CameraState is still EXPOSING. Retry briefly
+        instead of failing the whole science frame (Starfront 2026-09-16).
+        """
+        from .client import AlpacaError
+
         logger.info("Downloading image array…")
-        data = self._c._get("imagearray", timeout=timeout)
-        logger.info("Image array received")
-        return data
+        # Bound the settle window separately from the (large) transfer timeout.
+        settle_deadline = time.monotonic() + min(20.0, max(5.0, timeout))
+        last_exc: Optional[Exception] = None
+        while True:
+            try:
+                data = self._c._get("imagearray", timeout=timeout)
+                logger.info("Image array received")
+                return data
+            except AlpacaError as exc:
+                msg = str(exc).lower()
+                if "no image" not in msg:
+                    raise
+                last_exc = exc
+                if time.monotonic() >= settle_deadline:
+                    raise
+                logger.warning(
+                    "imagearray not ready yet (%s) — retrying (Seestar ImageReady race)",
+                    exc,
+                )
+                time.sleep(0.5)
