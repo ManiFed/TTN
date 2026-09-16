@@ -258,7 +258,10 @@ class CloudPlanFlowTest(TempCwdTestCase):
                    "observatory:\n  latitude: 31.0\n  longitude: -99.0\n"
                    "cloud:\n  auto_run_plans: true\n"
                    + _AAVSO_READY)
-        dashboard._cloud = types.SimpleNamespace(status={})
+        dashboard._cloud = types.SimpleNamespace(
+            status={}, _last_plan_id="plan-1",
+            rearm_plan_delivery=lambda: setattr(
+                dashboard._cloud, "_last_plan_id", None))
         dashboard._cam = None
         dashboard._tel = None
         dashboard._on_cloud_tonight({
@@ -268,6 +271,7 @@ class CloudPlanFlowTest(TempCwdTestCase):
         })
         dashboard._on_cloud_plan([_valid_item()])
         self.assertTrue(dashboard._cloud.status.get("plan_pending_review"))
+        self.assertIsNone(dashboard._cloud._last_plan_id)
         self.assertEqual(
             telemetry.counters().get("plan_deferred_stood_down"), 1)
         with dashboard._sched_lock:
