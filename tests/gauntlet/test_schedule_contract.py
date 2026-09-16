@@ -230,6 +230,8 @@ class CloudPlanFlowTest(TempCwdTestCase):
         dashboard._safety_mgr = self._orig_safety
         with dashboard._sched_lock:
             dashboard._sched_state.update(running=False, cancelled=False)
+        with dashboard._tonight_lock:
+            dashboard._tonight.clear()
         telemetry.reset_for_tests()
         super().tearDown()
 
@@ -247,6 +249,31 @@ class CloudPlanFlowTest(TempCwdTestCase):
         self.assertTrue(dashboard._cloud.status["plan_pending_review"])
         self.assertEqual(
             telemetry.counters().get("plan_deferred_auto_run_off"), 1)
+        with dashboard._sched_lock:
+            self.assertFalse(dashboard._sched_state["running"])
+
+    def test_stood_down_defers_plan_despite_auto_run(self):
+        """Stand-down must beat auto_run_plans so abort nights stay quiet."""
+        self.write("config.yaml",
+                   "observatory:\n  latitude: 31.0\n  longitude: -99.0\n"
+                   "cloud:\n  auto_run_plans: true\n"
+                   + _AAVSO_READY)
+        dashboard._cloud = types.SimpleNamespace(
+            status={}, _last_plan_id="plan-1",
+            rearm_plan_delivery=lambda: setattr(
+                dashboard._cloud, "_last_plan_id", None))
+        dashboard._cam = None
+        dashboard._tel = None
+        dashboard._on_cloud_tonight({
+            "observing": False,
+            "status": "stood_down",
+            "reason": "manual night",
+        })
+        dashboard._on_cloud_plan([_valid_item()])
+        self.assertTrue(dashboard._cloud.status.get("plan_pending_review"))
+        self.assertIsNone(dashboard._cloud._last_plan_id)
+        self.assertEqual(
+            telemetry.counters().get("plan_deferred_stood_down"), 1)
         with dashboard._sched_lock:
             self.assertFalse(dashboard._sched_state["running"])
 

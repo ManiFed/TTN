@@ -2080,6 +2080,28 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
     _work_starved.clear()
     _telemetry.event("plan_received", severity="info",
                      detail={"items": len(valid)})
+    # Stand-down / decline must win over auto_run_plans. Otherwise abort +
+    # stand_down parks the mount, then the next cloud plan poll starts a new
+    # runner that unparks via _sched_prepare_mount before the per-item tonight
+    # check (Starfront 2026-09-15: schedule status cancelled but mount slewing).
+    if not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "tonight intent says stop")
+        logger.warning("Cloud plan received (%d items) — not observing tonight "
+                       "(%s); leaving plan idle until resume/accept",
+                       len(valid), reason)
+        if _cloud is not None:
+            _cloud.status["plan_pending_review"] = True
+            # _poll_plan already consumed this plan_id; rearm so resume/accept
+            # can redeliver the same plan without a fresh plan_id (Codex P1).
+            try:
+                _cloud.rearm_plan_delivery()
+            except Exception:
+                _cloud._last_plan_id = None
+        _telemetry.event("plan_deferred_stood_down", severity="warning",
+                         detail={"items": len(valid), "reason": str(reason)[:200]})
+        return
     cfg = _load_config()
     if not cfg.get("cloud", {}).get("auto_run_plans", True):
         logger.warning("Cloud plan received (%d items) — auto_run_plans is off, "
@@ -2232,6 +2254,17 @@ def _interrupt_dispatcher_loop() -> None:
             items = [it for it in items
                      if not (it.get("task_id") and _cloud.task_cancelled(it["task_id"]))]
         if not items:
+            continue
+
+        if not _tonight_allows_observing():
+            reason = (_tonight_intent().get("reason")
+                      or _tonight_intent().get("status")
+                      or "tonight intent says stop")
+            logger.info("Interrupt dispatcher: dropping %d item(s) — stood down (%s)",
+                        len(items), reason)
+            _telemetry.event("interrupt_dropped_stood_down", severity="info",
+                             detail={"items": len(items),
+                                     "reason": str(reason)[:200]})
             continue
 
         # Wait for any running schedule to finish before starting ours.
@@ -6486,19 +6519,56 @@ def _run_schedule_bg(items: list, source: str = "manual",
                          detail={"cancelled": cancelled, "source": source})
         return
 
+    # Refuse mount motion while stood down — prepare_mount unparks/tracks and
+    # used to run before the per-item tonight check.
+    if not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "tonight intent says stop")
+        logger.info("Schedule: not preparing mount — tonight intent says stop (%s)",
+                    reason)
+        with _sched_lock:
+            _sched_state["running"] = False
+            _sched_state["current_phase"] = "stood_down"
+            _sched_state["error"] = f"stood down: {reason}"[:300]
+        _telemetry.event("schedule_blocked_stood_down", severity="info",
+                         detail={"source": source, "reason": str(reason)[:200]})
+        return
+
     # Autonomous runs that start right after a service restart can beat the
     # supervisor's device reconnect — give it a couple of minutes rather than
     # burning every item against a not-yet-connected telescope.
     if source in ("cloud", "interrupt") and _tel is None and items:
         logger.info("Schedule: telescope not connected yet — waiting up to 180 s")
         deadline = time.monotonic() + 180
-        while _tel is None and time.monotonic() < deadline and not _sched_cancelled():
+        while (_tel is None and time.monotonic() < deadline
+               and not _sched_cancelled() and _tonight_allows_observing()):
             time.sleep(2)
-        if _tel is None and not _sched_cancelled():
+        if _tel is None and not _sched_cancelled() and _tonight_allows_observing():
             _telemetry.event(
                 "device_disconnect", severity="error",
                 detail={"reason": "telescope never connected before schedule start",
                         "waited_s": 180})
+
+    # Recheck after the reconnect wait: stand-down can land mid-wait and park,
+    # and prepare_mount would otherwise unpark again (Codex P1).
+    if _sched_cancelled() or not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "cancelled or stood down")
+        logger.info("Schedule: skipping mount prep after wait (%s)", reason)
+        with _sched_lock:
+            cancelled = _sched_state["cancelled"] or not _tonight_allows_observing()
+            _sched_state["running"] = False
+            _sched_state["current_phase"] = (
+                "stood_down" if not _tonight_allows_observing()
+                else ("cancelled" if cancelled else "done"))
+            if not _tonight_allows_observing():
+                _sched_state["error"] = f"stood down: {reason}"[:300]
+        _telemetry.event("schedule_blocked_stood_down", severity="info",
+                         detail={"source": source, "reason": str(reason)[:200],
+                                 "after_reconnect_wait": True})
+        return
 
     _sched_prepare_mount()
 
