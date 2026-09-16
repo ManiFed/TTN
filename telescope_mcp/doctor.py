@@ -107,11 +107,27 @@ def _command_starts(base: str = "") -> dict:
                        "Reinstall from thetelescope.net.")
     first = (proc.stdout or "").splitlines()[0] if proc.stdout else ""
     if not first:
+        err = (proc.stderr or "").strip()
+        # Starfront 2026-09-16: Claude config still had a checkout-style
+        # `python -m src.main_service --mcp` entry; without the repo on
+        # PYTHONPATH the process dies before answering (server disconnected).
+        if "No module named 'src'" in err or 'No module named "src"' in err:
+            return _result(
+                "the telescope answers Claude", False,
+                "Claude is running a source-checkout MCP command that cannot "
+                "import `src`.",
+                "On the Mac run the installed binary:
+"
+                "/Applications/TelescopeNetNode.app/Contents/MacOS/"
+                "TelescopeNetNode --register-mcp
+"
+                "Then fully quit Claude (Cmd-Q) and reopen it. Do not register "
+                "with `python -m src.main_service`.")
         return _result(
             "the telescope answers Claude", False,
             "It started but said nothing back.",
             f"This is what Claude reports as 'server disconnected'. Last error: "
-            f"{(proc.stderr or '').strip()[-200:] or 'none'}")
+            f"{err[-200:] or 'none'}")
     try:
         json.loads(first)
     except ValueError:
