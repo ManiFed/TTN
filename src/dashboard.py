@@ -2080,6 +2080,22 @@ def _on_cloud_plan(items: list, contingencies: Optional[dict] = None) -> None:
     _work_starved.clear()
     _telemetry.event("plan_received", severity="info",
                      detail={"items": len(valid)})
+    # Stand-down / decline must win over auto_run_plans. Otherwise abort +
+    # stand_down parks the mount, then the next cloud plan poll starts a new
+    # runner that unparks via _sched_prepare_mount before the per-item tonight
+    # check (Starfront 2026-09-15: schedule status cancelled but mount slewing).
+    if not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "tonight intent says stop")
+        logger.warning("Cloud plan received (%d items) — not observing tonight "
+                       "(%s); leaving plan idle until resume/accept",
+                       len(valid), reason)
+        if _cloud is not None:
+            _cloud.status["plan_pending_review"] = True
+        _telemetry.event("plan_deferred_stood_down", severity="warning",
+                         detail={"items": len(valid), "reason": str(reason)[:200]})
+        return
     cfg = _load_config()
     if not cfg.get("cloud", {}).get("auto_run_plans", True):
         logger.warning("Cloud plan received (%d items) — auto_run_plans is off, "
@@ -2232,6 +2248,17 @@ def _interrupt_dispatcher_loop() -> None:
             items = [it for it in items
                      if not (it.get("task_id") and _cloud.task_cancelled(it["task_id"]))]
         if not items:
+            continue
+
+        if not _tonight_allows_observing():
+            reason = (_tonight_intent().get("reason")
+                      or _tonight_intent().get("status")
+                      or "tonight intent says stop")
+            logger.info("Interrupt dispatcher: dropping %d item(s) — stood down (%s)",
+                        len(items), reason)
+            _telemetry.event("interrupt_dropped_stood_down", severity="info",
+                             detail={"items": len(items),
+                                     "reason": str(reason)[:200]})
             continue
 
         # Wait for any running schedule to finish before starting ours.
@@ -6484,6 +6511,22 @@ def _run_schedule_bg(items: list, source: str = "manual",
         _telemetry.event("schedule_abandoned_before_dark",
                          severity="info" if cancelled else "warning",
                          detail={"cancelled": cancelled, "source": source})
+        return
+
+    # Refuse mount motion while stood down — prepare_mount unparks/tracks and
+    # used to run before the per-item tonight check.
+    if not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "tonight intent says stop")
+        logger.info("Schedule: not preparing mount — tonight intent says stop (%s)",
+                    reason)
+        with _sched_lock:
+            _sched_state["running"] = False
+            _sched_state["current_phase"] = "stood_down"
+            _sched_state["error"] = f"stood down: {reason}"[:300]
+        _telemetry.event("schedule_blocked_stood_down", severity="info",
+                         detail={"source": source, "reason": str(reason)[:200]})
         return
 
     # Autonomous runs that start right after a service restart can beat the
