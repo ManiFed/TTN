@@ -221,21 +221,23 @@ class LiveStacker:
 
     def write_fits(
         self,
-        path: str,
+        dest_dir: str,
+        filename: str = "coadd.fits",
         *,
         header_cards: Optional[dict] = None,
         overwrite: bool = True,
-        allowed_root: Optional[str] = None,
     ) -> bool:
-        """Write the current coadd as a float32 FITS science frame (issue #132).
+        """Write the current coadd as a float32 FITS under *dest_dir* (#132).
 
         Live stacking was preview-only; this path produces a fits_export-ready
         coadd so photometry can gain ≈√N SNR on faint targets (e.g. SS Cyg).
 
-        When *allowed_root* is set, refuse to write outside that directory
-        (CodeQL py/path-injection — path may include a sanitized target label).
+        *filename* is a basename only (CodeQL py/path-injection): ``os.path.basename``
+        plus an ``[A-Za-z0-9._-]+.fits`` whitelist. The directory is never taken
+        from request input — callers pass a config/export dir.
         """
         import os
+        import re
         from datetime import datetime, timezone
 
         img = self.stacked_image()
@@ -247,18 +249,17 @@ class LiveStacker:
             logger.error("write_fits: astropy unavailable: %s", exc)
             return False
         try:
-            abs_path = os.path.realpath(os.path.abspath(os.path.normpath(str(path))))
-            if allowed_root is not None:
-                root = os.path.realpath(os.path.abspath(str(allowed_root)))
-                if abs_path != root and not abs_path.startswith(root + os.sep):
-                    logger.error(
-                        "write_fits: refusing path outside allowed_root %s: %s",
-                        root, path,
-                    )
-                    return False
-            parent = os.path.dirname(abs_path) or "."
-            os.makedirs(parent, exist_ok=True)
-            path = abs_path
+            name = os.path.basename(str(filename))
+            if not re.fullmatch(r"[A-Za-z0-9._-]+\.fits", name, re.IGNORECASE):
+                logger.error("write_fits: refusing unsafe filename %r", filename)
+                return False
+            root = os.path.realpath(os.path.abspath(str(dest_dir)))
+            # Caller creates dest_dir (fits_export/<night>/). Avoid makedirs on
+            # any path that CodeQL may associate with request-derived names.
+            if not os.path.isdir(root):
+                logger.error("write_fits: dest_dir does not exist: %s", dest_dir)
+                return False
+            path = os.path.join(root, name)
             hdr = fits.Header()
             hdr["SIMPLE"] = True
             hdr["BITPIX"] = -32
