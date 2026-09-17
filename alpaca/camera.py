@@ -132,6 +132,19 @@ class Camera:
                           and ExposureCancelled is raised.
         """
         logger.info("Starting %.2f s %s exposure", duration, "light" if light else "dark")
+        # Pre-flight: reclaim a leftover firmware capture-active latch so the
+        # immediate next StartExposure after a finished frame does not 1279
+        # (issues #133/#127; mirrors post-expose clear_capture_latch).
+        try:
+            pre = self.camera_state()
+            if pre not in (_STATE_IDLE, _STATE_ERROR):
+                logger.warning(
+                    "StartExposure preflight: camera state=%d — clearing "
+                    "stale capture latch (issue #133)", pre,
+                )
+                self.clear_capture_latch(settle_s=5.0)
+        except Exception as exc:
+            logger.debug("StartExposure preflight latch clear skipped: %s", exc)
         self._c._put("startexposure", Duration=duration, Light=light)
 
         # Poll imageready — the authoritative ALPACA flag that the image has
@@ -191,15 +204,61 @@ class Camera:
         logger.warning("Exposure aborted")
         # Drain a stuck EXPOSING/DOWNLOAD state so the next StartExposure is not
         # rejected with SET_PREVIEW_PAGE / capture-is-active (Starfront nights).
+        self._wait_capture_idle(settle_s=settle_s)
+
+    def _wait_capture_idle(self, settle_s: float = 15.0) -> int:
+        """Poll CameraState until IDLE/ERROR or settle budget exhausted.
+
+        Returns the last observed state (or -1 if the query failed).
+        """
         deadline = time.monotonic() + max(0.0, settle_s)
+        last_state = -1
         while time.monotonic() < deadline:
             try:
-                state = self.camera_state()
+                last_state = self.camera_state()
             except Exception:
-                break
-            if state in (_STATE_IDLE, _STATE_ERROR):
-                break
+                return -1
+            if last_state in (_STATE_IDLE, _STATE_ERROR):
+                return last_state
             time.sleep(0.25)
+        return last_state
+
+    def clear_capture_latch(self, settle_s: float = 8.0) -> bool:
+        """Clear Seestar firmware capture-active after a finished expose.
+
+        Issue #133 / #127: after a successful or cancelled expose the driver
+        can still reject the next StartExposure with Error 1279 / "capture is
+        active" until an abort settles. Soft-abort when not already IDLE so
+        an immediate re-expose works without a manual node_abort_exposure.
+        Returns True when the camera reports IDLE afterward.
+        """
+        try:
+            state = self.camera_state()
+        except Exception as exc:
+            logger.warning("clear_capture_latch: cannot read camerastate: %s", exc)
+            return False
+        if state == _STATE_IDLE:
+            return True
+        logger.info(
+            "clear_capture_latch: camera state=%d after expose — soft-abort "
+            "to clear capture-active (issues #133/#127)",
+            state,
+        )
+        try:
+            # Prefer abort PUT even when ImageReady already fired; Seestar
+            # treats this as releasing the capture latch rather than losing
+            # the already-downloaded frame.
+            self._c._put("abortexposure")
+        except Exception as exc:
+            logger.warning("clear_capture_latch: abortexposure failed: %s", exc)
+        final = self._wait_capture_idle(settle_s=settle_s)
+        ok = final == _STATE_IDLE
+        if not ok:
+            logger.warning(
+                "clear_capture_latch: still state=%s after %.1fs settle",
+                final, settle_s,
+            )
+        return ok
 
     def image_array(self, timeout: float = 300.0) -> list:
         """Return the last image as a nested list (row-major). Large frames will be slow over HTTP.

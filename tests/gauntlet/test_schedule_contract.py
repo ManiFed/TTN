@@ -224,6 +224,7 @@ class CloudPlanFlowTest(TempCwdTestCase):
         self._orig_safety = dashboard._safety_mgr
         with dashboard._sched_lock:
             dashboard._sched_state.update(running=False, cancelled=False)
+        dashboard._clear_stand_down_latch(reason="test-setup")
 
     def tearDown(self):
         dashboard._cloud = self._orig_cloud
@@ -232,6 +233,9 @@ class CloudPlanFlowTest(TempCwdTestCase):
             dashboard._sched_state.update(running=False, cancelled=False)
         with dashboard._tonight_lock:
             dashboard._tonight.clear()
+        # Issue #135: _on_cloud_tonight(not observing) arms a process-global latch;
+        # clear it so later e2e / MCP suites are not left stood down ("manual night").
+        dashboard._clear_stand_down_latch(reason="test-teardown")
         telemetry.reset_for_tests()
         super().tearDown()
 

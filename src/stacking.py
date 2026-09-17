@@ -219,6 +219,95 @@ class LiveStacker:
         """Approximate SNR improvement over a single frame (√N for shot-noise-limited)."""
         return math.sqrt(self.frames_stacked) if self.frames_stacked else 0.0
 
+    def write_fits(
+        self,
+        dest_dir: str,
+        filename: str = "coadd.fits",
+        *,
+        header_cards: Optional[dict] = None,
+        overwrite: bool = True,
+    ) -> bool:
+        """Write the current coadd as a float32 FITS under *dest_dir* (#132).
+
+        Live stacking was preview-only; this path produces a fits_export-ready
+        coadd so photometry can gain ≈√N SNR on faint targets (e.g. SS Cyg).
+
+        *filename* is a basename only (CodeQL py/path-injection): ``os.path.basename``
+        plus a non-regex ``[A-Za-z0-9._-]`` + ``.fits`` whitelist. The directory
+        is never taken from request input — callers pass a config/export dir.
+        """
+        import os
+        from datetime import datetime, timezone
+
+        img = self.stacked_image()
+        if img is None:
+            return False
+        try:
+            from astropy.io import fits
+        except Exception as exc:
+            logger.error("write_fits: astropy unavailable: %s", exc)
+            return False
+        try:
+            raw = str(filename)
+            # Reject path components before basename (e.g. "../escape.fits").
+            if raw != os.path.basename(raw) or "/" in raw or "\\" in raw:
+                logger.error("write_fits: refusing path-like filename %r", filename)
+                return False
+            name = raw
+            # Non-regex whitelist (CodeQL py/polynomial-redos on re.fullmatch).
+            lower = name.lower()
+            if (
+                not lower.endswith(".fits")
+                or len(name) < 6
+                or len(name) > 120
+                or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for c in name[:-5])
+                or name[:-5] == ""
+            ):
+                logger.error("write_fits: refusing unsafe filename %r", filename)
+                return False
+            root = os.path.realpath(os.path.abspath(str(dest_dir)))
+            # Caller creates dest_dir (fits_export/<night>/). Avoid makedirs on
+            # any path that CodeQL may associate with request-derived names.
+            if not os.path.isdir(root):
+                logger.error("write_fits: dest_dir does not exist: %s", dest_dir)
+                return False
+            path = os.path.join(root, name)
+            hdr = fits.Header()
+            hdr["SIMPLE"] = True
+            hdr["BITPIX"] = -32
+            hdr["NAXIS"] = 2
+            hdr["NAXIS1"] = int(img.shape[1])
+            hdr["NAXIS2"] = int(img.shape[0])
+            hdr["IMAGETYP"] = "LIGHT"
+            hdr["BSCALE"] = 1.0
+            hdr["BZERO"] = 0.0
+            hdr["STACKN"] = (int(self.frames_stacked), "frames coadded")
+            hdr["SNRGN"] = (round(self.snr_gain(), 3), "approx SNR gain vs single frame")
+            hdr["DATE-OBS"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            hdr["HISTORY"] = (
+                f"TTN LiveStacker coadd of {self.frames_stacked} frames "
+                f"(issue #132 science export)"
+            )
+            if header_cards:
+                for key, value in header_cards.items():
+                    if value is None:
+                        continue
+                    try:
+                        hdr[str(key)[:8]] = value
+                    except Exception:
+                        pass
+            fits.PrimaryHDU(data=img.astype(np.float32), header=hdr).writeto(
+                path, overwrite=overwrite,
+            )
+            logger.info(
+                "Wrote science coadd FITS %s (%d frames, SNR gain ~%.2f×)",
+                path, self.frames_stacked, self.snr_gain(),
+            )
+            return True
+        except Exception as exc:
+            logger.error("write_fits failed for %s: %s", path, exc)
+            return False
+
     def preview_png_b64(self, max_px: int = 720) -> Optional[str]:
         """Return a percentile-stretched 8-bit PNG preview of the stack, base64-encoded."""
         img = self.stacked_image()

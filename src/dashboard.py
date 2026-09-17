@@ -2591,8 +2591,21 @@ _stack_state: dict = {
 }
 
 
-def _run_stacking_bg(n_frames: int, exposure_s: float, preview_every: int) -> None:
-    """Background thread: capture N sub-frames and live-stack them into a preview."""
+def _run_stacking_bg(
+    n_frames: int,
+    exposure_s: float,
+    preview_every: int,
+    *,
+    export_science: bool = False,
+    target_name: str | None = None,
+    enqueue_photometry: bool = True,
+) -> None:
+    """Background thread: capture N sub-frames and live-stack them.
+
+    When *export_science* is True (issue #132), write the coadd under
+    fits_export/ and optionally enqueue photometry so faint targets can
+    reach the AAVSO SNR gate via √N gain.
+    """
     global _stacker, _stack_preview_b64
 
     stacker = LiveStacker()
@@ -2604,6 +2617,7 @@ def _run_stacking_bg(n_frames: int, exposure_s: float, preview_every: int) -> No
             "frames_stacked": 0, "frames_total": 0, "frames_rejected": 0,
             "last_offset": [0.0, 0.0], "snr_gain": 0.0,
             "error": None, "finished": False,
+            "export_path": None, "export_science": bool(export_science),
         })
 
     def _cancelled() -> bool:
@@ -2672,11 +2686,27 @@ def _run_stacking_bg(n_frames: int, exposure_s: float, preview_every: int) -> No
                         _stack_preview_b64 = png
             except Exception:
                 pass
+
+        export_path = None
+        if export_science and stacker.frames_stacked:
+            try:
+                export_path = _export_live_stack_science(
+                    stacker, target_name=target_name,
+                    enqueue=enqueue_photometry,
+                )
+            except Exception as exp_exc:
+                logger.error("Live stack science export failed: %s", exp_exc)
+                with _stack_lock:
+                    _stack_state["error"] = f"stack export failed: {exp_exc}"[:300]
+
         with _stack_lock:
             _stack_state["running"]  = False
             _stack_state["finished"] = True
-        logger.info("Live stacking complete — %d frames stacked (SNR gain ~%.1f×)",
-                    stacker.frames_stacked, stacker.snr_gain())
+            if export_path:
+                _stack_state["export_path"] = export_path
+        logger.info("Live stacking complete — %d frames stacked (SNR gain ~%.1f×)%s",
+                    stacker.frames_stacked, stacker.snr_gain(),
+                    f" export={export_path}" if export_path else "")
     except Exception as exc:
         with _stack_lock:
             _stack_state["error"]   = str(exc)
@@ -3118,6 +3148,39 @@ def _on_cloud_dry_run(enabled: bool) -> None:
 _tonight_lock = threading.Lock()
 _tonight: dict = {}
 
+# Local hard stand-down latch (issue #135). Cloud tonight intent can flap or
+# arrive late; auto_run_plans=false alone previously left schedule/imaging/
+# companion paths able to slew. This latch stays set until explicit re-arm.
+_stand_down_latch = False
+_stand_down_latch_reason = ""
+_stand_down_latch_lock = threading.Lock()
+
+
+def _set_stand_down_latch(reason: str = "") -> None:
+    """Arm the local stand-down latch — blocks auto slews/exposes/schedules."""
+    global _stand_down_latch, _stand_down_latch_reason
+    with _stand_down_latch_lock:
+        _stand_down_latch = True
+        _stand_down_latch_reason = (reason or "stand-down")[:300]
+    logger.warning("Stand-down latch ARMED (%s) — auto imaging blocked until re-arm "
+                   "(issue #135)", _stand_down_latch_reason)
+
+
+def _clear_stand_down_latch(reason: str = "re-arm") -> None:
+    """Clear the local stand-down latch (tonight accept / explicit re-arm)."""
+    global _stand_down_latch, _stand_down_latch_reason
+    with _stand_down_latch_lock:
+        was = _stand_down_latch
+        _stand_down_latch = False
+        _stand_down_latch_reason = ""
+    if was:
+        logger.info("Stand-down latch CLEARED (%s)", reason)
+
+
+def _stand_down_latched() -> bool:
+    with _stand_down_latch_lock:
+        return bool(_stand_down_latch)
+
 
 def _on_cloud_tonight(intent: dict) -> None:
     """Tonight's intent changed. Act on it immediately.
@@ -3132,10 +3195,12 @@ def _on_cloud_tonight(intent: dict) -> None:
         _tonight.update(intent or {})
 
     if intent.get("observing"):
+        _clear_stand_down_latch(reason=f"tonight observing ({intent.get('status', '')})")
         logger.info("Tonight: observing (%s)", intent.get("status", ""))
         return
 
     reason = intent.get("reason") or intent.get("status") or "no reason given"
+    _set_stand_down_latch(reason)
     logger.warning("Tonight: not observing — %s", reason)
 
     with _sched_lock:
@@ -3177,7 +3242,12 @@ def _tonight_allows_observing() -> bool:
     Defaults to True before the cloud has answered: a node that has never heard
     otherwise behaves as it always has, and the SafetyManager still decides
     whether it is actually safe to open.
+
+    Issue #135: a local stand-down latch always wins, even if cloud intent is
+    empty or still says observing, until explicit re-arm / tonight accept.
     """
+    if _stand_down_latched():
+        return False
     intent = _tonight_intent()
     if not intent:
         return True
@@ -4351,6 +4421,20 @@ def api_slew():
     if _tel is None:
         return jsonify({"error": "Telescope not connected"}), 400
     data = request.get_json(force=True) or {}
+    # Issue #131: refuse uncommanded mid-expose gotos via the API (other MCP
+    # agents / stray automation). force=true still allowed for recovery.
+    if _science_capture_active() and not bool(data.get("force", False)):
+        return jsonify({
+            "error": "Science capture active — refusing slew (issue #131)",
+            "blocked": True,
+        }), 409
+    if _stand_down_latched() and not bool(data.get("force", False)):
+        return jsonify({
+            "error": f"Stood down — refusing slew ({_stand_down_latch_reason or 'latch'}) "
+                     f"(issue #135)",
+            "blocked": True,
+            "stood_down": True,
+        }), 409
     mode = data.get("mode", "eq")
 
     if mode == "altaz":
@@ -4829,6 +4913,13 @@ def api_expose():
                         logger.error(silent)
                     elif fits_written:
                         _state["camera"]["error"] = None
+            # Issue #133/#127: release Seestar firmware capture-active so the
+            # next StartExposure within ~5s succeeds without manual abort.
+            try:
+                if _cam is not None and hasattr(_cam, "clear_capture_latch"):
+                    _cam.clear_capture_latch(settle_s=8.0)
+            except Exception as latch_exc:
+                logger.warning("Post-expose clear_capture_latch failed: %s", latch_exc)
             _pier_cam_pause.clear()
 
     threading.Thread(target=_do, daemon=True, name="cam-expose").start()
@@ -5546,6 +5637,62 @@ def api_center_status():
 
 # ── Live stacking ─────────────────────────────────────────────────────────────
 
+def _export_live_stack_science(
+    stacker,
+    *,
+    target_name: str | None = None,
+    enqueue: bool = True,
+    header_cards: dict | None = None,
+):
+    """Write the live coadd under fits_export/ and optionally enqueue photometry.
+
+    Issue #132: preview-only stacks could not feed AAVSO SNR gates for faint
+    targets (SS Cyg). This is the supported science coadd path.
+    """
+    if stacker is None or not getattr(stacker, "frames_stacked", 0):
+        return None
+    export_dir = os.path.realpath(_fits_export_dir())
+    date_dir = pathlib.Path(export_dir) / _fits_export_night_utc()
+    date_dir.mkdir(parents=True, exist_ok=True)
+    safe_tgt = "".join(
+        c if c.isalnum() or c in "-_." else "_"
+        for c in (target_name or "stack")
+    )[:40] or "stack"
+    fname = (
+        f"{safe_tgt}_coadd{int(stacker.frames_stacked):02d}_"
+        f"{uuid.uuid4().hex[:8]}.fits"
+    )
+    out_path = str(date_dir / fname)
+    # Confine coadd writes under fits_export (CodeQL py/path-injection on #132).
+    out_real = os.path.realpath(out_path)
+    if out_real != export_dir and not out_real.startswith(export_dir + os.sep):
+        logger.error("Coadd export path escaped fits_export dir: %s", out_path)
+        return None
+    cards = dict(header_cards or {})
+    if target_name:
+        cards.setdefault("OBJECT", str(target_name)[:68])
+    cmd_ra, cmd_dec = _commanded_slew_radec()
+    if cmd_ra is not None and cmd_dec is not None:
+        cards.setdefault("RA", round(float(cmd_ra) * 15.0, 6))
+        cards.setdefault("DEC", round(float(cmd_dec), 6))
+    ok = stacker.write_fits(str(date_dir), fname, header_cards=cards)
+    if not ok:
+        return None
+    if enqueue:
+        try:
+            _enqueue_photometry(
+                out_path,
+                target_name=target_name or None,
+                ra_deg=(float(cmd_ra) * 15.0) if cmd_ra is not None else None,
+                dec_deg=float(cmd_dec) if cmd_dec is not None else None,
+            )
+        except Exception as exc:
+            logger.warning("Coadd photometry enqueue failed: %s", exc)
+    logger.info("Science coadd exported: %s (enqueue=%s)", out_path, enqueue)
+    return out_path
+
+
+
 @app.route("/api/stack/start", methods=["POST"])
 def api_stack_start():
     if _cam is None:
@@ -5581,16 +5728,39 @@ def api_stack_start():
     n_frames      = max(1, _num("frames", 20, int))
     exposure_s    = _num("exposure_s", 10.0, float)
     preview_every = max(1, _num("preview_every", 1, int))
+    export_science = bool(data.get(
+        "export_science",
+        data.get("science_export", cfg.get("export_science", False)),
+    ))
+    enqueue_phot = bool(data.get("enqueue_photometry", True))
+    target_name = (
+        data.get("target_name") or data.get("target") or data.get("object")
+        or cfg.get("target_name") or None
+    )
+    if target_name is not None:
+        target_name = str(target_name).strip() or None
 
     t = threading.Thread(
         target=_run_stacking_bg,
         args=(n_frames, exposure_s, preview_every),
+        kwargs={
+            "export_science": export_science,
+            "target_name": target_name,
+            "enqueue_photometry": enqueue_phot,
+        },
         daemon=True,
         name="live-stack",
     )
     t.start()
-    logger.info("Live stacking started — %d × %.1fs frames", n_frames, exposure_s)
-    return jsonify({"ok": True})
+    logger.info(
+        "Live stacking started — %d × %.1fs frames (export_science=%s target=%s)",
+        n_frames, exposure_s, export_science, target_name,
+    )
+    return jsonify({
+        "ok": True,
+        "export_science": export_science,
+        "target_name": target_name,
+    })
 
 
 @app.route("/api/stack/start", methods=["DELETE"])
@@ -5601,6 +5771,47 @@ def api_stack_stop():
         _stack_state["cancelled"] = True
     logger.info("Live stacking stop requested")
     return jsonify({"ok": True})
+
+
+@app.route("/api/stack/export", methods=["POST"])
+def api_stack_export():
+    """Export the current live coadd to fits_export + optional photometry enqueue.
+
+    Issue #132 — science path for √N SNR on faint targets (SS Cyg). Body:
+      { "target_name": "SS Cyg", "enqueue_photometry": true }
+    """
+    data = request.get_json(force=True) or {}
+    enqueue = bool(data.get("enqueue_photometry", True))
+    target_name = (
+        data.get("target_name") or data.get("target") or data.get("object")
+    )
+    if target_name is not None:
+        target_name = str(target_name).strip() or None
+    with _stack_lock:
+        stacker = _stacker
+        running = bool(_stack_state.get("running"))
+        stacked = int(_stack_state.get("frames_stacked") or 0)
+    if stacker is None or stacked < 1:
+        return jsonify({"error": "No stacked frames to export"}), 409
+    if running:
+        return jsonify({
+            "error": "Stack still running — wait until finished or stop first",
+        }), 409
+    path_out = _export_live_stack_science(
+        stacker, target_name=target_name, enqueue=enqueue,
+    )
+    if not path_out:
+        return jsonify({"error": "Failed to write coadd FITS"}), 500
+    with _stack_lock:
+        _stack_state["export_path"] = path_out
+    return jsonify({
+        "ok": True,
+        "path": path_out,
+        "frames_stacked": stacked,
+        "snr_gain": round(stacker.snr_gain(), 2),
+        "enqueued": enqueue,
+        "target_name": target_name,
+    })
 
 
 @app.route("/api/imaging/targets", methods=["GET"])
@@ -6351,6 +6562,15 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             # Do not count this attempted frame as completed (Codex #77 P2).
             return False
         finally:
+            # Issue #133/#127: clear firmware capture-active after each schedule
+            # frame so the next StartExposure does not 1279.
+            try:
+                if _cam is not None and hasattr(_cam, "clear_capture_latch"):
+                    _cam.clear_capture_latch(settle_s=8.0)
+            except Exception as latch_exc:
+                logger.warning(
+                    "Schedule post-expose clear_capture_latch failed: %s", latch_exc,
+                )
             _pier_cam_pause.clear()
         with _sched_lock:
             _sched_state["frames_completed"] = (
@@ -6805,11 +7025,103 @@ def api_schedule_resync():
     return jsonify(payload), status
 
 
+@app.route("/api/standdown", methods=["POST"])
+def api_standdown_local():
+    """Arm the local stand-down latch (issue #135).
+
+    Blocks schedule / cloud auto-run / imaging handoff / non-force slews until
+    POST /api/standdown/rearm (or cloud tonight accept clears the latch).
+    """
+    data = request.get_json(force=True) or {}
+    reason = str(data.get("reason") or "local stand-down").strip()[:300]
+    _set_stand_down_latch(reason)
+    # Also cancel any running schedule and best-effort abort+park.
+    with _sched_lock:
+        was_running = _sched_state["running"]
+        if was_running:
+            _sched_state["cancelled"] = True
+    _expose_cancel.set()
+    try:
+        if _cam is not None:
+            _cam.abort_exposure()
+    except Exception:
+        pass
+    try:
+        if _tel is not None:
+            with _device_lock:
+                _tel.park()
+    except Exception:
+        pass
+    # Persist auto_run_plans=false so cloud plans stay idle across restarts.
+    if bool(data.get("disable_auto_run", True)):
+        try:
+            cfg = _load_config()
+            cfg.setdefault("cloud", {})["auto_run_plans"] = False
+            with open("config.yaml", "w") as fh:
+                yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False,
+                          allow_unicode=True)
+        except Exception as exc:
+            logger.warning("Could not persist auto_run_plans=false: %s", exc)
+    return jsonify({
+        "ok": True,
+        "stood_down": True,
+        "reason": reason,
+        "schedule_was_running": was_running,
+    })
+
+
+@app.route("/api/standdown/rearm", methods=["POST"])
+def api_standdown_rearm():
+    """Clear the local stand-down latch so observing can resume (issue #135)."""
+    data = request.get_json(force=True) or {}
+    _clear_stand_down_latch(reason=str(data.get("reason") or "re-arm")[:200])
+    enable_auto = data.get("enable_auto_run")
+    if enable_auto is not None:
+        try:
+            cfg = _load_config()
+            cfg.setdefault("cloud", {})["auto_run_plans"] = bool(enable_auto)
+            with open("config.yaml", "w") as fh:
+                yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False,
+                          allow_unicode=True)
+        except Exception as exc:
+            logger.warning("Could not persist auto_run_plans: %s", exc)
+    return jsonify({"ok": True, "stood_down": False})
+
+
+@app.route("/api/standdown", methods=["GET"])
+def api_standdown_status():
+    with _stand_down_latch_lock:
+        latched = bool(_stand_down_latch)
+        reason = _stand_down_latch_reason
+    return jsonify({
+        "stood_down": latched or (not _tonight_allows_observing()),
+        "latch": latched,
+        "reason": reason or (
+            (_tonight_intent().get("reason") or "") if not _tonight_allows_observing() else ""
+        ),
+        "tonight_observing": _tonight_allows_observing(),
+    })
+
+
 @app.route("/api/schedule/run", methods=["POST"])
 def api_schedule_run():
     with _sched_lock:
         if _sched_state["running"]:
             return jsonify({"error": "Schedule already running"}), 409
+    if _stand_down_latched():
+        return jsonify({
+            "error": f"Stood down — schedule blocked until re-arm "
+                     f"({_stand_down_latch_reason or 'latch'}) (issue #135)",
+            "stood_down": True,
+        }), 409
+    if not _tonight_allows_observing():
+        reason = (_tonight_intent().get("reason")
+                  or _tonight_intent().get("status")
+                  or "tonight intent says stop")
+        return jsonify({
+            "error": f"Not observing tonight — {reason}",
+            "stood_down": True,
+        }), 409
     blocked = _aavso_research_block_reason("manual")
     if blocked:
         return jsonify({"ok": False, "error": blocked, "aavso_ready": False}), 409
