@@ -5675,9 +5675,7 @@ def _export_live_stack_science(
     if cmd_ra is not None and cmd_dec is not None:
         cards.setdefault("RA", round(float(cmd_ra) * 15.0, 6))
         cards.setdefault("DEC", round(float(cmd_dec), 6))
-    ok = stacker.write_fits(
-        out_real, header_cards=cards, allowed_root=export_dir,
-    )
+    ok = stacker.write_fits(str(date_dir), fname, header_cards=cards)
     if not ok:
         return None
     if enqueue:
