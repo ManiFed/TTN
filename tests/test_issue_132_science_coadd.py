@@ -27,15 +27,23 @@ class LiveStackerWriteFitsTest(unittest.TestCase):
         st.frames_total = 3
         self.assertGreaterEqual(st.frames_stacked, 1)
         with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "coadd.fits"
-            ok = st.write_fits(str(out), header_cards={"OBJECT": "SS Cyg"})
+            ok = st.write_fits(td, "coadd.fits", header_cards={"OBJECT": "SS Cyg"})
             self.assertTrue(ok)
+            out = Path(td) / "coadd.fits"
             self.assertTrue(out.is_file())
             from astropy.io import fits
             with fits.open(out) as hdul:
                 self.assertEqual(hdul[0].header.get("OBJECT"), "SS Cyg")
                 self.assertGreaterEqual(int(hdul[0].header.get("STACKN", 0)), 1)
                 self.assertEqual(hdul[0].data.shape, (64, 64))
+
+    def test_write_fits_rejects_path_traversal_filename(self):
+        st = LiveStacker()
+        st._accum = np.ones((8, 8), dtype=np.float64)
+        st.frames_stacked = 1
+        with tempfile.TemporaryDirectory() as td:
+            self.assertFalse(st.write_fits(td, "../escape.fits"))
+            self.assertFalse(st.write_fits(td, "not_fits.txt"))
 
 
 class StackExportApiContractTest(unittest.TestCase):
