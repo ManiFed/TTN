@@ -145,3 +145,31 @@ class RestartCheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommandStartsSrcImportTest(unittest.TestCase):
+    def test_command_starts_names_src_modulenotfound(self):
+        """Checkout-style MCP entry that cannot import src gets a clear fix."""
+        import tempfile
+        from pathlib import Path as P
+        cfg = {
+            "mcpServers": {
+                "telescope-net": {
+                    "command": "/usr/bin/true",
+                    "args": ["-m", "src.main_service", "--mcp"],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as td:
+            p = P(td) / "claude_desktop_config.json"
+            p.write_text(json.dumps(cfg))
+            proc = MagicMock(stdout="", stderr="ModuleNotFoundError: No module named 'src'\n")
+            with patch.object(doctor.register_client, "config_path", return_value=p), \
+                 patch.object(doctor.register_client, "load", return_value=(cfg, None)), \
+                 patch("os.path.exists", return_value=True), \
+                 patch("subprocess.run", return_value=proc):
+                result = doctor._command_starts()
+        self.assertEqual(result["status"], doctor.BAD)
+        self.assertIn("source-checkout", result["detail"])
+        self.assertIn("--register-mcp", result["fix"])
+        self.assertIn("src.main_service", result["fix"])
