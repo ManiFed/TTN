@@ -245,10 +245,16 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         force=force_solve,
     )
     if not wcs_source:
-        logger.error("Plate solve failed — cannot proceed without WCS")
-        return None, _rejection("wcs", "plate_solve_failed",
-                                "no WCS available and plate solve failed",
-                                fits_path, target_name, solver=solver)
+        detail = dict(_LAST_WCS_ENSURE) if isinstance(_LAST_WCS_ENSURE, dict) else {}
+        msg = detail.get("astap_message") or "no WCS available and plate solve failed"
+        logger.error("Plate solve failed — cannot proceed without WCS (%s)", msg)
+        return None, _rejection(
+            "wcs", "plate_solve_failed",
+            str(msg)[:300],
+            fits_path, target_name, solver=solver,
+            astap_timed_out=bool(detail.get("astap_timed_out")),
+            astap_message=detail.get("astap_message"),
+        )
 
     # Reload header after potential ASTAP update
     try:
@@ -574,7 +580,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     w_arr   = np.array(zp_weights)
 
     # Sigma-clip the ZP ensemble to remove outliers (saturated / variable comp stars).
-    if len(zp_arr) >= 4:
+    if len(zp_arr) >= 3:
         from astropy.stats import sigma_clip as _sigma_clip
         masked = _sigma_clip(zp_arr, sigma=2.5, maxiters=5)
         good   = ~masked.mask
@@ -589,7 +595,18 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
         w_arr  = w_arr[good]
 
     zero_point = float(np.average(zp_arr, weights=w_arr))
-    zp_scatter = float(np.std(zp_arr)) if len(zp_arr) > 1 else 0.05
+    # Robust scatter: plain std is inflated by a single bad/blended comp under
+    # high airmass (Starfront T CrB zp_scatter fail with SNR 13 — issue #136).
+    # Use the lesser of sample std and MAD×1.4826 so outliers that survived
+    # sigma-clip do not hard-fail an otherwise usable frame.
+    if len(zp_arr) > 1:
+        std_sc = float(np.std(zp_arr))
+        med = float(np.median(zp_arr))
+        mad = float(np.median(np.abs(zp_arr - med)))
+        mad_sc = 1.4826 * mad if mad > 0 else std_sc
+        zp_scatter = float(min(std_sc, mad_sc)) if mad > 0 else std_sc
+    else:
+        zp_scatter = 0.05
 
     target_mag = target_instr + zero_point
 
@@ -687,6 +704,10 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     provenance = {
         "pipeline_version":  PIPELINE_VERSION,
         "wcs_source":        wcs_source if isinstance(wcs_source, str) else "unknown",
+        "astap_message":     (_LAST_WCS_ENSURE.get("astap_message")
+                              if wcs_source == "pointing" else None),
+        "astap_timed_out":   bool(_LAST_WCS_ENSURE.get("astap_timed_out"))
+                              if wcs_source == "pointing" else False,
         "time":              time_prov,
         "airmass":           airmass_prov,
         "aperture_px": {
@@ -798,8 +819,18 @@ def evaluate_quality(metrics: dict, phot_cfg: dict) -> tuple:
         _flag("target_saturated", True, False, "fail")
     if blended:
         _flag("target_blended", True, False, "fail")
+    # Issue #136: when SNR already clears the poor-fail floor (half of
+    # snr_threshold) and scatter is only modestly above zp_scatter_max, treat
+    # as warn → quality=acceptable so AAVSO can submit without submit_poor_quality.
+    # Still hard-fail when scatter is badly wrong (>1.5× max) or SNR is poor.
     if zp_scatter > zp_max:
-        _flag("zp_scatter", zp_scatter, zp_max, "fail")
+        soft_ok = (
+            snr >= snr_threshold * 0.5
+            and zp_scatter <= zp_max * 1.5
+            and not saturated
+            and not blended
+        )
+        _flag("zp_scatter", zp_scatter, zp_max, "warn" if soft_ok else "fail")
     elif zp_scatter > zp_warn:
         _flag("zp_scatter", zp_scatter, zp_warn, "warn")
 
@@ -878,6 +909,8 @@ def classify_snr_failure(
 # not a faint-but-real star. These must take the same recenter+retry path as
 # SNR collapse (issue #96 / PR #114) rather than leaving last_submission null
 # with no retry.
+_LAST_WCS_ENSURE: dict = {}
+
 EMPTY_FIELD_REASON_CODES = frozenset({
     "too_few_comparison_stars",
     "no_comparison_stars",
@@ -922,6 +955,9 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
               arcsec; forcing a fresh solve on each stack removes that error
               before comparison stars are cross-matched to pixels.
     """
+    global _LAST_WCS_ENSURE
+    _LAST_WCS_ENSURE = {"solver": solver, "force": bool(force)}
+
     # Reuse an existing WCS unless the caller insists on a fresh solve.
     if not force:
         try:
@@ -948,38 +984,64 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     else:
         logger.info("force_plate_solve enabled — re-solving stack with %s", solver)
 
+    astap_msg = None
     if solver == "astrometry":
         if _run_astrometry_net(fits_path, ra_deg, dec_deg,
                                solve_field_path, search_radius, pixel_scale):
+            _LAST_WCS_ENSURE["source"] = "solved_astrometry"
             return "solved_astrometry"
         logger.warning("Astrometry.net solve failed — falling back to ASTAP")
-        if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+        astap_res = _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
+        if astap_res:
+            _LAST_WCS_ENSURE["source"] = "solved_astap"
             return "solved_astap"
+        astap_msg = getattr(astap_res, "message", None) or "ASTAP failed"
     else:
         logger.info("Running ASTAP plate solver")
-        if _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius):
+        astap_res = _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
+        if astap_res:
+            _LAST_WCS_ENSURE["source"] = "solved_astap"
             return "solved_astap"
+        astap_msg = getattr(astap_res, "message", None) or "ASTAP failed"
 
-    # No plate solver available — fall back to constructing a simple TAN WCS
-    # from the telescope's reported pointing and the known pixel scale.  This
-    # is less accurate than a proper solve (pointing errors survive), but it
-    # allows the pipeline to proceed when ASTAP is not installed, and the
-    # quality_flag will reflect the resulting zero-point scatter.
-    if pixel_scale:
-        logger.warning(
-            "Plate solve unavailable — constructing approximate WCS from "
-            "telescope pointing (RA=%.4f° Dec=%.4f°, scale=%.3f\"/px).  "
-            "Install ASTAP for accurate astrometry.",
-            ra_deg, dec_deg, pixel_scale,
-        )
-        if _inject_pointing_wcs(fits_path, ra_deg, dec_deg, pixel_scale):
-            return "pointing"
-        return None
+    if astap_msg:
+        _LAST_WCS_ENSURE["astap_message"] = str(astap_msg)[:300]
+        # Surface timeouts distinctly so MCP/status is not just empty has_wcs
+        # (issue #134 — Starfront T CrB ASTAP 90s timeout).
+        if "timed out" in str(astap_msg).lower():
+            _LAST_WCS_ENSURE["astap_timed_out"] = True
+
+    # Plate solve unavailable / timed out — fall back to a simple TAN WCS from
+    # telescope pointing + pixel scale (issue #134). Prefer configured scale;
+    # default to Seestar S50 2.4"/px so AUID/target photometry can still place
+    # VSP comps (quality will warn via wcs_source=pointing).
+    try:
+        scale = float(pixel_scale) if pixel_scale not in (None, "") else 2.4
+    except (TypeError, ValueError):
+        scale = 2.4
+    if scale <= 0:
+        scale = 2.4
+
+    logger.warning(
+        "Plate solve unavailable (%s) — constructing approximate WCS from "
+        "telescope pointing (RA=%.4f° Dec=%.4f°, scale=%.3f\"/px).  "
+        "Quality will warn; install/fix ASTAP for accurate astrometry "
+        "(issue #134).",
+        astap_msg or "no solution",
+        ra_deg, dec_deg, scale,
+    )
+    if _inject_pointing_wcs(fits_path, ra_deg, dec_deg, scale):
+        _LAST_WCS_ENSURE["source"] = "pointing"
+        _LAST_WCS_ENSURE["pixel_scale"] = scale
+        _LAST_WCS_ENSURE["fallback"] = True
+        return "pointing"
 
     logger.error(
-        "Plate solve failed and photometry.pixel_scale is not set — "
-        "cannot construct fallback WCS.  Install ASTAP or set pixel_scale."
+        "Plate solve failed and pointing-WCS injection failed — "
+        "cannot proceed without WCS (astap=%s).",
+        astap_msg or "unknown",
     )
+    _LAST_WCS_ENSURE["source"] = None
     return None
 
 
