@@ -248,7 +248,12 @@ class LiveStacker:
             logger.error("write_fits: astropy unavailable: %s", exc)
             return False
         try:
-            name = os.path.basename(str(filename))
+            raw = str(filename)
+            # Reject path components before basename (e.g. "../escape.fits").
+            if raw != os.path.basename(raw) or "/" in raw or "\\" in raw:
+                logger.error("write_fits: refusing path-like filename %r", filename)
+                return False
+            name = raw
             # Non-regex whitelist (CodeQL py/polynomial-redos on re.fullmatch).
             lower = name.lower()
             if (
