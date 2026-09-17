@@ -233,11 +233,10 @@ class LiveStacker:
         coadd so photometry can gain ≈√N SNR on faint targets (e.g. SS Cyg).
 
         *filename* is a basename only (CodeQL py/path-injection): ``os.path.basename``
-        plus an ``[A-Za-z0-9._-]+.fits`` whitelist. The directory is never taken
-        from request input — callers pass a config/export dir.
+        plus a non-regex ``[A-Za-z0-9._-]`` + ``.fits`` whitelist. The directory
+        is never taken from request input — callers pass a config/export dir.
         """
         import os
-        import re
         from datetime import datetime, timezone
 
         img = self.stacked_image()
@@ -250,7 +249,15 @@ class LiveStacker:
             return False
         try:
             name = os.path.basename(str(filename))
-            if not re.fullmatch(r"[A-Za-z0-9._-]+\.fits", name, re.IGNORECASE):
+            # Non-regex whitelist (CodeQL py/polynomial-redos on re.fullmatch).
+            lower = name.lower()
+            if (
+                not lower.endswith(".fits")
+                or len(name) < 6
+                or len(name) > 120
+                or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for c in name[:-5])
+                or name[:-5] == ""
+            ):
                 logger.error("write_fits: refusing unsafe filename %r", filename)
                 return False
             root = os.path.realpath(os.path.abspath(str(dest_dir)))
