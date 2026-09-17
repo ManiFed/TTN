@@ -42,7 +42,10 @@ def test_clean_measurement_is_good_with_no_reasons():
     (_m(n_comparison_stars=1), "poor", "comparison_stars"),
     (_m(airmass=3.4), "acceptable", "airmass"),
     (_m(zp_scatter=0.20), "acceptable", "zp_scatter"),
-    (_m(zp_scatter=0.35), "poor", "zp_scatter"),
+    # Issue #136 soft-warn: SNR≥10 and scatter ≤1.5×max → acceptable (not poor)
+    (_m(zp_scatter=0.35), "acceptable", "zp_scatter"),
+    # Hard-fail still when scatter is badly wrong (>1.5× zp_scatter_max)
+    (_m(zp_scatter=0.50), "poor", "zp_scatter"),
     (_m(target_saturated=True), "poor", "target_saturated"),
     (_m(target_blended=True), "poor", "target_blended"),
     (_m(airmass=None), "acceptable", "airmass"),
