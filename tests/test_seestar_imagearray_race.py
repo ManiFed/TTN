@@ -18,7 +18,9 @@ from alpaca.client import AlpacaError
 class SeestarImageReadyRaceTest(unittest.TestCase):
     def test_expose_waits_through_exposing_with_imageready(self):
         cam = Camera("127.0.0.1", 32323)
-        states = [_STATE_EXPOSING, _STATE_EXPOSING, _STATE_DOWNLOAD]
+        # First state is StartExposure preflight (issue #133 clear_capture_latch).
+        # IDLE → latch clear is a no-op (no abort / extra settle GETs).
+        states = [_STATE_IDLE, _STATE_EXPOSING, _STATE_EXPOSING, _STATE_DOWNLOAD]
         ready = [True, True, True]
 
         cam._c = MagicMock()
@@ -34,7 +36,7 @@ class SeestarImageReadyRaceTest(unittest.TestCase):
              patch("alpaca.camera.time.monotonic", side_effect=lambda: next(clock)):
             cam.expose(duration=0.1, readout_timeout=5.0)
 
-        self.assertEqual(cam.camera_state.call_count, 3)
+        self.assertEqual(cam.camera_state.call_count, 4)
 
     def test_image_array_retries_no_image_available(self):
         cam = Camera("127.0.0.1", 32323)

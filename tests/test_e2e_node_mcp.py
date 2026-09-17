@@ -111,6 +111,19 @@ class EndToEndNodeMcpTest(unittest.TestCase):
         else:
             raise RuntimeError("node agent never became ready")
 
+        # Issue #135: prior tests may have armed the process-global stand-down
+        # latch via _on_cloud_tonight; re-arm so MCP slew e2e is not blocked.
+        # Do not weaken production stand-down — only clear local test state.
+        cls.dashboard._clear_stand_down_latch(reason="e2e-setup")
+        try:
+            requests.post(
+                f"{cls.agent_base}/api/standdown/rearm",
+                json={"enable_auto_run": False, "reason": "e2e-setup"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
     @classmethod
     def tearDownClass(cls):
         try:
@@ -177,6 +190,17 @@ class EndToEndNodeMcpTest(unittest.TestCase):
             # Hardware motion, for real, against the fake mount.
             # Must be above the geometric horizon for the CONFIG observer site
             # (lat/lon set); fixed RA/Dec go down as CI time advances (#68).
+            # Clear any leftover #135 stand-down latch before operator slew.
+            import requests as _req
+            try:
+                _req.post(
+                    f"{self.agent_base}/api/standdown/rearm",
+                    json={"enable_auto_run": False, "reason": "e2e-before-slew"},
+                    timeout=5,
+                )
+            except Exception:
+                pass
+            self.dashboard._clear_stand_down_latch(reason="e2e-before-slew")
             ra_h, dec_d = _above_horizon_radec()
             ok, slew = await call("node_slew", {"ra_hours": ra_h, "dec_deg": dec_d})
             steps["slew"] = (ok, slew)

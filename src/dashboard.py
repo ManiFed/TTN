@@ -5651,7 +5651,7 @@ def _export_live_stack_science(
     """
     if stacker is None or not getattr(stacker, "frames_stacked", 0):
         return None
-    export_dir = _fits_export_dir()
+    export_dir = os.path.realpath(_fits_export_dir())
     date_dir = pathlib.Path(export_dir) / _fits_export_night_utc()
     date_dir.mkdir(parents=True, exist_ok=True)
     safe_tgt = "".join(
@@ -5663,6 +5663,11 @@ def _export_live_stack_science(
         f"{uuid.uuid4().hex[:8]}.fits"
     )
     out_path = str(date_dir / fname)
+    # Confine coadd writes under fits_export (CodeQL py/path-injection on #132).
+    out_real = os.path.realpath(out_path)
+    if out_real != export_dir and not out_real.startswith(export_dir + os.sep):
+        logger.error("Coadd export path escaped fits_export dir: %s", out_path)
+        return None
     cards = dict(header_cards or {})
     if target_name:
         cards.setdefault("OBJECT", str(target_name)[:68])
@@ -5670,7 +5675,9 @@ def _export_live_stack_science(
     if cmd_ra is not None and cmd_dec is not None:
         cards.setdefault("RA", round(float(cmd_ra) * 15.0, 6))
         cards.setdefault("DEC", round(float(cmd_dec), 6))
-    ok = stacker.write_fits(out_path, header_cards=cards)
+    ok = stacker.write_fits(
+        out_real, header_cards=cards, allowed_root=export_dir,
+    )
     if not ok:
         return None
     if enqueue:

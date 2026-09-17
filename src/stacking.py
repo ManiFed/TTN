@@ -225,11 +225,15 @@ class LiveStacker:
         *,
         header_cards: Optional[dict] = None,
         overwrite: bool = True,
+        allowed_root: Optional[str] = None,
     ) -> bool:
         """Write the current coadd as a float32 FITS science frame (issue #132).
 
         Live stacking was preview-only; this path produces a fits_export-ready
         coadd so photometry can gain ≈√N SNR on faint targets (e.g. SS Cyg).
+
+        When *allowed_root* is set, refuse to write outside that directory
+        (CodeQL py/path-injection — path may include a sanitized target label).
         """
         import os
         from datetime import datetime, timezone
@@ -243,7 +247,18 @@ class LiveStacker:
             logger.error("write_fits: astropy unavailable: %s", exc)
             return False
         try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            abs_path = os.path.realpath(os.path.abspath(os.path.normpath(str(path))))
+            if allowed_root is not None:
+                root = os.path.realpath(os.path.abspath(str(allowed_root)))
+                if abs_path != root and not abs_path.startswith(root + os.sep):
+                    logger.error(
+                        "write_fits: refusing path outside allowed_root %s: %s",
+                        root, path,
+                    )
+                    return False
+            parent = os.path.dirname(abs_path) or "."
+            os.makedirs(parent, exist_ok=True)
+            path = abs_path
             hdr = fits.Header()
             hdr["SIMPLE"] = True
             hdr["BITPIX"] = -32
