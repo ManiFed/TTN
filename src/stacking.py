@@ -219,6 +219,67 @@ class LiveStacker:
         """Approximate SNR improvement over a single frame (√N for shot-noise-limited)."""
         return math.sqrt(self.frames_stacked) if self.frames_stacked else 0.0
 
+    def write_fits(
+        self,
+        path: str,
+        *,
+        header_cards: Optional[dict] = None,
+        overwrite: bool = True,
+    ) -> bool:
+        """Write the current coadd as a float32 FITS science frame (issue #132).
+
+        Live stacking was preview-only; this path produces a fits_export-ready
+        coadd so photometry can gain ≈√N SNR on faint targets (e.g. SS Cyg).
+        """
+        import os
+        from datetime import datetime, timezone
+
+        img = self.stacked_image()
+        if img is None:
+            return False
+        try:
+            from astropy.io import fits
+        except Exception as exc:
+            logger.error("write_fits: astropy unavailable: %s", exc)
+            return False
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            hdr = fits.Header()
+            hdr["SIMPLE"] = True
+            hdr["BITPIX"] = -32
+            hdr["NAXIS"] = 2
+            hdr["NAXIS1"] = int(img.shape[1])
+            hdr["NAXIS2"] = int(img.shape[0])
+            hdr["IMAGETYP"] = "LIGHT"
+            hdr["BSCALE"] = 1.0
+            hdr["BZERO"] = 0.0
+            hdr["STACKN"] = (int(self.frames_stacked), "frames coadded")
+            hdr["SNRGN"] = (round(self.snr_gain(), 3), "approx SNR gain vs single frame")
+            hdr["DATE-OBS"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            hdr["HISTORY"] = (
+                f"TTN LiveStacker coadd of {self.frames_stacked} frames "
+                f"(issue #132 science export)"
+            )
+            if header_cards:
+                for key, value in header_cards.items():
+                    if value is None:
+                        continue
+                    try:
+                        hdr[str(key)[:8]] = value
+                    except Exception:
+                        pass
+            fits.PrimaryHDU(data=img.astype(np.float32), header=hdr).writeto(
+                path, overwrite=overwrite,
+            )
+            logger.info(
+                "Wrote science coadd FITS %s (%d frames, SNR gain ~%.2f×)",
+                path, self.frames_stacked, self.snr_gain(),
+            )
+            return True
+        except Exception as exc:
+            logger.error("write_fits failed for %s: %s", path, exc)
+            return False
+
     def preview_png_b64(self, max_px: int = 720) -> Optional[str]:
         """Return a percentile-stretched 8-bit PNG preview of the stack, base64-encoded."""
         img = self.stacked_image()
