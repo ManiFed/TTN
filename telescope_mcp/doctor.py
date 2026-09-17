@@ -112,14 +112,20 @@ def _command_starts(base: str = "") -> dict:
         # `python -m src.main_service --mcp` entry; without the repo on
         # PYTHONPATH the process dies before answering (server disconnected).
         if "No module named 'src'" in err or 'No module named "src"' in err:
+            if platform.system() == "Darwin":
+                register_cmd = (
+                    "/Applications/TelescopeNetNode.app/Contents/MacOS/"
+                    "TelescopeNetNode --register-mcp"
+                )
+                quit_hint = "fully quit Claude (Cmd-Q) and reopen it"
+            else:
+                register_cmd = "the installed TelescopeNetNode --register-mcp"
+                quit_hint = "fully quit and reopen Claude"
             return _result(
                 "the telescope answers Claude", False,
                 "Claude is running a source-checkout MCP command that cannot "
                 "import `src`.",
-                "On the Mac run the installed binary "
-                "/Applications/TelescopeNetNode.app/Contents/MacOS/"
-                "TelescopeNetNode --register-mcp. Then fully quit Claude "
-                "(Cmd-Q) and reopen it. Do not register with "
+                f"Run {register_cmd}. Then {quit_hint}. Do not register with "
                 "`python -m src.main_service`.")
         return _result(
             "the telescope answers Claude", False,
