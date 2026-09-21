@@ -51,14 +51,46 @@ def register(server, agent: AgentClient) -> None:
         return agent.get("/api/stack/status")
 
     @server.tool()
-    def start_stacking() -> dict:
-        """Begin live-stacking incoming frames into a single deeper image."""
-        return agent.post("/api/stack/start")
+    def start_stacking(
+        frames: int = 20,
+        exposure_s: float = 10.0,
+        target_name: str = "",
+        export_science: bool = True,
+    ) -> dict:
+        """Begin live-stacking incoming frames into a single deeper image.
+
+        ``export_science`` defaults True so the coadd lands under fits_export/
+        and can feed photometry/AAVSO (issue #132 / Starfront 2026-09-20).
+        Pass ``target_name`` (e.g. "SS Cyg") to stamp OBJECT on the coadd.
+        """
+        body: dict = {
+            "frames": int(frames),
+            "exposure_s": float(exposure_s),
+            "export_science": bool(export_science),
+        }
+        tn = (target_name or "").strip()
+        if tn:
+            body["target_name"] = tn
+        return agent.post("/api/stack/start", body)
 
     @server.tool()
     def stop_stacking() -> dict:
         """Stop live-stacking. The stack built so far is kept."""
         return agent.delete("/api/stack/start")
+
+    @server.tool()
+    def export_stack(target_name: str = "", enqueue_photometry: bool = True) -> dict:
+        """Write the finished live coadd to fits_export and enqueue photometry.
+
+        Use after ``stack_status`` shows finished when a science FITS path is
+        needed for AAVSO (issue #132). No-op-safe if export already ran at
+        stack end with export_science=true.
+        """
+        body: dict = {"enqueue_photometry": bool(enqueue_photometry)}
+        tn = (target_name or "").strip()
+        if tn:
+            body["target_name"] = tn
+        return agent.post("/api/stack/export", body)
 
     @server.tool()
     def imaging_targets(search: str = "", limit: int = 20,
@@ -116,9 +148,13 @@ def register(server, agent: AgentClient) -> None:
             steps.append({"step": "centre", "ok": False, "detail": exc.message})
 
         try:
-            agent.post("/api/stack/start", {"exposure_s": float(exposure_s)})
+            agent.post("/api/stack/start", {
+                "exposure_s": float(exposure_s),
+                "export_science": True,
+                "target_name": target_name,
+            })
             steps.append({"step": "stack", "ok": True,
-                          "detail": "Live stacking started."})
+                          "detail": "Live stacking started (science export on)."})
         except ApiError as exc:
             return {"started": False, "steps": steps + [
                 {"step": "stack", "ok": False, "detail": exc.message}],

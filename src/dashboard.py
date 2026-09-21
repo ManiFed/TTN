@@ -217,6 +217,37 @@ def _preview_commands_allowed() -> bool:
     return not _science_capture_active()
 
 
+def _manual_expose_owns_camera() -> bool:
+    """True when ``/api/camera/expose`` (MCP ``node_expose``) holds the latch.
+
+    Schedule frames do **not** set ``camera.exposing`` — they use
+    ``_sched_state["current_phase"] == "exposing"``. So this is specifically
+    the manual/MCP science path that schedule / auto-recenter / nudge must
+    not hijack mid-expose (Starfront 2026-09-20/21 Dec +61° re-slew).
+    """
+    with _state_lock:
+        return bool(_state["camera"].get("exposing"))
+
+
+def _clear_latch_before_recovery_slew(*, label: str = "") -> None:
+    """Soft-abort firmware capture-active before a recovery goto.
+
+    Starfront: mid-expose abort → immediate ``begin_slew`` without clearing
+    the Seestar capture latch yields Error 1279 / motion aborts on the next
+    StartExposure. Mirror post-expose ``clear_capture_latch`` here.
+    """
+    if _cam is None or not hasattr(_cam, "clear_capture_latch"):
+        return
+    try:
+        _cam.clear_capture_latch(settle_s=5.0)
+    except Exception as exc:
+        logger.warning(
+            "clear_capture_latch before recovery slew%s failed: %s",
+            f" [{label}]" if label else "",
+            exc,
+        )
+
+
 def _pointing_off_target(
     actual_ra_h: float,
     actual_dec_deg: float,
@@ -1452,6 +1483,15 @@ def _recenter_and_retry_target(target: str, result: dict, cfg: dict,
 
     Shared by SNR-collapse (#96) and empty-field (#116) reject paths.
     """
+    # Starfront 2026-09-20/21: T CrB auto-recenter must not slew while
+    # node_expose owns the camera (mid-expose Dec +61° / Error 1279 path).
+    if _science_capture_active():
+        logger.warning(
+            "Recenter/retry for %s skipped — science capture active "
+            "(refuse mid-expose hijack)",
+            target,
+        )
+        return
     if _tel is None or _cam is None:
         logger.warning(
             "SNR collapse on %s but telescope/camera not connected — cannot recenter",
@@ -2596,15 +2636,18 @@ def _run_stacking_bg(
     exposure_s: float,
     preview_every: int,
     *,
-    export_science: bool = False,
+    export_science: bool = True,
     target_name: str | None = None,
     enqueue_photometry: bool = True,
 ) -> None:
     """Background thread: capture N sub-frames and live-stack them.
 
-    When *export_science* is True (issue #132), write the coadd under
-    fits_export/ and optionally enqueue photometry so faint targets can
-    reach the AAVSO SNR gate via √N gain.
+    When *export_science* is True (issue #132 / Starfront 2026-09-20), write
+    the coadd under fits_export/ and optionally enqueue photometry so faint
+    targets can reach the AAVSO SNR gate via √N gain. Default True so MCP
+    ``start_stacking`` / imaging handoff produce a science FITS path without
+    an explicit flag (export_science:false / export_path:null was blocking
+    SS Cyg coadd nights).
     """
     global _stacker, _stack_preview_b64
 
@@ -4541,6 +4584,12 @@ def api_nudge():
     if _tel is None:
         return jsonify({"error": "Telescope not connected"}), 400
     data = request.get_json(force=True) or {}
+    # Same mid-expose refuse as /api/slew (issue #131 / Starfront 2026-09-20).
+    if _science_capture_active() and not bool(data.get("force", False)):
+        return jsonify({
+            "error": "Science capture active — refusing nudge (mid-expose hijack)",
+            "blocked": True,
+        }), 409
     direction = data.get("direction", "").upper()
     if direction not in ("N", "S", "E", "W"):
         return jsonify({"error": "direction must be N/S/E/W"}), 400
@@ -4597,6 +4646,11 @@ def api_move_axis():
     if _tel is None:
         return jsonify({"error": "Telescope not connected"}), 400
     data = request.get_json(force=True) or {}
+    if _science_capture_active() and not bool(data.get("force", False)):
+        return jsonify({
+            "error": "Science capture active — refusing MoveAxis (mid-expose hijack)",
+            "blocked": True,
+        }), 409
     try:
         ra_rate  = float(data.get("ra_rate",  0))
         dec_rate = float(data.get("dec_rate", 0))
@@ -4732,6 +4786,9 @@ def api_expose():
                 cmd_ra, cmd_dec, reason,
             )
             try:
+                # Clear firmware capture-active before recovery goto so the
+                # next StartExposure does not 1279 (Starfront 2026-09-20).
+                _clear_latch_before_recovery_slew(label=f"manual-{reason}")
                 with _device_lock:
                     _tel.begin_slew(cmd_ra, cmd_dec)
                 if not _wait_slew_complete(timeout=180.0):
@@ -5728,10 +5785,20 @@ def api_stack_start():
     n_frames      = max(1, _num("frames", 20, int))
     exposure_s    = _num("exposure_s", 10.0, float)
     preview_every = max(1, _num("preview_every", 1, int))
+    # Default True: AAVSO coadd path needs fits_export (issue #132). Explicit
+    # false / science_export:false still disables. Starfront 2026-09-20:
+    # export_science:false + export_path:null blocked faint SS Cyg SNR.
     export_science = bool(data.get(
         "export_science",
-        data.get("science_export", cfg.get("export_science", False)),
+        data.get("science_export", cfg.get("export_science", True)),
     ))
+    # Named science target implies coadd export unless explicitly disabled.
+    if (
+        "export_science" not in data
+        and "science_export" not in data
+        and (data.get("target_name") or data.get("target") or data.get("object"))
+    ):
+        export_science = True
     enqueue_phot = bool(data.get("enqueue_photometry", True))
     target_name = (
         data.get("target_name") or data.get("target") or data.get("object")
@@ -6292,6 +6359,26 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
             _telemetry.event("slew_rejected", severity="warning", target=target,
                              detail={"reason": rejection})
             return
+        # Refuse schedule goto while MCP node_expose owns the camera
+        # (Starfront 2026-09-20/21 mid-expose re-slew / Dec +61° path).
+        if _manual_expose_owns_camera():
+            logger.error(
+                "Schedule: refusing slew to %s — manual node_expose owns "
+                "camera (mid-expose hijack)",
+                target,
+            )
+            with _sched_lock:
+                _sched_state["error"] = (
+                    f"{target}: refused slew — manual expose active"
+                )
+                _sched_state["current_item_outcome"] = "skipped"
+                _sched_state["current_failure_reason"] = (
+                    "manual expose active (mid-expose hijack refuse)"
+                )
+            _telemetry.event(
+                "slew_refused_manual_expose", severity="warning", target=target,
+            )
+            return
         logger.info("Schedule: slewing to %s RA=%.4f h Dec=%.4f°", target, ra, dec)
         try:
             with _device_lock:
@@ -6410,11 +6497,20 @@ def _run_schedule_observation(idx: int, item: dict) -> None:
         def _reslew_to_target(reason: str) -> bool:
             if _tel is None:
                 return False
+            # Manual node_expose owns the camera — do not steal the mount.
+            if _manual_expose_owns_camera():
+                logger.error(
+                    "Schedule: refusing reslew to %s after %s — manual "
+                    "expose active (mid-expose hijack)",
+                    target, reason,
+                )
+                return False
             logger.warning(
                 "Schedule: reslewing to %s after %s (issues #116/#120/#123)",
                 target, reason,
             )
             try:
+                _clear_latch_before_recovery_slew(label=f"schedule-{reason}")
                 with _device_lock:
                     _tel.begin_slew(ra, dec)
                 _remember_commanded_slew(ra, dec, label=f"schedule:{target}")
