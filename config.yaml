@@ -170,6 +170,7 @@ stacking:
   exposure_s: 10
   frames: 20
   preview_every: 1
+  export_science: true
 telescope:
   slew_dec: 80.2692
   slew_ra: 23.6833
