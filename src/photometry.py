@@ -256,24 +256,31 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
             astap_message=detail.get("astap_message"),
         )
 
-    # Reload header after potential ASTAP update
+    # Reload header after potential ASTAP / pointing-WCS update.
+    # Require a celestial WCS — non-celestial CRVAL+CD (empty CTYPE) is what
+    # produced Starfront wcs_transform_failed (1 vs 2 world inputs).
     try:
         with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
             header = dict(hdul[0].header)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                wcs = WCS(hdul[0].header, naxis=2)
+            wcs = _wcs_from_header(hdul[0].header)
     except Exception as exc:
         logger.error("Cannot reload WCS from %s: %s", fits_path, exc)
         return None, _rejection("wcs", "wcs_reload_failed", str(exc),
                                 fits_path, target_name)
+    if wcs is None:
+        logger.error("Reloaded WCS is missing or non-celestial — cannot transform SkyCoord")
+        return None, _rejection(
+            "wcs", "wcs_transform_failed",
+            "Number of world inputs (1) does not match expected (2) "
+            "(non-celestial / incomplete WCS; CTYPE RA/Dec required)",
+            fits_path, target_name, wcs_source=wcs_source,
+        )
 
     # ── Step 2: Confirm target is in the image field ──────────────────────────
     h, w = data.shape
     target_sky = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
     try:
-        tx, ty = wcs.world_to_pixel(target_sky)
-        tx, ty = float(tx), float(ty)
+        tx, ty = _world_to_pixel_sky(wcs, target_sky)
     except Exception as exc:
         logger.error("WCS world_to_pixel failed: %s", exc)
         return None, _rejection("wcs", "wcs_transform_failed", str(exc),
@@ -381,8 +388,7 @@ def run_pipeline_ex(fits_path: str, config: dict) -> tuple:
     for cs in comp_stars:
         try:
             sky = SkyCoord(ra=cs["ra_deg"] * u.deg, dec=cs["dec_deg"] * u.deg)
-            cx, cy = wcs.world_to_pixel(sky)
-            cx, cy = float(cx), float(cy)
+            cx, cy = _world_to_pixel_sky(wcs, sky)
         except Exception:
             continue
         if margin <= cx < w - margin and margin <= cy < h - margin:
@@ -932,6 +938,124 @@ def is_empty_field_rejection(rejection: Optional[dict]) -> bool:
 
 
 
+
+# ── WCS celestial helpers (Starfront 2026-09-20/21 wcs_transform_failed) ─────
+#
+# Seestar (and some partial ASTAP writes) can leave CRVAL1/CRVAL2 + CD1_1 in the
+# header without celestial CTYPE cards.  astropy then builds a *non-celestial*
+# WCS: world_to_pixel(SkyCoord) raises
+#   "Number of world inputs (1) does not match expected (2)"
+# and pixel_to_world returns a list of Quantities (so ".ra" →
+#   "'list' object has no attribute 'ra'").
+# Treat only celestial TAN/SIN/… axes as usable for photometry.
+
+
+def _ctype_is_celestial(value) -> bool:
+    """True when a CTYPE card names a celestial RA/Dec projection."""
+    if value is None:
+        return False
+    s = str(value).strip().upper()
+    if not s:
+        return False
+    # Standard forms: RA---TAN, DEC--TAN, RA---SIN, GLON-TAN, …
+    return (
+        s.startswith("RA")
+        or s.startswith("DEC")
+        or s.startswith("GLON")
+        or s.startswith("GLAT")
+    )
+
+
+def _header_has_celestial_wcs(hdr) -> bool:
+    """Header has a 2-D celestial WCS photometry can feed SkyCoord into."""
+    try:
+        if "CRVAL1" not in hdr or "CRVAL2" not in hdr:
+            return False
+        if "CD1_1" not in hdr and "CDELT1" not in hdr:
+            return False
+        if not (
+            _ctype_is_celestial(hdr.get("CTYPE1"))
+            and _ctype_is_celestial(hdr.get("CTYPE2"))
+        ):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _wcs_from_header(header) -> Optional[WCS]:
+    """Load a 2-D celestial WCS, or None if missing / non-celestial / broken."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wcs = WCS(header, naxis=2)
+        if not getattr(wcs, "has_celestial", False):
+            return None
+        return wcs
+    except Exception as exc:
+        logger.debug("WCS load failed: %s", exc)
+        return None
+
+
+def _fits_celestial_wcs_ok(fits_path: str) -> bool:
+    """True when ``fits_path`` currently carries a loadable celestial WCS."""
+    try:
+        with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
+            hdr = hdul[0].header
+            if not _header_has_celestial_wcs(hdr):
+                return False
+            return _wcs_from_header(hdr) is not None
+    except Exception:
+        return False
+
+
+def _world_to_pixel_sky(wcs: WCS, sky: SkyCoord):
+    """Pixel (x, y) for a SkyCoord; celestial path with numeric fallback.
+
+    Prefer the high-level SkyCoord path.  If a non-celestial WCS somehow slips
+    through, fall back to world_to_pixel_values(ra, dec) so we do not raise the
+    Starfront ``Number of world inputs (1) does not match expected (2)`` error.
+    """
+    try:
+        tx, ty = wcs.world_to_pixel(sky)
+        return float(tx), float(ty)
+    except Exception as primary:
+        try:
+            tx, ty = wcs.world_to_pixel_values(
+                float(sky.ra.deg), float(sky.dec.deg)
+            )
+            return float(tx), float(ty)
+        except Exception:
+            raise primary
+
+
+def _pixel_to_skycoord(wcs: WCS, px: float, py: float) -> Optional[SkyCoord]:
+    """SkyCoord for a pixel; harden against list/Quantity returns from bad WCS."""
+    try:
+        sky = wcs.pixel_to_world(px, py)
+        if isinstance(sky, SkyCoord):
+            return sky
+        # Non-celestial WCS returns a list of Quantities — rebuild a SkyCoord.
+        if isinstance(sky, (list, tuple)) and len(sky) >= 2:
+            ra = sky[0]
+            dec = sky[1]
+            ra_deg = (
+                float(ra.to_value(u.deg)) if hasattr(ra, "to_value") else float(ra)
+            )
+            dec_deg = (
+                float(dec.to_value(u.deg)) if hasattr(dec, "to_value") else float(dec)
+            )
+            return SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+    except Exception:
+        pass
+    try:
+        ra_deg, dec_deg = (float(v) for v in wcs.pixel_to_world_values(px, py))
+        return SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+    except Exception as exc:
+        logger.debug("pixel_to_skycoord failed: %s", exc)
+        return None
+
+
 # ── Step 1 helpers: WCS / plate solving ───────────────────────────────────────
 
 def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
@@ -958,27 +1082,31 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     global _LAST_WCS_ENSURE
     _LAST_WCS_ENSURE = {"solver": solver, "force": bool(force)}
 
-    # Reuse an existing WCS unless the caller insists on a fresh solve.
+    # Reuse an existing *celestial* WCS unless the caller insists on a fresh solve.
+    # CRVAL+CD alone is not enough: Seestar can write those without CTYPE RA/Dec,
+    # and astropy then rejects SkyCoord world_to_pixel (Starfront 2026-09-20/21).
     if not force:
         try:
             with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
                 hdr = hdul[0].header
-                if "CRVAL1" in hdr and "CRVAL2" in hdr and "CD1_1" in hdr:
-                    logger.info("WCS already in FITS header — skipping plate solve")
+                if hdr.get("BS_WCS") == "pointing":
+                    logger.info(
+                        "Existing WCS is pointing-based — re-injecting with "
+                        "telescope RA/DEC from header"
+                    )
+                    # fall through so _inject_pointing_wcs corrects CRVAL
+                elif _header_has_celestial_wcs(hdr) and _wcs_from_header(hdr) is not None:
+                    logger.info("Celestial WCS already in FITS header — skipping plate solve")
                     return "header"
-                # Accept CDELT-style WCS only when it came from a real plate solver,
-                # not from our pointing fallback (which may have used target coords
-                # instead of the mount's actual RA/DEC).  Re-inject when it's ours.
-                if "CRVAL1" in hdr and "CRVAL2" in hdr and "CDELT1" in hdr:
-                    if hdr.get("BS_WCS") == "pointing":
-                        logger.info(
-                            "Existing WCS is pointing-based — re-injecting with "
-                            "telescope RA/DEC from header"
-                        )
-                        # fall through so _inject_pointing_wcs corrects CRVAL
-                    else:
-                        logger.info("WCS (CDELT) already in FITS header — skipping plate solve")
-                        return "header"
+                elif "CRVAL1" in hdr and "CRVAL2" in hdr and (
+                    "CD1_1" in hdr or "CDELT1" in hdr
+                ):
+                    logger.warning(
+                        "FITS has CRVAL/CD(ELT) but non-celestial CTYPE "
+                        "(CTYPE1=%r CTYPE2=%r) — ignoring and re-solving / "
+                        "pointing-fallback (wcs_transform_failed guard)",
+                        hdr.get("CTYPE1"), hdr.get("CTYPE2"),
+                    )
         except Exception as exc:
             logger.warning("Could not inspect FITS header: %s", exc)
     else:
@@ -988,20 +1116,35 @@ def _ensure_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     if solver == "astrometry":
         if _run_astrometry_net(fits_path, ra_deg, dec_deg,
                                solve_field_path, search_radius, pixel_scale):
-            _LAST_WCS_ENSURE["source"] = "solved_astrometry"
-            return "solved_astrometry"
+            if _fits_celestial_wcs_ok(fits_path):
+                _LAST_WCS_ENSURE["source"] = "solved_astrometry"
+                return "solved_astrometry"
+            logger.warning(
+                "Astrometry.net reported success but WCS is non-celestial — "
+                "falling back"
+            )
         logger.warning("Astrometry.net solve failed — falling back to ASTAP")
         astap_res = _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
-        if astap_res:
+        if astap_res and _fits_celestial_wcs_ok(fits_path):
             _LAST_WCS_ENSURE["source"] = "solved_astap"
             return "solved_astap"
+        if astap_res:
+            logger.warning(
+                "ASTAP reported success but WCS is non-celestial — "
+                "falling back to pointing WCS"
+            )
         astap_msg = getattr(astap_res, "message", None) or "ASTAP failed"
     else:
         logger.info("Running ASTAP plate solver")
         astap_res = _run_astap(fits_path, ra_deg, dec_deg, astap_path, search_radius)
-        if astap_res:
+        if astap_res and _fits_celestial_wcs_ok(fits_path):
             _LAST_WCS_ENSURE["source"] = "solved_astap"
             return "solved_astap"
+        if astap_res:
+            logger.warning(
+                "ASTAP reported success but WCS is non-celestial — "
+                "falling back to pointing WCS"
+            )
         astap_msg = getattr(astap_res, "message", None) or "ASTAP failed"
 
     if astap_msg:
@@ -1053,6 +1196,10 @@ def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
     reported pointing) over the caller-supplied target coords, because the
     mount pointing is what physically centres the frame.  Falls back to
     ra_deg/dec_deg if those keys are absent.
+
+    Strips any prior WCS cards first so leftover non-celestial CRVAL+CD
+    (empty CTYPE) cannot mix with the new TAN solution and reopen the
+    Starfront ``wcs_transform_failed`` / ``list has no attribute ra`` path.
     """
     try:
         with fits.open(fits_path, mode="update", memmap=False,
@@ -1063,16 +1210,26 @@ def _inject_pointing_wcs(fits_path: str, ra_deg: float, dec_deg: float,
             tel_dec = float(hdr.get("DEC", dec_deg))
             h, w = hdul[0].data.shape[-2], hdul[0].data.shape[-1]
             ps   = pixel_scale_arcsec / 3600.0  # arcsec → degrees
+            _strip_wcs(hdr)
             hdr["CTYPE1"] = ("RA---TAN", "TAN projection")
             hdr["CTYPE2"] = ("DEC--TAN", "TAN projection")
+            hdr["CUNIT1"] = ("deg", "WCS unit")
+            hdr["CUNIT2"] = ("deg", "WCS unit")
             hdr["CRPIX1"] = (w / 2.0 + 0.5, "Reference pixel X")
             hdr["CRPIX2"] = (h / 2.0 + 0.5, "Reference pixel Y")
             hdr["CRVAL1"] = (tel_ra,  "Reference RA (deg)")
             hdr["CRVAL2"] = (tel_dec, "Reference Dec (deg)")
             hdr["CDELT1"] = (-ps,  "deg/pixel (RA, East-left)")
             hdr["CDELT2"] = ( ps,  "deg/pixel (Dec)")
+            hdr["RADESYS"] = ("ICRS", "Reference frame")
             hdr["BS_WCS"]  = ("pointing", "WCS source: telescope pointing")
             hdul.flush()
+        # Confirm SkyCoord transforms will work before claiming success.
+        if not _fits_celestial_wcs_ok(fits_path):
+            logger.error(
+                "Pointing WCS inject wrote header but WCS is still non-celestial"
+            )
+            return False
         return True
     except Exception as exc:
         logger.error("Could not inject pointing WCS: %s", exc)
@@ -2305,7 +2462,9 @@ def _run_patrol_check(
         for row in sources:
             try:
                 px, py = float(row[x_col]), float(row[y_col])
-                sky    = wcs.pixel_to_world(px, py)
+                sky = _pixel_to_skycoord(wcs, px, py)
+                if sky is None:
+                    continue
                 ra, dec = float(sky.ra.deg), float(sky.dec.deg)
             except Exception:
                 continue
@@ -2684,8 +2843,7 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     # WCS: use one already present, else solve from the pointing headers.
     hint_ra  = header.get("RA")
     hint_dec = header.get("DEC")
-    has_wcs = "CRVAL1" in header and "CRVAL2" in header \
-        and ("CD1_1" in header or "CDELT1" in header)
+    has_wcs = _header_has_celestial_wcs(header)
     if not has_wcs:
         if hint_ra is None or hint_dec is None:
             logger.warning("Frame has no WCS and no RA/DEC pointing headers — "
@@ -2705,11 +2863,12 @@ def run_survey_pipeline(fits_path: str, config: dict) -> Optional[dict]:
     try:
         with fits.open(fits_path, memmap=False, ignore_missing_simple=True) as hdul:
             header = dict(hdul[0].header)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                wcs = WCS(hdul[0].header, naxis=2)
+            wcs = _wcs_from_header(hdul[0].header)
     except Exception as exc:
         logger.error("Cannot load WCS from %s: %s", fits_path, exc)
+        return None
+    if wcs is None:
+        logger.error("Cannot load celestial WCS from %s", fits_path)
         return None
 
     h, w = data.shape

@@ -123,8 +123,20 @@ def _read_solution(wcs_path: str) -> dict:
         ny = int(hdr.get("IMAGEH") or hdr.get("NAXIS2") or 0)
         if nx and ny:
             sky = w.pixel_to_world(nx / 2.0, ny / 2.0)
-            out["ra_deg"] = float(sky.ra.deg)
-            out["dec_deg"] = float(sky.dec.deg)
+            # Non-celestial WCS returns a list of Quantities (Starfront
+            # "'list' object has no attribute 'ra'"); prefer SkyCoord, else
+            # rebuild from values / pixel_to_world_values.
+            if hasattr(sky, "ra") and hasattr(sky, "dec"):
+                out["ra_deg"] = float(sky.ra.deg)
+                out["dec_deg"] = float(sky.dec.deg)
+            elif isinstance(sky, (list, tuple)) and len(sky) >= 2:
+                ra, dec = sky[0], sky[1]
+                out["ra_deg"] = float(ra.to_value("deg")) if hasattr(ra, "to_value") else float(ra)
+                out["dec_deg"] = float(dec.to_value("deg")) if hasattr(dec, "to_value") else float(dec)
+            else:
+                ra_deg, dec_deg = (float(v) for v in w.pixel_to_world_values(nx / 2.0, ny / 2.0))
+                out["ra_deg"] = ra_deg
+                out["dec_deg"] = dec_deg
         try:
             from astropy.wcs.utils import proj_plane_pixel_scales
             import numpy as np
