@@ -385,6 +385,35 @@ class SurveyLifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual(row["n_obs"], 1,
                          "aggregates are the permanent science product")
 
+    def test_task_result_update_is_scoped_to_the_owning_node(self):
+        """A node authenticated as itself must not be able to overwrite
+        another node's observation_tasks.result by guessing/observing its
+        deterministic task_id. task_id is not a secret: it's derived from
+        public inputs (event id/revision, tile ra/dec, node_id) and is
+        returned in plaintext to nodes by GET /api/v1/tasks."""
+        self.db.execute("DELETE FROM observation_tasks WHERE task_id = 'shared_task'")
+        now = self.db.query_one("SELECT now()::text AS n")["n"]
+        self.db.execute(
+            """INSERT INTO observation_tasks
+                   (task_id, node_id, ra_deg, dec_deg, earliest_utc, latest_utc,
+                    result, created_at, updated_at)
+               VALUES ('shared_task','node_a',180.0,45.0,%s,%s,'{}',%s,%s)""",
+            (now, now, now, now))
+
+        r = survey.ingest_batch(
+            "node_b",
+            {"frame": {"bjd": 2460500.5, "filter": "CV", "zp_scatter": 0.03,
+                       "fits_file": "hijack.fits", "item_id": "shared_task"},
+             "sources": [_src()]},
+            CONFIG)
+        self.assertTrue(r["ok"], r)
+
+        row = self.db.query_one(
+            "SELECT node_id, result FROM observation_tasks WHERE task_id = 'shared_task'")
+        self.assertEqual(row["node_id"], "node_a")
+        self.assertEqual(json.loads(row["result"]), {},
+                         "node_b must not be able to write node_a's task result")
+
 
 if __name__ == "__main__":
     unittest.main()

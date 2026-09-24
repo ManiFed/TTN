@@ -439,7 +439,10 @@ def submit_pending_batch(config: dict) -> dict:
             text, aavso_cfg.get("username", ""), aavso_cfg.get("password", ""),
             aavso_cfg.get("submit_url", _WEBOBS_URL), file_path=file_path)
 
-    if status in ("accepted", "dry_run"):
+    # dry_run never POSTs, so these measurements must stay pending -- marking
+    # them submitted here would permanently exclude them once dry_run is
+    # turned back off (the batch file is still written each run either way).
+    if status == "accepted":
         db.executemany("UPDATE measurements SET aavso_submitted = 1 WHERE id = %s",
                        [(r["id"],) for r in rows])
 

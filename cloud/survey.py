@@ -299,8 +299,9 @@ def ingest_batch(node_id: str, payload: dict, config: dict,
         task_result = {"frame_id": frame_id, "accepted_sources": len(new_sources),
                        "limiting_magnitude": limiting, "deviants": result["deviants"],
                        "received_at": _now()}
-        db.execute("UPDATE observation_tasks SET result=%s,updated_at=%s WHERE task_id=%s",
-                   (json.dumps(task_result), _now(), task_id))
+        db.execute("UPDATE observation_tasks SET result=%s,updated_at=%s "
+                   "WHERE task_id=%s AND node_id=%s",
+                   (json.dumps(task_result), _now(), task_id, node_id))
 
     return result
 
