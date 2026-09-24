@@ -233,6 +233,15 @@ def create_app(config: dict):
     return app
 
 
+def attach_to_api(api_app: Flask, config: dict) -> None:
+    """Serve the same streams from the API for small, single-service fleets."""
+    api_app.add_url_rule("/api/v1/stream", "stream_node", stream_node)
+    api_app.add_url_rule("/api/v1/stream/fleet", "stream_fleet", stream_fleet)
+    dsn = os.environ.get("DATABASE_URL", "") or config.get("database", {}).get("url", "")
+    threading.Thread(target=_listen_loop, args=(dsn,), daemon=True,
+                     name="pg-listen").start()
+
+
 def main() -> None:
     import sys
     from realtime.config import load_config

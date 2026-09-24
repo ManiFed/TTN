@@ -428,6 +428,28 @@ rate-limited per IP because the token space is small.
 
 ## Quick Start — Node Agent (Development)
 
+### Low-cost cloud deployment (small fleets)
+
+The API now serves the live event stream at `https://api.thetelescope.net/api/v1/stream`.
+For a single telescope, deploy the API with `EMBED_REALTIME=1` (the default),
+point the node's `cloud.realtime_url` at the API URL, and then stop or remove
+the separate Railway realtime service. Update any already-installed node
+configurations before removing that service; old installations may still point
+at `https://realtime.thetelescope.net`. The node's regular plan polling remains
+available if a stream disconnects. Set `EMBED_REALTIME=0` if using a separate
+realtime service for a larger fleet.
+
+The default active heartbeat is now 30 seconds instead of 5 seconds, reducing
+active heartbeat requests and database writes by about 83% per node. Existing
+node configurations need the same `cloud.heartbeat_fast_interval: 30` change.
+This reduces live status update frequency to every 30 seconds; plan and
+interrupt signals still arrive over the event stream.
+
+Check Railway's per-service usage before changing the other services. The GCN
+consumer and solver worker are separate always-on processes; stop either only
+if its corresponding alert or frame-solving feature is not needed. The API
+and database are still required.
+
 ```bash
 # 1. Clone and set up
 git clone https://github.com/telescopenet/node_v1 && cd node_v1-main

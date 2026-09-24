@@ -35,10 +35,10 @@ cloud:
   disconnect_park_timeout: 1800
   enabled: true
   heartbeat_interval: 60
-  heartbeat_fast_interval: 5
+  heartbeat_fast_interval: 30
   node_id: ''
   plan_poll_interval: 300
-  realtime_url: https://realtime.thetelescope.net
+  realtime_url: https://api.thetelescope.net
   upload_images: false
   url: https://api.thetelescope.net
 autonomy:

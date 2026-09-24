@@ -36,3 +36,9 @@ else:
         "RUN_BACKGROUND_LOOPS=0 — background loops disabled on this service")
 
 app = create_app(_config)
+
+# A small fleet can use the API's threaded worker for live updates and retire
+# the separate always-on realtime service. Larger fleets can opt out.
+if os.environ.get("EMBED_REALTIME", "1") == "1":
+    from realtime.app import attach_to_api
+    attach_to_api(app, _config)
