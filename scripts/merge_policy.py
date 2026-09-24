@@ -78,6 +78,16 @@ PROTECTED: tuple[tuple[str, str], ...] = (
     ("src/aavso_submission.py",   "formats what is submitted to AAVSO under the "
                                   "network's obscode"),
     ("cloud/data_pipeline.py",    "assembles and submits AAVSO batches"),
+    ("cloud/mpc_report.py",       "formats what is submitted to the Minor "
+                                  "Planet Center"),
+
+    # -- writes to a member's physical node without their direct action ------
+    ("cloud/help_chat.py",        "queues config.yaml patches for a member's "
+                                  "node from an LLM conversation -- the "
+                                  "allowlist here is what stops it writing "
+                                  "an arbitrary key (e.g. cloud.url)"),
+    ("src/config_patch.py",       "applies a queued patch to the node's real "
+                                  "config.yaml with no further validation"),
 
     # -- identity, credentials and the fleet register -----------------------
     ("cloud/auth.py",             "member authentication"),

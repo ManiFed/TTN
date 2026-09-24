@@ -72,8 +72,15 @@ class BlastRadiusTest(unittest.TestCase):
                      "cloud/calibration.py", "cloud/transit_windows.py"):
             self.assert_blocked(path)
 
-    def test_anything_published_to_aavso_needs_a_person(self):
-        for path in ("src/aavso_submission.py", "cloud/data_pipeline.py"):
+    def test_anything_published_externally_needs_a_person(self):
+        for path in ("src/aavso_submission.py", "cloud/data_pipeline.py",
+                     "cloud/mpc_report.py"):
+            self.assert_blocked(path)
+
+    def test_writes_to_a_members_node_need_a_person(self):
+        """The allowlist in cloud/help_chat.py is what stops an LLM
+        conversation writing an arbitrary config.yaml key to a real node."""
+        for path in ("cloud/help_chat.py", "src/config_patch.py"):
             self.assert_blocked(path)
 
     def test_identity_and_credentials_need_a_person(self):
