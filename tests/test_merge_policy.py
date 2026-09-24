@@ -59,6 +59,12 @@ class BlastRadiusTest(unittest.TestCase):
                      "cloud/chorus/physics.py", "cloud/chorus/ledger.py"):
             self.assert_blocked(path)
 
+    def test_the_weight_tuning_loop_needs_a_person(self):
+        """cloud/tuning.py applies Claude-proposed scoring weight changes
+        network-wide behind a counterfactual backtest gate -- a bug here
+        could bypass that gate."""
+        self.assert_blocked("cloud/tuning.py")
+
     def test_photometry_and_timing_need_a_person(self):
         for path in ("src/photometry.py", "src/timescales.py",
                      "src/plate_solve.py", "alpaca/platesolve.py",

@@ -69,6 +69,9 @@ PROTECTED: tuple[tuple[str, str], ...] = (
                                   "legacy planner -- decides what the fleet observes"),
     ("cloud/chorus/*.py",         "CHORUS -- the live default scheduler (scheduler."
                                   "chorus: true) that decides what the fleet observes"),
+    ("cloud/tuning.py",           "applies Claude-proposed scoring weight changes "
+                                  "network-wide, gated by the counterfactual "
+                                  "backtest -- a bug here bypasses that gate"),
     ("cloud/transit_windows.py",  "timing windows for time-series targets"),
 
     # -- anything published outside this project ----------------------------
