@@ -89,13 +89,25 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   Future<_DashboardData> _load() async {
-    final api = context.read<AppState>().api;
+    final state = context.read<AppState>();
+    final api = state.api;
 
-    final nodesFuture = api.nodes().catchError((_) => <Node>[]);
-    final obsFuture =
-        api.observations(days: 1, limit: 10).catchError((_) => <Observation>[]);
-    final timelineFuture = api.timeline().catchError((_) => <TimelineItem>[]);
-    final targetsFuture = api.targets().catchError((_) => <Target>[]);
+    final nodesFuture = api.nodes().catchError((e) {
+      state.handleAuthError(e);
+      return <Node>[];
+    });
+    final obsFuture = api.observations(days: 1, limit: 10).catchError((e) {
+      state.handleAuthError(e);
+      return <Observation>[];
+    });
+    final timelineFuture = api.timeline().catchError((e) {
+      state.handleAuthError(e);
+      return <TimelineItem>[];
+    });
+    final targetsFuture = api.targets().catchError((e) {
+      state.handleAuthError(e);
+      return <Target>[];
+    });
     final notifsFuture = api.notifications(limit: 5);
 
     List<AppNotification> alerts;
@@ -104,7 +116,8 @@ class _DashboardTabState extends State<DashboardTab> {
       final notifs = await notifsFuture;
       alerts = notifs.$1;
       unread = notifs.$2;
-    } catch (_) {
+    } catch (e) {
+      state.handleAuthError(e);
       alerts = [];
     }
 

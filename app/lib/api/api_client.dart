@@ -104,13 +104,28 @@ class ApiClient {
       'password': password,
       'display_name': displayName,
     });
-    await _auth.save(json['token'] as String, json['user_id'] as String);
+    await _saveAuthResponse(json);
   }
 
   /// Logs in and persists the returned token.
   Future<void> login(String email, String password) async {
     final json = await _post('/auth/login', {'email': email, 'password': password});
-    await _auth.save(json['token'] as String, json['user_id'] as String);
+    await _saveAuthResponse(json);
+  }
+
+  /// Persists `token`/`user_id` from an auth response, or raises a clear
+  /// `ApiException` instead of a bare TypeError when the server's 2xx body
+  /// doesn't actually carry them (e.g. a misrouted gateway page) -- that
+  /// distinction matters because callers report a network failure otherwise,
+  /// which sends anyone debugging a "login says I'm offline" report the
+  /// wrong way.
+  Future<void> _saveAuthResponse(Map<String, dynamic> json) async {
+    final token = json['token'] as String?;
+    final userId = json['user_id'] as String?;
+    if (token == null || userId == null) {
+      throw ApiException(502, 'Server returned an invalid sign-in response.');
+    }
+    await _auth.save(token, userId);
   }
 
   /// Revokes this device's session only -- other signed-in devices are
