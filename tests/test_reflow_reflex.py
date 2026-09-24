@@ -221,6 +221,24 @@ class ReflowReflexCloudTest(unittest.TestCase):
         # Second distinct source blocked by the global nightly cap.
         self.assertFalse(reflex.on_candidate_promoted(self._cand(source_key="B"), cfg))
 
+    def test_reflex_per_candidate_cap(self):
+        """max_per_candidate must limit a single source to N fires per night,
+        independent of the open-interrupt dedupe: expire the first interrupt
+        (so _open_interrupt_for no longer blocks it) and confirm the second
+        fire is still refused by the per-candidate cap."""
+        from cloud import reflex
+        self._dark_node("nd_dark")
+        cfg = self._config(cooldown_min=0, max_per_candidate=1)
+        self.assertTrue(reflex.on_candidate_promoted(self._cand(source_key="A"), cfg))
+        self.db.execute(
+            "UPDATE interrupts SET expires_at = %s WHERE reason='reflex_confirm'",
+            ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),))
+        self.assertFalse(
+            reflex.on_candidate_promoted(self._cand(source_key="A"), cfg),
+            "a second reflex fire for the same source must respect max_per_candidate")
+        self.assertEqual(self.db.query_one(
+            "SELECT COUNT(*) AS n FROM interrupts WHERE reason='reflex_confirm'")["n"], 1)
+
     def test_reflex_dedupes_open_interrupt(self):
         from cloud import reflex
         self._dark_node("nd_dark")

@@ -31,8 +31,8 @@ _EXPECTED_BY_SOURCE = {
     "alerce": 10.0,
 }
 
-# In-memory cache: target_name -> (monotonic_time_s, count_or_none)
-_cache: dict[str, tuple[float, Optional[int]]] = {}
+# In-memory cache: (target_name, window_days) -> (monotonic_time_s, count_or_none)
+_cache: dict[tuple[str, int], tuple[float, Optional[int]]] = {}
 _CACHE_TTL_S = 6 * 3600
 
 
@@ -111,10 +111,11 @@ def external_observation_count(target: dict, window_days: int = 30) -> Optional[
     Results are cached for 6 hours.
     """
     name = target["name"]
+    cache_key = (name, window_days)
     now_mono = time.monotonic()
 
-    if name in _cache:
-        fetched_at, cached = _cache[name]
+    if cache_key in _cache:
+        fetched_at, cached = _cache[cache_key]
         if now_mono - fetched_at < _CACHE_TTL_S:
             return cached
 
@@ -131,7 +132,7 @@ def external_observation_count(target: dict, window_days: int = 30) -> Optional[
             window_days,
         )
 
-    _cache[name] = (now_mono, count)
+    _cache[cache_key] = (now_mono, count)
     return count
 
 
