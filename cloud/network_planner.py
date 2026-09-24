@@ -769,7 +769,7 @@ def _plan(config: dict, nodes: list) -> tuple:
 
 def plan_network(config: dict) -> int:
     """Generate fresh coordinated plans for the whole fleet. Returns plan count."""
-    nodes = registry.list_nodes()
+    nodes = registry.list_nodes(active_only=True)
     plans_by_node, stats = _plan(config, nodes)
     logger.info("Network plan: %d nodes, %d assignments, objective %.3f (greedy %.3f)",
                 len(plans_by_node), stats.get("n_assignments", 0),

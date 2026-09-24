@@ -232,7 +232,7 @@ def _record_run(contexts: dict, final_state, cells_by_target: dict,
 
 def plan_network(config: dict) -> int:
     """Generate fresh CHORUS plans for the whole fleet.  Returns plan count."""
-    nodes = registry.list_nodes()
+    nodes = registry.list_nodes(active_only=True)
     plans_by_node, stats = _plan(config, nodes, save=True)
     logger.info("CHORUS network plan: %d nodes, %d assignments, "
                 "Φ %.3f (greedy %.3f), E[deliveries] %.1f",
@@ -252,6 +252,6 @@ def plan_single_node(node: dict, config: dict) -> Optional[ObservationPlan]:
 def plan_shadow(config: dict) -> int:
     """Full CHORUS run with telemetry + archive but no saved plans — the
     shadow stage of the staged rollout.  Returns the would-be plan count."""
-    nodes = registry.list_nodes()
+    nodes = registry.list_nodes(active_only=True)
     plans_by_node, _ = _plan(config, nodes, save=False, shadow=True)
     return len(plans_by_node)
