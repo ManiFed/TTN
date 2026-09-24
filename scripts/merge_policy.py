@@ -84,6 +84,9 @@ PROTECTED: tuple[tuple[str, str], ...] = (
     ("cloud/registry.py",         "node identity and credentials — the orphaning "
                                   "class of bug lives here"),
     ("src/cloud_communicator.py", "node credential lifecycle and rekey"),
+    ("cloud/server.py",           "the cloud API itself — node registration, "
+                                  "rekey, the require_node/require_admin auth "
+                                  "decorators, and measurement ingestion"),
 
     # -- schema and deploy --------------------------------------------------
     ("cloud/db.py",               "database schema and migrations"),

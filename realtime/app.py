@@ -224,10 +224,13 @@ def health():
 
 def create_app(config: dict):
     """Init DB and start the LISTEN thread. Idempotent."""
+    # One DSN, one precedence rule, used for both connections: the LISTEN
+    # thread must watch the same database db.init() actually connected the
+    # main pool to, or live dispatch events silently never reach it while
+    # everything else (health checks, node auth) looks fine.
     dsn = config.get("database", {}).get("url", "") or os.environ.get("DATABASE_URL", "")
     db.init(dsn)
-    resolved = os.environ.get("DATABASE_URL", "") or dsn
-    t = threading.Thread(target=_listen_loop, args=(resolved,),
+    t = threading.Thread(target=_listen_loop, args=(dsn,),
                          daemon=True, name="pg-listen")
     t.start()
     return app
@@ -237,7 +240,10 @@ def attach_to_api(api_app: Flask, config: dict) -> None:
     """Serve the same streams from the API for small, single-service fleets."""
     api_app.add_url_rule("/api/v1/stream", "stream_node", stream_node)
     api_app.add_url_rule("/api/v1/stream/fleet", "stream_fleet", stream_fleet)
-    dsn = os.environ.get("DATABASE_URL", "") or config.get("database", {}).get("url", "")
+    # Same precedence as create_app/db.init (config first, env fallback) --
+    # the caller (cloud/main.py) already initialized the main pool with
+    # exactly this DSN, and the LISTEN thread must watch that same database.
+    dsn = config.get("database", {}).get("url", "") or os.environ.get("DATABASE_URL", "")
     threading.Thread(target=_listen_loop, args=(dsn,), daemon=True,
                      name="pg-listen").start()
 

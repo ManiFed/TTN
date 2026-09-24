@@ -79,7 +79,7 @@ class BlastRadiusTest(unittest.TestCase):
     def test_identity_and_credentials_need_a_person(self):
         """The orphaning class of bug lives in exactly these files."""
         for path in ("cloud/registry.py", "cloud/auth.py",
-                     "src/cloud_communicator.py"):
+                     "src/cloud_communicator.py", "cloud/server.py"):
             self.assert_blocked(path)
 
     def test_schema_needs_a_person(self):
