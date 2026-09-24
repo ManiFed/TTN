@@ -88,6 +88,11 @@ def start_background_loops(config: dict) -> None:
         scheduler.generate_all_plans(config)
 
     def maintenance():
+        from cloud.chorus import backtest
+        backtest.prune_archive()
+        from datetime import datetime, timedelta, timezone
+        scoring.prune_unpaired_scores(
+            (datetime.now(timezone.utc) - timedelta(days=7)).isoformat())
         data_pipeline.prune_raw_images(config)
         survey.prune_survey_measurements(config)
         from cloud import moving_objects

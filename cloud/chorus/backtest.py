@@ -25,6 +25,14 @@ from cloud.chorus import params as chorus_params
 
 logger = logging.getLogger("cloud.chorus.backtest")
 
+
+def prune_archive(keep_runs: int = 60) -> None:
+    """Keep recent replay inputs; consumers read at most the latest 45 runs."""
+    db.execute(
+        "DELETE FROM chorus_run_archive WHERE run_id NOT IN "
+        "(SELECT run_id FROM chorus_run_archive ORDER BY ran_at DESC LIMIT %s)",
+        (keep_runs,))
+
 MIN_RUNS_TO_GATE = 3       # below this, the trust region alone governs
 GATE_TOLERANCE = 0.995     # candidate must reach ≥ 99.5% of incumbent
 

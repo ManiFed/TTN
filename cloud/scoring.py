@@ -474,8 +474,9 @@ def score_all(config: dict) -> int:
     loop and after alert ingestion.
     """
     targets = db.query("SELECT * FROM targets WHERE active = 1")
-    nodes = registry.list_nodes()
-    nodes = [n for n in nodes if n.get("status") != "disabled"]
+    # Only live nodes need fresh scores. Registered but abandoned nodes once
+    # multiplied this table into hundreds of thousands of useless rows.
+    nodes = registry.list_nodes(active_only=True)
     if not targets or not nodes:
         logger.info("Scoring skipped — %d targets, %d nodes", len(targets), len(nodes))
         return 0
@@ -510,3 +511,13 @@ def score_all(config: dict) -> int:
                     len(targets), node["node_id"], weather,
                     "yes" if night else "none")
     return count
+
+
+def prune_unpaired_scores(cutoff: str) -> None:
+    """Discard derived scores for unpaired nodes that stopped heartbeating."""
+    db.execute(
+        "DELETE FROM scores WHERE node_id IN ("
+        "SELECT n.node_id FROM nodes n LEFT JOIN node_members nm "
+        "ON nm.node_id = n.node_id WHERE nm.node_id IS NULL "
+        "AND (n.last_heartbeat IS NULL OR n.last_heartbeat < %s))",
+        (cutoff,))
