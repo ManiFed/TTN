@@ -17,6 +17,7 @@ astropy, or anything heavy — both sides can import this for free.
 import json
 import os
 import re
+import typing
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
@@ -49,6 +50,22 @@ def _coerce(value: Any, typ: Any) -> Any:
     return value
 
 
+def _unwrap_optional(typ: Any) -> Any:
+    """Optional[X] (i.e. Union[X, None]) -> X, so _coerce sees the real type.
+
+    Most fields on these dataclasses are Optional[float]/Optional[str] (the
+    value may be absent), which makes ``f.type`` the Union object rather than
+    ``float``/``str`` themselves -- none of _coerce's `typ is ...` checks
+    matched it, so every Optional-typed field silently skipped coercion
+    entirely and passed the raw value straight through.
+    """
+    if typing.get_origin(typ) is typing.Union:
+        args = [a for a in typing.get_args(typ) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return typ
+
+
 def _from_dict(cls, data: dict):
     """Build a dataclass from a dict, ignoring unknown keys and coercing
     values to the declared field types (ValueError on impossible values)."""
@@ -60,10 +77,11 @@ def _from_dict(cls, data: dict):
         f = fields.get(k)
         if f is None:
             continue
+        raw_type = (f.type if not isinstance(f.type, str)
+                   else {"str": str, "float": float, "int": int,
+                         "bool": bool}.get(f.type, object))
         try:
-            kwargs[k] = _coerce(v, f.type if not isinstance(f.type, str)
-                                else {"str": str, "float": float, "int": int,
-                                      "bool": bool}.get(f.type, object))
+            kwargs[k] = _coerce(v, _unwrap_optional(raw_type))
         except ValueError as exc:
             raise ValueError(f"{cls.__name__}.{k}: {exc}")
     return cls(**kwargs)
