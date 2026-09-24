@@ -189,6 +189,20 @@ class SequenceNodeTest(unittest.TestCase):
             self.assertIn("marginal_value", it.explanation)
             self.assertIn("network_redundancy_rank", it.explanation)
 
+    def test_items_stay_in_absolute_time_order_across_midnight(self):
+        """BASE is 22:00 UTC; slots 0/4/8/12 with utc_offset=0 land at local
+        22:00/23:00/00:00/01:00. Re-sorting by the "HH:MM" string instead of
+        absolute time would put 00:00/01:00 before 22:00/23:00, reversing
+        the second half of the night."""
+        ctx = _ctx("A", 0.0, max_targets=5)
+        opp = _opp("A", "t1", 0.8, 0.0, slots=(0, 4, 8, 12))
+        assigned = [(opp, 12), (opp, 0), (opp, 8), (opp, 4)]  # shuffled
+        groups = _target_groups(
+            [_Placement("A", opp, s) for s in (0, 4, 8, 12)], {"A": ctx})
+        items = sequence_node(ctx, assigned, objective.DEFAULT_COORD_PARAMS, groups)
+        self.assertEqual([i.startTime for i in items],
+                         ["22:00", "23:00", "00:00", "01:00"])
+
 
 # ── Generalized AI tuning: param clamping safety ─────────────────────────────
 
