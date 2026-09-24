@@ -122,7 +122,10 @@ def _read_solution(wcs_path: str) -> dict:
         nx = int(hdr.get("IMAGEW") or hdr.get("NAXIS1") or 0)
         ny = int(hdr.get("IMAGEH") or hdr.get("NAXIS2") or 0)
         if nx and ny:
-            sky = w.pixel_to_world(nx / 2.0, ny / 2.0)
+            # pixel_to_world takes 0-indexed pixel coordinates, so the centre
+            # pixel of an nx-wide image is (nx-1)/2, not nx/2 (which is off
+            # by half a pixel -- matches alpaca/platesolve.py's convention).
+            sky = w.pixel_to_world((nx - 1) / 2.0, (ny - 1) / 2.0)
             # Non-celestial WCS returns a list of Quantities (Starfront
             # "'list' object has no attribute 'ra'"); prefer SkyCoord, else
             # rebuild from values / pixel_to_world_values.

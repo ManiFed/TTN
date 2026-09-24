@@ -107,10 +107,18 @@ class Camera:
         logger.info("Camera ROI set: origin=(%d,%d) size=%dx%d", start_x, start_y, num_x, num_y)
 
     def reset_roi(self) -> None:
+        # CameraXSize/CameraYSize are always unbinned pixels (ASCOM/ALPACA
+        # ICameraV3), but NumX/NumY must be given in binned pixels -- passing
+        # the unbinned size straight through would request a subframe up to
+        # bin_x*bin_y times larger than the binned frame actually has.
         w = int(self._c._get("cameraxsize"))
         h = int(self._c._get("cameraysize"))
-        self.set_roi(0, 0, w, h)
-        logger.info("Camera ROI reset to full frame %dx%d", w, h)
+        bin_x = int(self._c._get("binx"))
+        bin_y = int(self._c._get("biny"))
+        num_x, num_y = w // bin_x, h // bin_y
+        self.set_roi(0, 0, num_x, num_y)
+        logger.info("Camera ROI reset to full frame %dx%d (binned %dx%d)",
+                    w, h, num_x, num_y)
 
     def expose(
         self,

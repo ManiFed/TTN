@@ -70,6 +70,22 @@ def _parse_json_body(response: requests.Response, endpoint: str) -> dict:
     return body
 
 
+def _require_value(endpoint: str, body: dict) -> Any:
+    """The "Value" field of a successful (ErrorNumber 0) ALPACA response.
+
+    A driver can return valid JSON with ErrorNumber 0 and simply omit
+    "Value" -- the fuzz harness models exactly this
+    (tests/fuzz/fakealpaca.py's "missing_value" fault). Without this check
+    that slips past _check_error and dies on a bare KeyError, which
+    dashboard.py's camera-drop recovery (_camera_unreachable_exc) does not
+    recognise as a reconnectable fault, so a malformed-but-"successful"
+    body aborts the science item instead of triggering a retry.
+    """
+    if "Value" not in body:
+        raise AlpacaError(f"{endpoint}: ALPACA response missing \"Value\"", code=0)
+    return body["Value"]
+
+
 class AlpacaClient:
     """
     Thin HTTP wrapper around a single ALPACA device endpoint.
@@ -96,7 +112,7 @@ class AlpacaClient:
         response.raise_for_status()
         body = _parse_json_body(response, attribute)
         self._check_error(attribute, body)
-        return body["Value"]
+        return _require_value(attribute, body)
 
     def _put(self, action: str, timeout: float = 10, **data) -> None:
         url = f"{self.base_url}/{action}"
@@ -136,7 +152,7 @@ class AlpacaClient:
         response.raise_for_status()
         body = _parse_json_body(response, "connected")
         self._check_error("connected", body)
-        return bool(body["Value"])
+        return bool(_require_value("connected", body))
 
     def connect(self) -> None:
         logger.debug("%s: connecting", self.base_url)
