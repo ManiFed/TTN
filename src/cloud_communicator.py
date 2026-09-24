@@ -951,10 +951,21 @@ class CloudCommunicator:
         outcomes = self._autonomy.pending_outcomes()
         if not outcomes:
             return
-        response = self._post("/api/v1/nodes/execution-outcomes",
-                              {"outcomes": outcomes})
+        public = [{k: v for k, v in o.items() if k != "_rowid"} for o in outcomes]
+        try:
+            response = self._post("/api/v1/nodes/execution-outcomes",
+                                  {"outcomes": public})
+        except Exception as exc:
+            # Mirror _flush_queue/_flush_survey_queue/_flush_telemetry_queue:
+            # a failure here must not escape to the heartbeat loop's own
+            # try/except, which would mark an otherwise-successful heartbeat
+            # as failed (last_heartbeat_ok=False) and fire a spurious
+            # cloud_heartbeat_restored on the next good one. Outcomes stay
+            # pending and are retried on the next heartbeat.
+            logger.warning("Execution-outcomes upload failed: %s", exc)
+            return
         if response.get("ok"):
-            self._autonomy.mark_uploaded([o["attempt_id"] for o in outcomes])
+            self._autonomy.mark_uploaded(outcomes)
 
     def record_execution_outcome(self, bundle_id: str, item_id: str,
                                  state: str, **kwargs) -> str:
