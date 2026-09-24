@@ -45,6 +45,20 @@ class BlastRadiusTest(unittest.TestCase):
         """The last thing between a mount and the sun."""
         self.assert_blocked("alpaca/safety_manager.py")
 
+    def test_the_node_control_loop_needs_a_person(self):
+        """Mid-expose abort, slew-refuse and capture latches live in the
+        dashboard control loop itself, not only in alpaca/ (e.g. #120, #131-136)."""
+        self.assert_blocked("src/dashboard.py")
+
+    def test_the_live_scheduler_needs_a_person(self):
+        """CHORUS (cloud/chorus/) is the default live scheduler and
+        cloud/scheduler.py is what dispatches every planning run to it --
+        both decide what the whole fleet observes each night."""
+        for path in ("cloud/scheduler.py", "cloud/network_planner.py",
+                     "cloud/chorus/planner.py", "cloud/chorus/assign.py",
+                     "cloud/chorus/physics.py", "cloud/chorus/ledger.py"):
+            self.assert_blocked(path)
+
     def test_photometry_and_timing_need_a_person(self):
         for path in ("src/photometry.py", "src/timescales.py",
                      "src/plate_solve.py", "alpaca/platesolve.py",

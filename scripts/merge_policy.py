@@ -48,6 +48,9 @@ PROTECTED: tuple[tuple[str, str], ...] = (
                                   "thing standing between a mount and the sun"),
     ("alpaca/autofocus.py",       "moves the focuser unattended"),
     ("src/commissioning.py",      "first-light checks on unproven hardware"),
+    ("src/dashboard.py",          "the node control loop -- mount/camera safety "
+                                  "latches, mid-expose abort and slew-refuse logic "
+                                  "live here, not only in alpaca/ (e.g. #120, #131-136)"),
 
     # -- photometry, astrometry and time ------------------------------------
     ("src/photometry.py",         "produces the magnitudes the network publishes"),
@@ -58,7 +61,14 @@ PROTECTED: tuple[tuple[str, str], ...] = (
     ("src/calibration_identity.py", "ties frames to their calibration"),
     ("src/stacking.py",           "combines frames into measured data"),
     ("cloud/calibration.py",      "network-wide photometric calibration"),
-    ("cloud/objective.py",        "scoring that decides what the fleet observes"),
+    ("cloud/objective.py",        "scoring that decides what the fleet observes "
+                                  "(legacy planner)"),
+    ("cloud/network_planner.py",  "scoring that decides what the fleet observes "
+                                  "(legacy planner)"),
+    ("cloud/scheduler.py",        "dispatches every planning run to CHORUS or the "
+                                  "legacy planner -- decides what the fleet observes"),
+    ("cloud/chorus/*.py",         "CHORUS -- the live default scheduler (scheduler."
+                                  "chorus: true) that decides what the fleet observes"),
     ("cloud/transit_windows.py",  "timing windows for time-series targets"),
 
     # -- anything published outside this project ----------------------------
