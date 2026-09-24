@@ -31,9 +31,24 @@ CONTACT = {
     "github": "https://github.com/telescopenet",
 }
 
-_BLOCKED_KEY_FRAGMENTS = (
-    "password", "api_key", "secret", "token", "auth", "credential",
-)
+#: Exactly the keys documented to the model in _PROJECT_CONTEXT below as
+#: "Safe config.yaml keys you may patch" -- kept in sync with that list.
+#: This is an allowlist, not a denylist: a key not in here is dropped
+#: regardless of what it's named, because src/config_patch.py deep-merges
+#: whatever survives _sanitize_patch straight into the node's config.yaml
+#: with no further validation. A denylist on secret-sounding fragments
+#: (password/api_key/secret/token/auth/credential) used to be the only
+#: check, which let an adversarial or hallucinated patch through for any
+#: other key -- including things like cloud.url, which would silently
+#: redirect the node's authenticated cloud traffic (api_key and all) to
+#: wherever the patch pointed it.
+_ALLOWED_PATCH_KEYS = frozenset({
+    "cloud.auto_run_plans", "cloud.plan_poll_interval", "cloud.heartbeat_interval",
+    "cloud.enabled", "cloud.upload_images", "cloud.disconnect_park_timeout",
+    "photometry.enabled", "safety.park_at_dawn", "safety.dawn_type",
+    "safety.disconnect_timeout", "image_watcher.enabled",
+    "devices.telescope.enabled", "devices.camera.enabled",
+})
 
 _CONFIG_PATCH_RE = re.compile(
     r"```config_patch\s*\n(.*?)\n```",
@@ -131,27 +146,21 @@ def _strip_patch_block(text: str) -> str:
     return _CONFIG_PATCH_RE.sub("", text).strip()
 
 
-def _key_blocked(key: str) -> bool:
-    low = key.lower()
-    return any(fragment in low for fragment in _BLOCKED_KEY_FRAGMENTS)
-
-
 def _sanitize_patch(obj, path: str = "") -> dict:
-    """Drop secret-like keys; only allow dict leaves."""
+    """Keep only leaves whose full dotted path is in _ALLOWED_PATCH_KEYS."""
     if not isinstance(obj, dict):
         return {}
     out: dict = {}
     for key, val in obj.items():
         full = f"{path}.{key}" if path else key
-        if _key_blocked(key):
-            logger.info("Help chat: blocked patch key %s", full)
-            continue
         if isinstance(val, dict):
             nested = _sanitize_patch(val, full)
             if nested:
                 out[key] = nested
-        elif isinstance(val, (bool, int, float, str)):
+        elif full in _ALLOWED_PATCH_KEYS and isinstance(val, (bool, int, float, str)):
             out[key] = val
+        else:
+            logger.info("Help chat: blocked patch key %s (not in safe-key allowlist)", full)
     return out
 
 
