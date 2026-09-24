@@ -8,7 +8,7 @@ import logging
 import struct
 import threading
 import time
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 from cloud import gcn_events
 
