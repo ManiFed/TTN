@@ -62,7 +62,11 @@ def register(server, agent: AgentClient) -> None:
         ``export_science`` defaults True so the coadd lands under fits_export/
         and can feed photometry/AAVSO (issue #132 / Starfront 2026-09-20).
         Pass ``target_name`` (e.g. "SS Cyg") to stamp OBJECT on the coadd.
+
+        This actually exposes the camera, so it is refused against production
+        unless explicitly allowed -- same as node_expose/run_imaging_program.
         """
+        require_non_production("start live-stacking (exposes the camera)")
         body: dict = {
             "frames": int(frames),
             "exposure_s": float(exposure_s),

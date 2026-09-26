@@ -45,6 +45,26 @@ class BlastRadiusTest(unittest.TestCase):
         """The last thing between a mount and the sun."""
         self.assert_blocked("alpaca/safety_manager.py")
 
+    def test_the_node_control_loop_needs_a_person(self):
+        """Mid-expose abort, slew-refuse and capture latches live in the
+        dashboard control loop itself, not only in alpaca/ (e.g. #120, #131-136)."""
+        self.assert_blocked("src/dashboard.py")
+
+    def test_the_live_scheduler_needs_a_person(self):
+        """CHORUS (cloud/chorus/) is the default live scheduler and
+        cloud/scheduler.py is what dispatches every planning run to it --
+        both decide what the whole fleet observes each night."""
+        for path in ("cloud/scheduler.py", "cloud/network_planner.py",
+                     "cloud/chorus/planner.py", "cloud/chorus/assign.py",
+                     "cloud/chorus/physics.py", "cloud/chorus/ledger.py"):
+            self.assert_blocked(path)
+
+    def test_the_weight_tuning_loop_needs_a_person(self):
+        """cloud/tuning.py applies Claude-proposed scoring weight changes
+        network-wide behind a counterfactual backtest gate -- a bug here
+        could bypass that gate."""
+        self.assert_blocked("cloud/tuning.py")
+
     def test_photometry_and_timing_need_a_person(self):
         for path in ("src/photometry.py", "src/timescales.py",
                      "src/plate_solve.py", "alpaca/platesolve.py",
@@ -52,14 +72,21 @@ class BlastRadiusTest(unittest.TestCase):
                      "cloud/calibration.py", "cloud/transit_windows.py"):
             self.assert_blocked(path)
 
-    def test_anything_published_to_aavso_needs_a_person(self):
-        for path in ("src/aavso_submission.py", "cloud/data_pipeline.py"):
+    def test_anything_published_externally_needs_a_person(self):
+        for path in ("src/aavso_submission.py", "cloud/data_pipeline.py",
+                     "cloud/mpc_report.py"):
+            self.assert_blocked(path)
+
+    def test_writes_to_a_members_node_need_a_person(self):
+        """The allowlist in cloud/help_chat.py is what stops an LLM
+        conversation writing an arbitrary config.yaml key to a real node."""
+        for path in ("cloud/help_chat.py", "src/config_patch.py"):
             self.assert_blocked(path)
 
     def test_identity_and_credentials_need_a_person(self):
         """The orphaning class of bug lives in exactly these files."""
         for path in ("cloud/registry.py", "cloud/auth.py",
-                     "src/cloud_communicator.py"):
+                     "src/cloud_communicator.py", "cloud/server.py"):
             self.assert_blocked(path)
 
     def test_schema_needs_a_person(self):

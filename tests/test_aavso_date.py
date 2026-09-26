@@ -196,3 +196,31 @@ def test_submit_pending_batch_persists_and_returns_response_path(monkeypatch, tm
     # response_path must have been persisted into the aavso_batches insert too.
     assert "response_path" in inserted["sql"]
     assert result["response_path"] in inserted["params"]
+
+
+def test_dry_run_never_marks_measurements_submitted(monkeypatch, tmp_path):
+    """A dry_run batch never POSTs to WebObs, so it must not flip
+    aavso_submitted=1 -- doing so would permanently exclude real
+    measurements from ever actually reaching AAVSO once dry_run is turned
+    back off (they'd never again match `WHERE aavso_submitted = 0`)."""
+    row = _row(id=1)
+    monkeypatch.setattr(DP.db, "query", lambda *a, **k: [row])
+    monkeypatch.setattr(DP.db, "execute", lambda *a, **k: None)
+
+    marked_submitted = []
+
+    def _fake_executemany(sql, seq):
+        if "aavso_submitted = 1" in sql:
+            marked_submitted.extend(seq)
+
+    monkeypatch.setattr(DP.db, "executemany", _fake_executemany)
+
+    config = {"aavso": {
+        "observer_code": "EGBA", "dry_run": True,
+        "audit_dir": str(tmp_path),
+    }}
+
+    result = DP.submit_pending_batch(config)
+
+    assert result["status"] == "dry_run"
+    assert marked_submitted == []

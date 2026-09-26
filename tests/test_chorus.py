@@ -709,5 +709,31 @@ class BacktestSerializationTest(unittest.TestCase):
         self.assertEqual(ctx2.max_targets, 7)
 
 
+# ── Sequencing across local midnight ──────────────────────────────────────────
+
+class SequenceNodeMidnightTest(unittest.TestCase):
+    """perform.sequence_node must keep absolute chronological order even when
+    the observing window crosses local midnight -- re-sorting by the local
+    "HH:MM" string instead puts post-midnight items ("00:00") before evening
+    items ("23:00"), reversing the second half of the night."""
+
+    def test_items_stay_in_absolute_time_order_across_midnight(self):
+        from cloud.chorus import perform
+        from cloud.chorus.assign import Placement
+
+        ctx = _ctx("A", max_targets=4)  # BASE=22:00 UTC, utc_offset=0
+        opp = _opp("A", "t1", slots=(0, 4, 8, 12))  # 22:00, 23:00, 00:00, 01:00
+        placements = [Placement(node_id="A", opp=opp, slot=s, marginal=0.1, p=0.9)
+                     for s in (0, 4, 8, 12)]
+
+        items = perform.sequence_node(ctx, placements, coord={})
+
+        starts = [i.starts_at_utc for i in items]
+        self.assertEqual(starts, sorted(starts),
+                         "items must stay in absolute chronological order")
+        self.assertEqual([i.startTime for i in items],
+                         ["22:00", "23:00", "00:00", "01:00"])
+
+
 if __name__ == "__main__":
     unittest.main()

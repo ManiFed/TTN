@@ -273,7 +273,8 @@ def require_admin(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         admin_key = _config.get("server", {}).get("admin_key", "")
-        if not admin_key or request.headers.get("X-Admin-Key", "") != admin_key:
+        presented = request.headers.get("X-Admin-Key", "")
+        if not admin_key or not secrets.compare_digest(presented, admin_key):
             return jsonify({"error": "invalid admin key"}), 401
         return fn(*args, **kwargs)
     return wrapper
@@ -299,7 +300,8 @@ def require_admin_readonly(fn):
         # An unset key must never match an absent or empty header -- a blank
         # secret in CI would otherwise silently authenticate as admin.
         accepted = [k for k in (admin_key, readonly_key) if k]
-        if not presented or presented not in accepted:
+        if not presented or not any(
+                secrets.compare_digest(presented, k) for k in accepted):
             return jsonify({"error": "invalid admin key"}), 401
         return fn(*args, **kwargs)
     return wrapper

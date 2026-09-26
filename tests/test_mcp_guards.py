@@ -112,7 +112,7 @@ class HardwareToolGatingTest(unittest.TestCase):
         "node_slew", "node_park", "node_unpark", "node_expose", "node_nudge",
         "node_arm_open", "node_autofocus_start", "node_center_start",
         "node_horizon_scan_start", "node_schedule_run", "node_safety_reset",
-        "node_set_tracking", "sky_tour",
+        "node_set_tracking", "sky_tour", "start_stacking", "run_imaging_program",
     )
 
     #: Stopping activity must always be possible, including in production --
@@ -135,6 +135,8 @@ class HardwareToolGatingTest(unittest.TestCase):
             "node_nudge": {"direction": "north"},
             "node_set_tracking": {"enabled": True},
             "sky_tour": {"action": "start"},
+            "run_imaging_program": {"target_name": "M42", "ra_hours": 5.5,
+                                    "dec_deg": -5.4},
         }.get(name, {})
 
     def test_hardware_tools_refuse_in_production_without_calling_the_agent(self):

@@ -37,7 +37,8 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
+import xml.etree.ElementTree as _ET
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -151,7 +152,7 @@ def _expand_pkg_payload(pkg_path: Path, expand_dir: Path) -> tuple[Path, str] | 
 
     try:
         root = ET.parse(info_files[0]).getroot()
-    except ET.ParseError:
+    except _ET.ParseError:
         return None
 
     install_location = root.get("install-location") or "/"

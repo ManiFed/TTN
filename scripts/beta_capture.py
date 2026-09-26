@@ -78,8 +78,14 @@ def add(root: Path, campaign: str, source: Path, node_id: str,
         raise SystemExit(f"Refusing to overwrite a different file: {destination}")
     shutil.copy2(source, destination)
     manifest = _manifest(root)
+    # Scoped to (sha256, campaign): the same bytes can legitimately be added
+    # under a second campaign (its own copy lives at a campaign-specific
+    # path), and deduping on sha256 alone would evict that other campaign's
+    # manifest entry -- leaving its file copy on disk but no longer
+    # checksum-verified by audit(), which only reads the manifest.
     manifest["captures"] = [
-        item for item in manifest["captures"] if item.get("sha256") != digest
+        item for item in manifest["captures"]
+        if (item.get("sha256"), item.get("campaign")) != (digest, campaign)
     ]
     manifest["captures"].append({
         "campaign": campaign,

@@ -209,6 +209,15 @@ def _science_capture_active() -> bool:
         if (_sched_state.get("running")
                 and _sched_state.get("current_phase") == "exposing"):
             return True
+    with _imaging_lock:
+        # The unattended imaging handoff (_run_imaging_block) slews, centres
+        # and stacks for hours after _sched_state["running"] has already
+        # gone False (the schedule is marked done before imaging starts) --
+        # without this, none of the mid-expose hijack guards built for
+        # issues #116/#120/#123/#131/#135 (slew refusal, park guard, expose
+        # guard) protect the mount during it.
+        if _imaging_state.get("running"):
+            return True
     return False
 
 
@@ -3250,14 +3259,26 @@ def _on_cloud_tonight(intent: dict) -> None:
         was_running = _sched_state["running"]
         if was_running:
             _sched_state["cancelled"] = True
+    with _imaging_lock:
+        was_imaging = bool(_imaging_state.get("running"))
 
     _telemetry.event("tonight_stand_down",
                      severity="info",
                      detail={"status": intent.get("status", ""),
                              "reason": str(reason)[:200],
-                             "schedule_was_running": was_running})
+                             "schedule_was_running": was_running,
+                             "imaging_was_running": was_imaging})
 
-    if was_running:
+    if was_imaging:
+        # The unattended imaging handoff (_run_imaging_block) polls
+        # _tonight_allows_observing() only every 5s, and even then only
+        # stops taking new frames -- it does not itself abort or park.
+        # Tell its background stacking thread to stop right away rather
+        # than waiting out that window with the mount still exposing.
+        with _stack_lock:
+            _stack_state["cancelled"] = True
+
+    if was_running or was_imaging:
         # Stop the exposure in progress rather than waiting for it to finish;
         # a stand-down usually means something is wrong with the telescope.
         try:
@@ -3451,6 +3472,25 @@ def _run_imaging_block(target: Optional[dict] = None) -> None:
             break
         time.sleep(5)
 
+    # Tell the background stacking thread to stop -- without this it keeps
+    # calling _cam.expose() (sized for up to ~10h of frames) regardless of
+    # why this loop exited, so the dashboard would report "imaging finished"
+    # while the telescope kept exposing. Idempotent with the same flag
+    # _on_cloud_tonight already sets when a stand-down arrives mid-imaging.
+    with _stack_lock:
+        _stack_state["cancelled"] = True
+    try:
+        if _cam is not None:
+            _cam.abort_exposure()
+    except Exception as exc:
+        logger.debug("Imaging: abort on stop failed: %s", exc)
+    try:
+        if _tel is not None:
+            with _device_lock:
+                _tel.park()
+    except Exception as exc:
+        logger.debug("Imaging: park on stop failed: %s", exc)
+
     with _imaging_lock:
         _imaging_state["running"] = False
     logger.info("Imaging: finished on %s", name)
@@ -3602,11 +3642,18 @@ def _poll_loop() -> None:
 
         if tel_enabled and _tel is not None:
             try:
-                ra       = _tel.ra()
-                dec      = _tel.dec()
-                slewing  = _tel.is_slewing()
-                parked   = _tel.is_parked()
-                tracking = _tel.is_tracking()
+                # Coerce to float here rather than storing the raw device
+                # response: a malformed/non-numeric reply (firmware hiccup,
+                # or in tests, a stray mock) would otherwise sit in
+                # _state["telescope"]["ra"]/["dec"] until the next
+                # successful poll and crash the first f"{ra:.4f}"-style
+                # formatting of it (e.g. the manual-exposure target name)
+                # with a confusing error far from this loop.
+                ra       = float(_tel.ra())
+                dec      = float(_tel.dec())
+                slewing  = bool(_tel.is_slewing())
+                parked   = bool(_tel.is_parked())
+                tracking = bool(_tel.is_tracking())
                 arm_state = None
                 if _cover is not None:
                     try:

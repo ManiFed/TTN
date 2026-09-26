@@ -157,6 +157,38 @@ class AutonomyTests(unittest.TestCase):
             restarted = AutonomyStore(path)
             self.assertEqual(restarted.remaining_items(self._bundle(2)), [])
 
+    def test_mark_uploaded_does_not_drop_a_racing_overwrite(self):
+        """dashboard.py calls record() once for "started" and again --
+        possibly minutes later -- for the item's final state, both under the
+        same attempt_id (INSERT OR REPLACE). If the cloud upload of the
+        stale "started" row is still in flight when the second record()
+        overwrites it (resetting uploaded=0), acking by attempt_id alone
+        would mark the freshly-overwritten final-state row uploaded even
+        though the cloud only ever received the stale payload -- silently
+        dropping the item's real completion from the cloud's view."""
+        with tempfile.TemporaryDirectory() as td:
+            store = AutonomyStore(Path(td) / "a.db")
+            attempt = store.record("b-3", "i1", "started")
+
+            # Simulate an in-flight upload: fetch the pending "started" row.
+            in_flight = store.pending_outcomes()
+            self.assertEqual(len(in_flight), 1)
+            self.assertEqual(in_flight[0]["state"], "started")
+
+            # The item finishes before that upload's response comes back,
+            # overwriting the same attempt_id row (uploaded reset to 0).
+            store.record("b-3", "i1", "completed", attempt_id=attempt,
+                        frames_completed=5)
+
+            # The stale in-flight upload now (incorrectly) reports success.
+            store.mark_uploaded(in_flight)
+
+            # The real completion must still be pending, not silently acked.
+            still_pending = store.pending_outcomes()
+            self.assertEqual(len(still_pending), 1)
+            self.assertEqual(still_pending[0]["state"], "completed")
+            self.assertEqual(still_pending[0]["frames_completed"], 5)
+
     def test_wrong_node_expiry_budget_and_key_rotation_rejected_or_applied(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

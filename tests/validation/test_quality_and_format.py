@@ -113,6 +113,22 @@ def test_measurement_bounds(kwargs, valid):
     assert _meas(**kwargs).is_valid() is valid
 
 
+def test_optional_numeric_fields_are_coerced_like_required_ones():
+    """_coerce checked `typ is float` etc, but an Optional[float] field's
+    declared type is the Union object, not float itself -- every Optional-
+    typed field (airmass, fwhm, snr, zero_point, zp_scatter, hjd, ...)
+    silently skipped coercion and passed the raw value straight through.
+    cloud/data_pipeline.py's ingest_measurement puts these straight into a
+    parameterized SQL INSERT, so a node payload with e.g. airmass as a
+    string would either store the wrong type or fail deep in the DB layer
+    instead of cleanly here at the input boundary."""
+    m = _meas(airmass="1.5", fwhm="3.2", snr="42.0", zero_point="22.1",
+             zp_scatter="0.03", hjd="2461000.500")
+    for field_name in ("airmass", "fwhm", "snr", "zero_point", "zp_scatter", "hjd"):
+        value = getattr(m, field_name)
+        assert isinstance(value, float), f"{field_name} was not coerced: {value!r}"
+
+
 def test_measurement_ignores_unknown_keys():
     """provenance/quality_reasons in uploads must not break cloud ingestion."""
     m = Measurement.from_dict({

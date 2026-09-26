@@ -48,6 +48,9 @@ PROTECTED: tuple[tuple[str, str], ...] = (
                                   "thing standing between a mount and the sun"),
     ("alpaca/autofocus.py",       "moves the focuser unattended"),
     ("src/commissioning.py",      "first-light checks on unproven hardware"),
+    ("src/dashboard.py",          "the node control loop -- mount/camera safety "
+                                  "latches, mid-expose abort and slew-refuse logic "
+                                  "live here, not only in alpaca/ (e.g. #120, #131-136)"),
 
     # -- photometry, astrometry and time ------------------------------------
     ("src/photometry.py",         "produces the magnitudes the network publishes"),
@@ -58,19 +61,42 @@ PROTECTED: tuple[tuple[str, str], ...] = (
     ("src/calibration_identity.py", "ties frames to their calibration"),
     ("src/stacking.py",           "combines frames into measured data"),
     ("cloud/calibration.py",      "network-wide photometric calibration"),
-    ("cloud/objective.py",        "scoring that decides what the fleet observes"),
+    ("cloud/objective.py",        "scoring that decides what the fleet observes "
+                                  "(legacy planner)"),
+    ("cloud/network_planner.py",  "scoring that decides what the fleet observes "
+                                  "(legacy planner)"),
+    ("cloud/scheduler.py",        "dispatches every planning run to CHORUS or the "
+                                  "legacy planner -- decides what the fleet observes"),
+    ("cloud/chorus/*.py",         "CHORUS -- the live default scheduler (scheduler."
+                                  "chorus: true) that decides what the fleet observes"),
+    ("cloud/tuning.py",           "applies Claude-proposed scoring weight changes "
+                                  "network-wide, gated by the counterfactual "
+                                  "backtest -- a bug here bypasses that gate"),
     ("cloud/transit_windows.py",  "timing windows for time-series targets"),
 
     # -- anything published outside this project ----------------------------
     ("src/aavso_submission.py",   "formats what is submitted to AAVSO under the "
                                   "network's obscode"),
     ("cloud/data_pipeline.py",    "assembles and submits AAVSO batches"),
+    ("cloud/mpc_report.py",       "formats what is submitted to the Minor "
+                                  "Planet Center"),
+
+    # -- writes to a member's physical node without their direct action ------
+    ("cloud/help_chat.py",        "queues config.yaml patches for a member's "
+                                  "node from an LLM conversation -- the "
+                                  "allowlist here is what stops it writing "
+                                  "an arbitrary key (e.g. cloud.url)"),
+    ("src/config_patch.py",       "applies a queued patch to the node's real "
+                                  "config.yaml with no further validation"),
 
     # -- identity, credentials and the fleet register -----------------------
     ("cloud/auth.py",             "member authentication"),
     ("cloud/registry.py",         "node identity and credentials — the orphaning "
                                   "class of bug lives here"),
     ("src/cloud_communicator.py", "node credential lifecycle and rekey"),
+    ("cloud/server.py",           "the cloud API itself — node registration, "
+                                  "rekey, the require_node/require_admin auth "
+                                  "decorators, and measurement ingestion"),
 
     # -- schema and deploy --------------------------------------------------
     ("cloud/db.py",               "database schema and migrations"),

@@ -93,12 +93,26 @@ def seed_nodes():
         total_obs = random.randint(40, 900)
         accepted = int(total_obs * (0.80 + rel * 0.15))
         db.execute(
-            """INSERT OR REPLACE INTO nodes
+            """INSERT INTO nodes
                (node_id, api_key, owner_name, city, country, latitude, longitude,
                 bortle, tier, telescope_model, status, registered_at, last_heartbeat,
                 reliability_score, total_observations, aavso_accepted,
                 clear_nights_30d, mean_uncertainty, mean_fwhm)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (node_id) DO UPDATE SET
+                   api_key=EXCLUDED.api_key, owner_name=EXCLUDED.owner_name,
+                   city=EXCLUDED.city, country=EXCLUDED.country,
+                   latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude,
+                   bortle=EXCLUDED.bortle, tier=EXCLUDED.tier,
+                   telescope_model=EXCLUDED.telescope_model, status=EXCLUDED.status,
+                   registered_at=EXCLUDED.registered_at,
+                   last_heartbeat=EXCLUDED.last_heartbeat,
+                   reliability_score=EXCLUDED.reliability_score,
+                   total_observations=EXCLUDED.total_observations,
+                   aavso_accepted=EXCLUDED.aavso_accepted,
+                   clear_nights_30d=EXCLUDED.clear_nights_30d,
+                   mean_uncertainty=EXCLUDED.mean_uncertainty,
+                   mean_fwhm=EXCLUDED.mean_fwhm""",
             (nid, "seed_" + nid, owner, city, country, lat, lon,
              random.randint(3, 6), random.choice([1, 1, 1, 2]),
              "ZWO Seestar S50", "active",
@@ -113,10 +127,16 @@ def seed_nodes():
 def seed_targets():
     for tid, name, ra, dec, mag, band, ttype, prio, sources in TARGETS:
         db.execute(
-            """INSERT OR REPLACE INTO targets
+            """INSERT INTO targets
                (target_id, name, ra_deg, dec_deg, mag, mag_band, target_type,
                 priority, sources, discovered_at, last_updated, active)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,1)""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+               ON CONFLICT (target_id) DO UPDATE SET
+                   name=EXCLUDED.name, ra_deg=EXCLUDED.ra_deg, dec_deg=EXCLUDED.dec_deg,
+                   mag=EXCLUDED.mag, mag_band=EXCLUDED.mag_band,
+                   target_type=EXCLUDED.target_type, priority=EXCLUDED.priority,
+                   sources=EXCLUDED.sources, discovered_at=EXCLUDED.discovered_at,
+                   last_updated=EXCLUDED.last_updated, active=1""",
             (tid, name, ra, dec, mag, band, ttype, prio,
              json.dumps(sources),
              _iso(NOW - timedelta(days=random.randint(20, 120))), _iso(NOW)),
@@ -148,12 +168,13 @@ def seed_measurements():
             mag = round(_sscyg_mag(day) + random.gauss(0, 0.05), 3)
             unc = round(random.uniform(0.02, 0.06), 3)
             db.execute(
-                """INSERT OR IGNORE INTO measurements
+                """INSERT INTO measurements
                    (node_id, target_name, bjd, magnitude, uncertainty, filter,
                     airmass, fwhm, snr, comparison_stars, quality_flag,
                     zero_point, zp_scatter, received_at, validation_status,
                     aavso_submitted)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (node_id, target_name, bjd, filter) DO NOTHING""",
                 (node, "SS Cyg", jd(dt), mag, unc, "CV",
                  round(random.uniform(1.0, 1.9), 2),
                  round(random.uniform(2.9, 4.4), 2),
@@ -172,11 +193,12 @@ def seed_measurements():
             dt = NOW - timedelta(days=random.uniform(0, 25))
             node = random.choice(ONLINE_NODE_IDS)
             db.execute(
-                """INSERT OR IGNORE INTO measurements
+                """INSERT INTO measurements
                    (node_id, target_name, bjd, magnitude, uncertainty, filter,
                     snr, comparison_stars, quality_flag, received_at,
                     validation_status, aavso_submitted)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (node_id, target_name, bjd, filter) DO NOTHING""",
                 (node, name, jd(dt),
                  round(mag + random.gauss(0, 0.3), 3),
                  round(random.uniform(0.02, 0.07), 3), "CV",
@@ -191,9 +213,9 @@ def seed_measurements():
 def main():
     cfg_path = Path(__file__).resolve().parent.parent / "cloud" / "config.yaml"
     cfg = yaml.safe_load(open(cfg_path)) if cfg_path.exists() else {}
-    db_path = cfg.get("database", {}).get("path", "cloud_data/cloud.db")
-    db.init(db_path)
-    print(f"database: {db_path}")
+    db_url = cfg.get("database", {}).get("url", "")
+    db.init(db_url)
+    print(f"database: {db_url or '(DATABASE_URL env)'}")
 
     if "--wipe" in sys.argv:
         wipe()

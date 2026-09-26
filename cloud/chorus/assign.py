@@ -708,7 +708,12 @@ def build_opportunities(ctx, node: dict, vec: dict, site_cal: Optional[dict],
                 tw.t_mid_utc + half + baseline, params, transit_scarcity)
 
         for variant, w0, w1 in _transit_variants(tw):
-            s0 = int((w0 - ctx.t0).total_seconds() / 60 / STEP_MIN)
+            # floor, not int(): int() truncates toward zero, so a window
+            # starting a fraction of a slot before ctx.t0 (e.g. -0.3 slots)
+            # would truncate to 0 instead of -1 and slip past the `s0 < 0`
+            # guard below, silently placing the opportunity at ctx.t0
+            # instead of rejecting it.
+            s0 = math.floor((w0 - ctx.t0).total_seconds() / 60 / STEP_MIN)
             obs_min = (w1 - w0).total_seconds() / 60.0
             need = max(1, math.ceil(obs_min / STEP_MIN))
             if s0 < 0 or s0 + need > ctx.n_slots:

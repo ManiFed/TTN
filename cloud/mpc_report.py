@@ -36,6 +36,26 @@ def _ades_band(filter_name: str) -> str:
     return _ADES_BAND.get(str(filter_name or "").strip().upper(), "C")
 
 
+_BASE36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _trk_sub(cand_id: int) -> str:
+    """A short, ADES-conformant trkSub: alphanumeric only, <=8 characters.
+
+    The human-readable `candidate["designation"]` (e.g. "BS-MP 2024-0007",
+    set by moving_objects.confirm_candidate) is 15 characters and contains a
+    space and hyphens -- not valid here. ADES's trkSub is an internal
+    tracklet submission id, not the display designation, so this derives a
+    separate compact one from the candidate id instead.
+    """
+    n = int(cand_id)
+    digits = "0" if n == 0 else ""
+    while n:
+        n, r = divmod(n, 36)
+        digits = _BASE36[r] + digits
+    return ("BS" + digits)[:8]
+
+
 def _bjd_to_utc_approx(bjd_tdb: float, ra_deg: float, dec_deg: float) -> str:
     """Approximate inverse of the BJD_TDB barycentric correction — used only
     when a detection has no recorded date_obs_utc. Iterates the same
@@ -85,7 +105,7 @@ def _format_ades_psv(candidate: dict, detections: list,
     """MPC ADES PSV: one header line, one row per detection. Column set
     follows MPC's minimal-astrometry submission profile — see
     https://www.minorplanetcenter.net/iau/info/ADES.html"""
-    trk_sub = candidate.get("designation") or f"BSMO{candidate['id']:05d}"
+    trk_sub = _trk_sub(candidate["id"])
     cols = ["permID", "provID", "trkSub", "mode", "stn", "obsTime",
            "ra", "dec", "mag", "band", "photCat", "notes", "remarks"]
     lines = ["|".join(cols)]

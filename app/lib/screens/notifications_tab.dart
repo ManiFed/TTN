@@ -40,6 +40,7 @@ class _NotificationsTabState extends State<NotificationsTab> {
     try {
       await state.api.markNotificationRead(n.id);
       await state.refreshUnreadNotifications();
+      if (!mounted) return;
       _refresh();
     } catch (_) {/* best effort */}
   }

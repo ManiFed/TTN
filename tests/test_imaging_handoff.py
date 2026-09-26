@@ -170,6 +170,101 @@ class ImagingBlockTest(unittest.TestCase):
         self.assertIn("mount stalled", status["error"] or "")
 
 
+def _safe_tel_mock() -> MagicMock:
+    """A telescope mock safe to race against the real _poll_loop daemon
+    thread (started by any earlier test that connected a device and never
+    stopped, since it runs for the rest of the process).
+
+    A bare MagicMock()'s .ra()/.dec() etc return more MagicMocks; if
+    _poll_loop's next tick happens to land while _tel is patched to one, it
+    stores those MagicMocks into _state["telescope"]["ra"]/["dec"] where
+    they persist and break target-name formatting (f"{ra:.4f}") in every
+    later, unrelated test until the next real poll overwrites them.
+    """
+    tel = MagicMock()
+    tel.ra.return_value = 10.0
+    tel.dec.return_value = 20.0
+    tel.is_slewing.return_value = False
+    tel.is_parked.return_value = False
+    tel.is_tracking.return_value = False
+    return tel
+
+
+class ImagingSafetyGapTest(unittest.TestCase):
+    """The unattended imaging handoff was invisible to the mid-expose
+    hijack guards and to the stand-down abort/park path: _sched_state
+    ["running"] is already False by the time _run_imaging_block starts (the
+    schedule is marked done first), so _science_capture_active() missed it
+    entirely, and a cloud stand-down mid-imaging armed the latch but never
+    aborted the exposure or parked the mount -- nor told the background
+    stacking thread (sized for ~10h of frames) to stop."""
+
+    TARGET = {"id": "M42", "type": "Nebula", "ra": 5.588, "dec": -5.39}
+
+    def setUp(self):
+        with dash._imaging_lock:
+            dash._imaging_state.update({"running": False, "target": "",
+                                        "started_at": None, "error": None})
+        with dash._sched_lock:
+            dash._sched_state["running"] = False
+            dash._sched_state["cancelled"] = False
+        with dash._stack_lock:
+            dash._stack_state["cancelled"] = False
+        with dash._tonight_lock:
+            dash._tonight.clear()
+        dash._clear_stand_down_latch(reason="test setup")
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        with dash._imaging_lock:
+            dash._imaging_state["running"] = False
+        with dash._sched_lock:
+            dash._sched_state["cancelled"] = False
+        with dash._stack_lock:
+            dash._stack_state["cancelled"] = False
+        with dash._tonight_lock:
+            dash._tonight.clear()
+        dash._clear_stand_down_latch(reason="test teardown")
+
+    def test_science_capture_active_is_true_during_imaging(self):
+        with dash._imaging_lock:
+            dash._imaging_state["running"] = True
+        self.assertTrue(dash._science_capture_active())
+
+    def test_stand_down_mid_imaging_aborts_and_parks(self):
+        with dash._imaging_lock:
+            dash._imaging_state["running"] = True
+        cam, tel = MagicMock(), _safe_tel_mock()
+        with patch.object(dash, "_cam", cam), patch.object(dash, "_tel", tel):
+            dash._on_cloud_tonight({"observing": False, "reason": "test stand-down"})
+        cam.abort_exposure.assert_called_once()
+        tel.park.assert_called_once()
+        with dash._stack_lock:
+            self.assertTrue(dash._stack_state["cancelled"],
+                            "background stacking thread must be told to stop")
+
+    def test_imaging_block_stops_stacking_and_parks_on_stand_down(self):
+        """The hold loop exits via _tonight_allows_observing() (stand-down),
+        not _sched_cancelled() -- the branch every other test in this file
+        skips by pre-setting cancelled=True."""
+        dash._set_stand_down_latch("test: mount noise")
+        tel, cam = _safe_tel_mock(), MagicMock()
+        with patch.object(dash, "_tel", tel), \
+             patch.object(dash, "_cam", cam), \
+             patch.object(dash, "_slew_rejection", return_value=None), \
+             patch.object(dash, "_run_centering_bg", MagicMock()), \
+             patch.object(dash, "_run_stacking_bg", MagicMock()), \
+             patch.object(dash, "_safety_mgr", None), \
+             patch("threading.Thread", MagicMock()):
+            dash._run_imaging_block(self.TARGET)
+        with dash._stack_lock:
+            self.assertTrue(dash._stack_state["cancelled"],
+                            "background stacking thread must be told to stop")
+        cam.abort_exposure.assert_called_once()
+        tel.park.assert_called_once()
+        self.assertFalse(dash.imaging_status()["running"])
+
+
 class HandoffConditionTest(unittest.TestCase):
     """When the handover should and should not happen."""
 

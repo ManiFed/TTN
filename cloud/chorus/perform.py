@@ -104,7 +104,11 @@ def sequence_node(ctx, placements: list, coord: dict) -> list:
         ))
         prev, prev_slot = opp, p.slot
 
-    items.sort(key=lambda i: i.startTime)
+    # `items` is already in absolute-time order (built from `ordered`, which
+    # is sorted by slot). Do not re-sort by the local "HH:MM" startTime
+    # string: for any window spanning local midnight that puts post-midnight
+    # items ("00:15") before evening items ("23:15"), reversing the second
+    # half of the night.
     return items
 
 

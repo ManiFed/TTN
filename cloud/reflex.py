@@ -55,6 +55,15 @@ def _fired_tonight() -> int:
     return int((row or {}).get("n") or 0)
 
 
+def _fired_tonight_for(source_key: str) -> int:
+    since = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    row = db.query_one(
+        "SELECT COUNT(*) AS n FROM interrupts "
+        "WHERE reason = 'reflex_confirm' AND created_at > %s AND name = %s",
+        (since, _interrupt_name(source_key)))
+    return int((row or {}).get("n") or 0)
+
+
 def _open_interrupt_for(source_key: str) -> bool:
     """True when an unexpired reflex interrupt already targets this source."""
     row = db.query_one(
@@ -100,6 +109,10 @@ def on_candidate_promoted(cand: dict, config: dict) -> bool:
                 pass
         if _fired_tonight() >= cfg["max_per_night_global"]:
             logger.info("reflex global nightly cap reached — skipping %s", source_key)
+            return False
+        if _fired_tonight_for(source_key) >= cfg["max_per_candidate"]:
+            logger.info("reflex per-candidate nightly cap reached — skipping %s",
+                       source_key)
             return False
         if _open_interrupt_for(source_key):
             return False

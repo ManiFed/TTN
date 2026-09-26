@@ -78,6 +78,21 @@ class ReflowGreedyTest(unittest.TestCase):
                   for p in reflow.greedy_place(ctxs, opps, cells, _params())}
         self.assertEqual(placed, {"T1": "A", "T2": "B"})
 
+    def test_node_max_targets_cap_is_enforced(self):
+        """A single dark node with two reachable, valuable targets must not
+        be handed more reflow targets than its max_targets cap -- each
+        greedy_place call starts from a fresh _State with no shared
+        occupancy/count ledger across separate reflow events, so nothing
+        else enforces scheduler.max_targets_per_night here unless this
+        loop checks it itself (mirroring assign.assign())."""
+        ctxs = {"A": _ctx("A", max_targets=1)}
+        cells = {"T1": [_cell("T1")], "T2": [_cell("T2")]}
+        opps = {"A": [_opp("A", "T1", slots=(0, 2, 4, 6)),
+                      _opp("A", "T2", slots=(1, 3, 5, 7))]}
+        placed = reflow.greedy_place(ctxs, opps, cells, _params())
+        self.assertEqual(len(placed), 1,
+                         "node A's max_targets=1 cap must limit it to one placement")
+
     def test_no_feasible_slot_yields_nothing(self):
         # An opportunity with no slots can't be placed.
         ctxs = {"A": _ctx("A")}
@@ -205,6 +220,24 @@ class ReflowReflexCloudTest(unittest.TestCase):
         self.assertTrue(reflex.on_candidate_promoted(self._cand(source_key="A"), cfg))
         # Second distinct source blocked by the global nightly cap.
         self.assertFalse(reflex.on_candidate_promoted(self._cand(source_key="B"), cfg))
+
+    def test_reflex_per_candidate_cap(self):
+        """max_per_candidate must limit a single source to N fires per night,
+        independent of the open-interrupt dedupe: expire the first interrupt
+        (so _open_interrupt_for no longer blocks it) and confirm the second
+        fire is still refused by the per-candidate cap."""
+        from cloud import reflex
+        self._dark_node("nd_dark")
+        cfg = self._config(cooldown_min=0, max_per_candidate=1)
+        self.assertTrue(reflex.on_candidate_promoted(self._cand(source_key="A"), cfg))
+        self.db.execute(
+            "UPDATE interrupts SET expires_at = %s WHERE reason='reflex_confirm'",
+            ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),))
+        self.assertFalse(
+            reflex.on_candidate_promoted(self._cand(source_key="A"), cfg),
+            "a second reflex fire for the same source must respect max_per_candidate")
+        self.assertEqual(self.db.query_one(
+            "SELECT COUNT(*) AS n FROM interrupts WHERE reason='reflex_confirm'")["n"], 1)
 
     def test_reflex_dedupes_open_interrupt(self):
         from cloud import reflex

@@ -308,6 +308,29 @@ class CloudCommGauntletTest(TempCwdTestCase):
         comm.submit_incident({"event": "x", "severity": "error"})  # no raise
         self.assertEqual(self.fake.paths("/incidents"), [])
 
+    # ── Execution-outcomes flush must not poison an otherwise-good heartbeat ────
+
+    def test_execution_outcomes_flush_failure_does_not_raise(self):
+        """A failed outcomes upload must be swallowed here (outcomes stay
+        pending and retry next heartbeat), not propagate to the heartbeat
+        loop's own try/except -- which would mark an already-successful
+        heartbeat as failed and later fire a spurious cloud_heartbeat_restored."""
+        comm = self._comm()
+        comm.record_execution_outcome("bundle_1", "item_1", "completed",
+                                      frames_completed=3)
+        with patch.object(comm, "_post", side_effect=RuntimeError("HTTP 500")):
+            comm._flush_execution_outcomes()  # must not raise
+        self.assertEqual(len(comm._autonomy.pending_outcomes()), 1,
+                         "a failed upload must leave the outcome pending for retry")
+
+    def test_execution_outcomes_flush_success_marks_uploaded(self):
+        comm = self._comm()
+        comm.record_execution_outcome("bundle_1", "item_1", "completed",
+                                      frames_completed=3)
+        with patch.object(comm, "_post", return_value={"ok": True}):
+            comm._flush_execution_outcomes()
+        self.assertEqual(comm._autonomy.pending_outcomes(), [])
+
     # ── Immediate heartbeat on device-state change ─────────────────────────────
 
     def test_request_heartbeat_wakes_loop_before_interval_elapses(self):

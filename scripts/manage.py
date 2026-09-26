@@ -358,7 +358,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    db.init(config.get("database", {}).get("path", "cloud_data/cloud.db"))
+    db.init(config.get("database", {}).get("url", ""))
 
     dispatch = {
         "status":        lambda: cmd_status(config),

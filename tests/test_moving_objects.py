@@ -194,7 +194,11 @@ class MpcReportFormatTest(unittest.TestCase):
         row = text.strip("\n").split("\n")[1].split("|")
         idx = {"trkSub": 2, "stn": 4, "obsTime": 5, "ra": 6, "dec": 7,
               "mag": 8, "band": 9}
-        self.assertEqual(row[idx["trkSub"]], "BS-MP 2024-0007")
+        # trkSub must be short and alphanumeric per the ADES spec -- unlike
+        # the human-readable designation ("BS-MP 2024-0007", 15 chars, has
+        # spaces/hyphens), which MPC's ADES parser would reject.
+        self.assertLessEqual(len(row[idx["trkSub"]]), 8)
+        self.assertRegex(row[idx["trkSub"]], r"^[A-Za-z0-9]+$")
         self.assertEqual(row[idx["stn"]], "XYZ01")
         self.assertEqual(row[idx["ra"]], "180.123456")
         self.assertEqual(row[idx["dec"]], "+10.654321")
@@ -209,6 +213,15 @@ class MpcReportFormatTest(unittest.TestCase):
                                            observer_name="")
         last_row = text.strip("\n").split("\n")[-1].split("|")
         self.assertEqual(last_row[8], "")   # mag column, third detection has mag=None
+
+    def test_trk_sub_is_short_alphanumeric_and_unique_per_candidate(self):
+        seen = set()
+        for cand_id in (0, 1, 7, 999, 123456, 999999999):
+            trk = mpc_report._trk_sub(cand_id)
+            self.assertLessEqual(len(trk), 8)
+            self.assertRegex(trk, r"^[A-Za-z0-9]+$")
+            self.assertNotIn(trk, seen, f"collision for candidate {cand_id}")
+            seen.add(trk)
 
     def test_missing_date_obs_falls_back_to_approx_bjd(self):
         cand = {"id": 7, "designation": "BS-MP 2024-0007"}

@@ -237,7 +237,8 @@ class AutonomyStore:
         self._ensure_journal()
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM journal WHERE uploaded=0 ORDER BY rowid LIMIT ?",
+                "SELECT rowid AS _rowid, * FROM journal WHERE uploaded=0 "
+                "ORDER BY rowid LIMIT ?",
                 (int(limit),)).fetchall()
         out = []
         for row in rows:
@@ -247,13 +248,27 @@ class AutonomyStore:
             out.append(item)
         return out
 
-    def mark_uploaded(self, attempt_ids: list[str]) -> None:
-        if not attempt_ids:
+    def mark_uploaded(self, outcomes: list[dict]) -> None:
+        """Ack each outcome by (attempt_id, rowid), not attempt_id alone.
+
+        record() does INSERT OR REPLACE keyed on attempt_id: dashboard.py
+        calls it once for "started" and again, possibly minutes later, for
+        the item's final state. If that second record() overwrites the row
+        (resetting uploaded=0) while an earlier pending_outcomes() fetch of
+        the stale "started" row is still in flight to the cloud, acking by
+        attempt_id alone would mark the freshly-overwritten final-state row
+        uploaded even though the cloud only ever received the stale one --
+        silently dropping the item's real completion/failure. Requiring the
+        exact rowid leaves a row that changed mid-flight pending, so it is
+        correctly resent.
+        """
+        if not outcomes:
             return
         self._ensure_journal()
         with self._connect() as conn:
-            conn.executemany("UPDATE journal SET uploaded=1 WHERE attempt_id=?",
-                             [(v,) for v in attempt_ids])
+            conn.executemany(
+                "UPDATE journal SET uploaded=1 WHERE attempt_id=? AND rowid=?",
+                [(o["attempt_id"], o["_rowid"]) for o in outcomes])
 
     def set_clock_qualified(self, qualified: bool, skew_s: float = 0.0) -> None:
         payload = {"qualified": bool(qualified), "skew_s": float(skew_s),

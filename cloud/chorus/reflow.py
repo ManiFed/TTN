@@ -376,6 +376,13 @@ def greedy_place(contexts: dict, opps_by_node: dict, cells_by_target: dict,
         for opp in remaining_opps:
             if opp.target_id in placed:
                 continue
+            # Mirrors assign.assign()'s node_count >= ctx.max_targets check --
+            # without it, a single dark node with spare time can be handed far
+            # more reflow targets in one night than scheduler.max_targets_per_night
+            # permits, since each greedy_place call starts from a fresh _State
+            # with no shared occupancy/count ledger between reflow events.
+            if state.node_count[opp.node_id] >= contexts[opp.node_id].max_targets:
+                continue
             slot, val, tl = assign_mod.best_slot(opp, state, cells_by_target, ch)
             if slot is None or val < eps:
                 continue
