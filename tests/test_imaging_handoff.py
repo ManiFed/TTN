@@ -231,6 +231,33 @@ class ImagingSafetyGapTest(unittest.TestCase):
             dash._imaging_state["running"] = True
         self.assertTrue(dash._science_capture_active())
 
+    def test_imaging_owned_stacking_does_not_stop_itself_at_frame_one(self):
+        """Making _science_capture_active() see the imaging handoff (above)
+        must not turn around and gate the handoff's own stacking thread:
+        _imaging_state["running"] is True for the whole handoff, so an
+        ungated _preview_commands_allowed() check inside _run_stacking_bg
+        would see itself as the conflict and quit after frame one -- every
+        unattended imaging night producing zero stacked frames."""
+        with dash._imaging_lock:
+            dash._imaging_state["running"] = True
+        fake_stacker = MagicMock()
+        fake_stacker.frames_stacked = 1
+        fake_stacker.frames_total = 1
+        fake_stacker.frames_rejected = 0
+        fake_stacker.snr_gain.return_value = 1.0
+        fake_stacker.add_frame.return_value = {
+            "reason": "ok", "frames_stacked": 1, "offset": (0.0, 0.0),
+        }
+        cam = MagicMock()
+        cam.image_array.return_value = [[0]]
+        with patch.object(dash, "LiveStacker", return_value=fake_stacker), \
+             patch.object(dash, "_cam", cam):
+            dash._run_stacking_bg(1, 0.01, 1, export_science=False,
+                                  is_science_capture=True)
+        with dash._stack_lock:
+            self.assertEqual(dash._stack_state["frames_stacked"], 1)
+            self.assertIsNone(dash._stack_state["error"])
+
     def test_stand_down_mid_imaging_aborts_and_parks(self):
         with dash._imaging_lock:
             dash._imaging_state["running"] = True

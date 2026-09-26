@@ -2648,8 +2648,17 @@ def _run_stacking_bg(
     export_science: bool = True,
     target_name: str | None = None,
     enqueue_photometry: bool = True,
+    is_science_capture: bool = False,
 ) -> None:
     """Background thread: capture N sub-frames and live-stack them.
+
+    *is_science_capture* is True when this stacking run **is** the science
+    capture (the unattended imaging handoff), not a preview deferring to one.
+    ``_science_capture_active()`` reports True for the whole handoff via
+    ``_imaging_state["running"]`` (issues #116/#120/#123/#131/#135 need that,
+    to keep the mount-hijack guards up), so this run must not also gate
+    itself on that same flag -- it would see itself as the conflict and stop
+    after its very first frame.
 
     When *export_science* is True (issue #132 / Starfront 2026-09-20), write
     the coadd under fits_export/ and optionally enqueue photometry so faint
@@ -2681,7 +2690,7 @@ def _run_stacking_bg(
             if _cancelled():
                 logger.info("Live stacking cancelled after %d frames", stacker.frames_stacked)
                 break
-            if not _preview_commands_allowed():
+            if not is_science_capture and not _preview_commands_allowed():
                 logger.warning(
                     "Live stacking: science capture became active — stopping "
                     "preview frames (issue #116)"
@@ -3452,6 +3461,7 @@ def _run_imaging_block(target: Optional[dict] = None) -> None:
             target=_run_stacking_bg,
             args=(n_frames, exposure_s,
                   max(1, _num(stacking, "preview_every", 1, int))),
+            kwargs={"is_science_capture": True},
             daemon=True, name="imaging-stack",
         ).start()
     except Exception as exc:
