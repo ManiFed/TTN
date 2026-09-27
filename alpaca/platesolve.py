@@ -352,6 +352,10 @@ def solve_image_array(
     from astropy.io import fits
     from astropy.wcs import WCS
     from src.photometry import _run_astrometry_net, _run_astap
+    try:
+        from src.photometry import astap_priority, ASTAP_INTERACTIVE
+    except ImportError:  # mixed builds: no arbiter → plain call
+        astap_priority = None
 
     data = np.asarray(image_array, dtype=np.float32)
     if data.ndim == 3:
@@ -371,7 +375,16 @@ def solve_image_array(
             ok = _run_astrometry_net(tmp_path, ra_deg, dec_deg,
                                      solver_path, search_radius, pixel_scale)
         else:
-            astap_result = _run_astap(tmp_path, ra_deg, dec_deg, solver_path, search_radius)
+            # Centering is interactive: it jumps any queued photometry solve
+            # even when called from the photometry worker (SNR-collapse
+            # recenter) — Starfront 2026-09-26 Error 1279 under backlog.
+            if astap_priority is not None:
+                with astap_priority(ASTAP_INTERACTIVE):
+                    astap_result = _run_astap(tmp_path, ra_deg, dec_deg,
+                                              solver_path, search_radius)
+            else:
+                astap_result = _run_astap(tmp_path, ra_deg, dec_deg,
+                                          solver_path, search_radius)
             ok = bool(astap_result)
             if not ok:
                 _LAST_SOLVE_ERROR = getattr(astap_result, "message", None)

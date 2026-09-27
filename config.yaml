@@ -86,6 +86,12 @@ photometry:
   aperture_factor: 1.5
   astap_path: astap
   astap_search_radius: 10
+  # Photometry queue (Starfront 2026-09-26): jobs queued, or FITS written, more
+  # than this many hours ago are purged as an earlier night's backlog (0 = off).
+  # queue_max_age_hours: 12
+  # Seconds the photometry worker defers to a running live stack / auto-centering
+  # before processing one job anyway.
+  # queue_yield_to_live_max_s: 1200
   # BJD is stamped at mid-exposure (DATE-OBS + EXPTIME/2, FITS convention).
   # Set false for devices whose DATE-OBS is already the mid- or end-point.
   bjd_midpoint_correction: true

@@ -158,6 +158,7 @@ _state: dict[str, Any] = {
         "last_rejection": None,  # run_pipeline_ex rejection when result is None
         "running":     False,
         "queued":      0,      # FITS paths waiting in the photometry queue
+        "queue":       None,   # _PhotometryQueue.summary() (priority mix, purges)
         "history":     [],     # rolling last 20 measurements this session
     },
     "aavso": {
@@ -167,11 +168,200 @@ _state: dict[str, Any] = {
 }
 _state_lock = threading.Lock()
 
-# Bounded FIFO for photometry jobs.  A single worker thread drains this queue
+# Bounded queue for photometry jobs.  A single worker thread drains this queue
 # so rapid captures don't race each other and multi-frame sequences don't lose
 # measurements while the previous plate-solve is still running.
 _PHOT_QUEUE_MAX = 50
-_phot_queue: queue.Queue = queue.Queue(maxsize=_PHOT_QUEUE_MAX)
+
+# Starfront 2026-09-26 (NodeAgent 1.0.92): the queue sat at ~49 stale jobs from
+# earlier nights, so tonight's SS Cyg science coadds waited behind the backlog
+# (or were dropped at the cap) and never produced a magnitude, while the
+# backlog's ASTAP solves contended with live-stack centering (Error 1279).
+# Jobs now carry a priority and an enqueue time: science frames NodeAgent
+# captured tonight go first, stale jobs are purged, and a full queue evicts
+# the oldest lowest-priority backlog job instead of dropping fresh science.
+_PHOT_PRIO_PINNED = -1   # operator-prioritized via API / MCP
+_PHOT_PRIO_SCIENCE = 0   # science coadd / named-target frames NodeAgent captured
+_PHOT_PRIO_CAPTURE = 1   # other NodeAgent frames (fits_export/, data/fits/)
+_PHOT_PRIO_WATCHER = 2   # watcher-discovered frames (MyWorks subs, backlog)
+_PHOT_PRIO_LABELS = {
+    _PHOT_PRIO_PINNED: "pinned",
+    _PHOT_PRIO_SCIENCE: "science",
+    _PHOT_PRIO_CAPTURE: "capture",
+    _PHOT_PRIO_WATCHER: "watcher",
+}
+# A queued job older than this (or a FITS last written longer ago) belongs to
+# an earlier night and is purged. photometry.queue_max_age_hours; 0 disables.
+_PHOT_QUEUE_MAX_AGE_H_DEFAULT = 12.0
+# A FITS mtime further back than this is not trusted as "written on an earlier
+# night": Seestar MyWorks files carry the scope's own clock, which can reset
+# to a date years off when it was not synced from the app. Such files are not
+# refused on mtime alone (enqueue-time expiry still bounds them in the queue).
+_PHOT_FILE_MTIME_TRUST_MAX_S = 30 * 86400.0
+# How long the worker defers to a running live stack / auto-centering before
+# processing one job anyway. photometry.queue_yield_to_live_max_s.
+_PHOT_YIELD_TO_LIVE_MAX_S_DEFAULT = 1200.0
+
+
+def _photometry_job_path(job: object) -> str:
+    if isinstance(job, dict):
+        return str(job.get("path") or "")
+    return str(job or "")
+
+
+class _PhotometryQueue:
+    """Bounded priority queue of photometry jobs (FIFO within a priority).
+
+    Drop-in for the ``queue.Queue`` subset the worker used (``put_nowait``,
+    ``get``, ``qsize``, ``task_done``) plus ``purge`` / ``clear`` /
+    ``summary`` / ``items`` for the status + MCP surface. Job payloads are
+    unchanged (a path string, or a dict with path + target overrides).
+
+    Callers compute anything that touches config, ``_state_lock`` or the
+    filesystem *before* calling in: this class's lock is never held while
+    another lock is taken, so ``_state_lock`` → queue ordering is safe.
+    """
+
+    def __init__(self, maxsize: int):
+        self.maxsize = int(maxsize)
+        self._cond = threading.Condition()
+        self._entries: list[dict] = []
+        self._seq = 0
+        self._inflight_key: str | None = None
+        self.purged_total = 0
+        self.evicted_total = 0
+        self.last_purge: dict | None = None
+
+    def qsize(self) -> int:
+        with self._cond:
+            return len(self._entries)
+
+    def put_nowait(self, job: object, *, priority: int | None = None,
+                   key: str | None = None,
+                   enqueued_at: float | None = None) -> dict:
+        """Queue *job*; returns ``{"status": queued|merged, "evicted": [...]}``.
+
+        A job whose *key* (realpath) is already queued is merged instead of
+        duplicated — the fits_export watcher and the expose/stack path both
+        enqueue the same frame. Raises ``queue.Full`` only when the queue is
+        full of jobs at least as important as this one.
+        """
+        path = _photometry_job_path(job)
+        if priority is None:
+            priority = _PHOT_PRIO_WATCHER
+        if key is None:
+            key = path
+        now = time.time() if enqueued_at is None else float(enqueued_at)
+        with self._cond:
+            # The watcher's plain-path duplicate of the frame being solved
+            # right now adds nothing; a dict job (target identity) still queues.
+            if key == self._inflight_key and not isinstance(job, dict):
+                return {"status": "merged", "evicted": []}
+            for entry in self._entries:
+                if entry["key"] == key:
+                    if priority < entry["priority"]:
+                        entry["priority"] = priority
+                    # Prefer the payload that carries target identity/coords.
+                    if isinstance(job, dict) and not isinstance(entry["job"], dict):
+                        entry["job"] = job
+                    return {"status": "merged", "evicted": []}
+            evicted: list[object] = []
+            if len(self._entries) >= self.maxsize:
+                worst = max(self._entries,
+                            key=lambda e: (e["priority"], -e["seq"]))
+                if worst["priority"] <= priority:
+                    raise queue.Full
+                self._entries.remove(worst)
+                self.evicted_total += 1
+                evicted.append(worst["job"])
+            self._seq += 1
+            self._entries.append({
+                "job": job, "path": path, "key": key,
+                "priority": int(priority), "enqueued_at": now,
+                "seq": self._seq,
+            })
+            self._cond.notify()
+            return {"status": "queued", "evicted": evicted}
+
+    def get(self, block: bool = True, timeout: float | None = None) -> object:
+        return self.get_entry(block=block, timeout=timeout)["job"]
+
+    def get_entry(self, block: bool = True,
+                  timeout: float | None = None) -> dict:
+        with self._cond:
+            if block:
+                deadline = None if timeout is None else time.monotonic() + timeout
+                while not self._entries:
+                    remaining = None if deadline is None else deadline - time.monotonic()
+                    if remaining is not None and remaining <= 0:
+                        raise queue.Empty
+                    self._cond.wait(remaining)
+            elif not self._entries:
+                raise queue.Empty
+            best = min(self._entries, key=lambda e: (e["priority"], e["seq"]))
+            self._entries.remove(best)
+            self._inflight_key = best["key"]
+            return dict(best)
+
+    def task_done(self) -> None:  # queue.Queue compatibility; job finished
+        with self._cond:
+            self._inflight_key = None
+
+    def items(self) -> list[dict]:
+        with self._cond:
+            ordered = sorted(self._entries, key=lambda e: (e["priority"], e["seq"]))
+            return [dict(e) for e in ordered]
+
+    def remove(self, seqs: set, reasons: dict | None = None) -> list[dict]:
+        """Remove entries by seq (after an out-of-lock staleness check)."""
+        with self._cond:
+            gone = [e for e in self._entries if e["seq"] in seqs]
+            self._entries = [e for e in self._entries if e["seq"] not in seqs]
+            if gone:
+                self.purged_total += len(gone)
+                counts: dict[str, int] = {}
+                for e in gone:
+                    r = (reasons or {}).get(e["seq"], "cleared")
+                    counts[r] = counts.get(r, 0) + 1
+                self.last_purge = {"at": time.time(), "removed": len(gone),
+                                   "reasons": counts}
+            return gone
+
+    def prioritize(self, seqs: set) -> list[dict]:
+        """Pin entries (by seq) ahead of everything, keeping their order."""
+        with self._cond:
+            hit = [e for e in self._entries if e["seq"] in seqs]
+            for e in hit:
+                e["priority"] = _PHOT_PRIO_PINNED
+            return [dict(e) for e in hit]
+
+    def clear(self) -> list[dict]:
+        with self._cond:
+            seqs = {e["seq"] for e in self._entries}
+        return self.remove(seqs)
+
+    def summary(self, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        with self._cond:
+            by_prio = {label: 0 for label in _PHOT_PRIO_LABELS.values()}
+            oldest = None
+            for e in self._entries:
+                label = _PHOT_PRIO_LABELS.get(e["priority"], str(e["priority"]))
+                by_prio[label] = by_prio.get(label, 0) + 1
+                if oldest is None or e["enqueued_at"] < oldest:
+                    oldest = e["enqueued_at"]
+            return {
+                "size": len(self._entries),
+                "max": self.maxsize,
+                "by_priority": by_prio,
+                "oldest_age_s": round(now - oldest, 1) if oldest is not None else None,
+                "purged_total": self.purged_total,
+                "evicted_total": self.evicted_total,
+                "last_purge": dict(self.last_purge) if self.last_purge else None,
+            }
+
+
+_phot_queue: _PhotometryQueue = _PhotometryQueue(maxsize=_PHOT_QUEUE_MAX)
 
 # ── SNR-collapse tracking (issue #96) ───────────────────────────────────────
 # Per-target memory of the last quality=poor attempt, so a second poor result
@@ -534,11 +724,215 @@ def _notify_commissioning_fits(path: str) -> None:
     ).start()
 
 
+def _phot_queue_max_age_s(cfg: dict | None = None) -> float:
+    cfg = cfg if cfg is not None else _load_config()
+    try:
+        hours = float((cfg.get("photometry") or {}).get(
+            "queue_max_age_hours", _PHOT_QUEUE_MAX_AGE_H_DEFAULT))
+    except (TypeError, ValueError):
+        hours = _PHOT_QUEUE_MAX_AGE_H_DEFAULT
+    return max(0.0, hours) * 3600.0
+
+
+def _photometry_job_priority(job: object) -> int:
+    """Science coadds / named-target captures first, watcher backlog last."""
+    path = _photometry_job_path(job)
+    if "_coadd" in os.path.basename(path).lower():
+        return _PHOT_PRIO_SCIENCE
+    if isinstance(job, dict) and (
+            job.get("target_name") or job.get("auid")
+            or job.get("ra_deg") is not None):
+        return _PHOT_PRIO_SCIENCE
+    try:
+        norm = os.path.normpath(os.path.abspath(path))
+        data_fits = os.path.normpath(os.path.abspath(os.path.join("data", "fits")))
+        if norm.startswith(data_fits + os.sep):
+            return _PHOT_PRIO_CAPTURE
+    except Exception:
+        pass
+    if _fits_evidence_source(path) == "fits_export":
+        return _PHOT_PRIO_CAPTURE
+    return _PHOT_PRIO_WATCHER
+
+
+def _photometry_job_stale_reason(path: str, *, enqueued_at: float | None = None,
+                                 now: float | None = None,
+                                 max_age_s: float | None = None) -> str | None:
+    """Why a queued job should be dropped instead of solved, or None to keep.
+
+    ``expired`` (queued longer than max age), ``missing`` (FITS gone) or
+    ``old_file`` (FITS last written longer than max age ago — MyWorks frames
+    from an earlier night have no dated directory). A transient stat error
+    (SMB hiccup) keeps the job.
+
+    ``previous_night`` (fits_export/<older date>, issue #123) applies only
+    when there is no enqueue time: a job accepted before 00:00 UTC must not
+    be purged seconds later just because its dated directory rolled over
+    (Codex P1 on #145) — enqueue already refuses previous-night paths.
+    """
+    if not path:
+        return "no_path"
+    if enqueued_at is None and _is_previous_night_fits(path):
+        return "previous_night"
+    now = time.time() if now is None else now
+    max_age_s = _phot_queue_max_age_s() if max_age_s is None else max_age_s
+    if max_age_s > 0 and enqueued_at is not None and now - enqueued_at > max_age_s:
+        return "expired"
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return None
+    if max_age_s > 0 and max_age_s < now - st.st_mtime <= _PHOT_FILE_MTIME_TRUST_MAX_S:
+        return "old_file"
+    return None
+
+
+def _sync_phot_queue_state() -> None:
+    """Mirror queue depth (+ summary) into _state for /api/status + MCP."""
+    try:
+        size = _phot_queue.qsize()
+    except Exception:
+        return
+    summary = None
+    if hasattr(_phot_queue, "summary"):
+        try:
+            summary = _phot_queue.summary()
+            summary["dead_lettered"] = len(_photometry_dead_letter_list())
+        except Exception:
+            summary = None
+    with _state_lock:
+        _state["photometry"]["queued"] = size
+        if summary is not None:
+            _state["photometry"]["queue"] = summary
+
+
+def _purge_stale_photometry_jobs(context: str = "enqueue") -> list[dict]:
+    """Drop stale jobs (earlier night, expired, FITS gone). Returns removed entries."""
+    if not hasattr(_phot_queue, "items") or not hasattr(_phot_queue, "remove"):
+        return []
+    entries = _phot_queue.items()
+    if not entries:
+        return []
+    now = time.time()
+    max_age_s = _phot_queue_max_age_s()
+    reasons: dict = {}
+    for e in entries:
+        reason = ("dead_letter" if _photometry_dead_lettered(e.get("key") or "")
+                  else _photometry_job_stale_reason(
+                      e.get("path") or "", enqueued_at=e.get("enqueued_at"),
+                      now=now, max_age_s=max_age_s,
+                  ))
+        if reason:
+            reasons[e["seq"]] = reason
+    if not reasons:
+        return []
+    gone = _phot_queue.remove(set(reasons), reasons)
+    if gone:
+        counts: dict[str, int] = {}
+        for e in gone:
+            r = reasons.get(e["seq"], "cleared")
+            counts[r] = counts.get(r, 0) + 1
+        logger.warning(
+            "Photometry queue: purged %d stale job(s) on %s %s",
+            len(gone), context, counts,
+        )
+        _telemetry.event("photometry_queue_purged", severity="info",
+                         detail={"removed": len(gone), "context": context,
+                                 "reasons": counts})
+        _sync_phot_queue_state()
+    return gone
+
+
+# ── Dead letter (Starfront 2026-09-26) ──────────────────────────────────────
+# Old HD 209458 b frames failed every attempt (VSP HTTP 400, same-file export
+# no-op) yet kept coming back and holding queue slots. A frame that has failed
+# _PHOT_MAX_ATTEMPTS times is refused (and purged from the queue) until the
+# dead letter ages out after queue_max_age_hours or an operator clears it
+# (POST /api/photometry/queue/clear, MCP). No filesystem access here: the key
+# is only compared, never opened.
+_PHOT_MAX_ATTEMPTS = 2
+_PHOT_DEAD_LETTER_MAX = 200
+_phot_failures_lock = threading.Lock()
+_phot_failures: dict[str, dict] = {}   # realpath -> {count, reason, file, at}
+
+
+def _phot_key(fits_path: str) -> str:
+    try:
+        return os.path.realpath(fits_path)
+    except Exception:
+        return str(fits_path)
+
+
+def _record_photometry_outcome(fits_path: str, ok: bool, reason: str | None) -> None:
+    key = _phot_key(fits_path)
+    with _phot_failures_lock:
+        if ok:
+            _phot_failures.pop(key, None)
+            return
+        rec = _phot_failures.get(key)
+        if rec is None:
+            rec = {"count": 0, "file": os.path.basename(key)}
+        rec["count"] = int(rec.get("count", 0)) + 1
+        rec["reason"] = reason
+        rec["at"] = time.time()
+        _phot_failures[key] = rec
+        if len(_phot_failures) > _PHOT_DEAD_LETTER_MAX:
+            oldest = sorted(_phot_failures.items(), key=lambda kv: kv[1].get("at", 0))
+            for k, _ in oldest[:len(_phot_failures) - _PHOT_DEAD_LETTER_MAX]:
+                _phot_failures.pop(k, None)
+        count = rec["count"]
+    if count >= _PHOT_MAX_ATTEMPTS:
+        logger.warning(
+            "Photometry: %s failed %d times (%s) — dead-lettered; it will not "
+            "be re-queued until the FITS changes or the dead letter is cleared",
+            os.path.basename(key), count, reason,
+        )
+        _telemetry.event("photometry_dead_lettered", severity="warning",
+                         detail={"file": os.path.basename(key), "attempts": count,
+                                 "reason": reason})
+
+
+def _photometry_dead_lettered(key: str) -> dict | None:
+    max_age_s = _phot_queue_max_age_s()
+    with _phot_failures_lock:
+        rec = _phot_failures.get(key)
+        if not rec:
+            return None
+        if max_age_s > 0 and time.time() - float(rec.get("at") or 0) > max_age_s:
+            _phot_failures.pop(key, None)   # aged out → one more chance
+            return None
+        if int(rec.get("count", 0)) < _PHOT_MAX_ATTEMPTS:
+            return None
+        return dict(rec)
+
+
+def _photometry_dead_letter_list() -> list[dict]:
+    with _phot_failures_lock:
+        return [
+            {"file": r.get("file"), "path": k, "attempts": r.get("count"),
+             "reason": r.get("reason"), "at": r.get("at")}
+            for k, r in _phot_failures.items()
+            if int(r.get("count", 0)) >= _PHOT_MAX_ATTEMPTS
+        ]
+
+
+def _clear_photometry_dead_letter(match: str = "") -> int:
+    m = str(match or "").strip().lower()
+    with _phot_failures_lock:
+        keys = [k for k, r in _phot_failures.items()
+                if not m or m in k.lower() or m in str(r.get("reason") or "").lower()]
+        for k in keys:
+            _phot_failures.pop(k, None)
+    return len(keys)
+
+
 def _enqueue_photometry(fits_path: str, target_name: str | None = None,
                         auid: str | None = None,
                         ra_deg: float | None = None,
-                        dec_deg: float | None = None) -> None:
-    """Submit a FITS file for photometry, dropping it if the queue is full.
+                        dec_deg: float | None = None) -> str:
+    """Submit a FITS file for photometry.
 
     ``target_name`` / ``auid`` (optional) override FITS OBJECT for VSP / AAVSO
     identity when the header still says ``Manual RA …`` (issues #89 / #79).
@@ -555,6 +949,15 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
 
     Issue #123: refuse previous-night fits_export/YYYY-MM-DD paths so a stale
     frame cannot be treated as tonight's science / AAVSO submission.
+
+    Starfront 2026-09-26: purge stale queued jobs first, then queue by
+    priority (science coadds / named captures ahead of watcher backlog; a
+    full queue evicts backlog rather than dropping science). Watcher-fed
+    frames written on an earlier night are refused by
+    ``_enqueue_watcher_photometry`` before they get here.
+
+    Returns ``queued`` / ``merged`` on success, or ``refused_previous_night``
+    / ``refused_dead_letter`` / ``dropped_full``.
     """
     if _is_previous_night_fits(fits_path):
         logger.error(
@@ -568,7 +971,15 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
                     "night": _fits_path_night_utc(fits_path),
                     "tonight": _fits_export_night_utc()},
         )
-        return
+        return "refused_previous_night"
+    dead = _photometry_dead_lettered(_phot_key(fits_path))
+    if dead is not None:
+        logger.info(
+            "Photometry enqueue refused for dead-lettered %s (%d failed "
+            "attempts: %s)", os.path.basename(fits_path),
+            int(dead.get("count", 0)), dead.get("reason"),
+        )
+        return "refused_dead_letter"
     _notify_commissioning_fits(fits_path)
     override = _normalize_target_override(target_name)
     override_auid = _normalize_target_override(auid)
@@ -585,10 +996,31 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
             job["dec_deg"] = float(dec_deg)
     else:
         job = fits_path
+    _purge_stale_photometry_jobs("enqueue")
+    status = "queued"
     try:
-        _phot_queue.put_nowait(job)
-        with _state_lock:
-            _state["photometry"]["queued"] = _phot_queue.qsize()
+        if isinstance(_phot_queue, _PhotometryQueue):
+            try:
+                key = os.path.realpath(fits_path)
+            except Exception:
+                key = fits_path
+            res = _phot_queue.put_nowait(
+                job, priority=_photometry_job_priority(job), key=key)
+            status = str(res.get("status") or "queued")
+            for dropped in res.get("evicted") or []:
+                logger.warning(
+                    "Photometry queue full — evicted backlog job %s for %s",
+                    os.path.basename(_photometry_job_path(dropped)),
+                    os.path.basename(fits_path),
+                )
+                _telemetry.event(
+                    "photometry_queue_evicted", severity="warning",
+                    detail={"evicted": os.path.basename(_photometry_job_path(dropped)),
+                            "for": os.path.basename(fits_path)},
+                )
+        else:
+            _phot_queue.put_nowait(job)
+        _sync_phot_queue_state()
     except queue.Full:
         logger.warning(
             "Photometry queue full (%d items) — dropping %s",
@@ -597,46 +1029,130 @@ def _enqueue_photometry(fits_path: str, target_name: str | None = None,
         _telemetry.event("photometry_queue_full", severity="warning",
                          detail={"dropped": os.path.basename(fits_path),
                                  "queue_max": _PHOT_QUEUE_MAX})
+        return "dropped_full"
+    return status
 
 
-def _phot_worker() -> None:
-    """Single daemon thread: process FITS files for photometry one at a time."""
-    while True:
+def _enqueue_watcher_photometry(fits_path: str) -> str:
+    """Watcher entry point: refuse FITS written on an earlier night, then enqueue.
+
+    MyWorks frames have no dated directory, so a watcher event for an old
+    frame (share remount / sync) would otherwise queue an earlier night's
+    work ahead of tonight's (Starfront 2026-09-26). Watcher paths come from
+    the filesystem; operator/API paths are validated by their own routes.
+    """
+    max_age_s = _phot_queue_max_age_s()
+    if max_age_s > 0:
         try:
-            job = _phot_queue.get(block=True, timeout=1.0)
-        except queue.Empty:
-            continue
-        with _state_lock:
-            _state["photometry"]["queued"] = _phot_queue.qsize()
-        target_name = None
-        auid = None
-        ra_deg = None
-        dec_deg = None
-        if isinstance(job, dict):
-            fits_path = str(job.get("path") or "")
-            target_name = _normalize_target_override(job.get("target_name"))
-            auid = _normalize_target_override(job.get("auid"))
-            try:
-                ra_deg = float(job["ra_deg"]) if job.get("ra_deg") is not None else None
-            except (TypeError, ValueError):
-                ra_deg = None
-            try:
-                dec_deg = float(job["dec_deg"]) if job.get("dec_deg") is not None else None
-            except (TypeError, ValueError):
-                dec_deg = None
-        else:
-            fits_path = str(job)
+            age_s = time.time() - os.stat(fits_path).st_mtime
+        except OSError:
+            age_s = None
+        if age_s is not None and max_age_s < age_s <= _PHOT_FILE_MTIME_TRUST_MAX_S:
+            logger.warning(
+                "Photometry: skipping watcher FITS %s written %.1f h ago "
+                "(> queue_max_age_hours) — earlier night's frame",
+                fits_path, age_s / 3600.0,
+            )
+            _telemetry.event(
+                "photometry_enqueue_refused_stale", severity="warning",
+                detail={"path": os.path.basename(fits_path),
+                        "age_h": round(age_s / 3600.0, 2)},
+            )
+            return "refused_stale"
+    return _enqueue_photometry(fits_path)
+
+
+def _live_capture_busy() -> bool:
+    """True while a live stack or auto-centering run needs the CPU / ASTAP."""
+    with _stack_lock:
+        if _stack_state.get("running"):
+            return True
+    with _center_lock:
+        return bool(_center_state.get("running"))
+
+
+def _phot_yield_to_live_max_s() -> float:
+    try:
+        return max(0.0, float((_load_config().get("photometry") or {}).get(
+            "queue_yield_to_live_max_s", _PHOT_YIELD_TO_LIVE_MAX_S_DEFAULT)))
+    except (TypeError, ValueError):
+        return _PHOT_YIELD_TO_LIVE_MAX_S_DEFAULT
+
+
+_phot_yield_started: float | None = None
+
+
+def _phot_worker_step(timeout: float = 1.0) -> bool:
+    """One worker iteration; returns True when a job was taken off the queue.
+
+    Defers (up to ``queue_yield_to_live_max_s``) while a live stack or
+    auto-centering is running so backlog solves do not starve them, purges
+    stale jobs, then runs the highest-priority job with background ASTAP
+    priority (see ``src.photometry.astap_priority``).
+    """
+    global _phot_yield_started
+    if _phot_queue.qsize() and _live_capture_busy():
+        now = time.monotonic()
+        if _phot_yield_started is None:
+            _phot_yield_started = now
+            logger.info("Photometry worker yielding to live stack / centering")
+        if now - _phot_yield_started < _phot_yield_to_live_max_s():
+            time.sleep(min(timeout, 1.0))
+            return False
+        logger.warning("Photometry worker: live capture still busy after "
+                       "yield budget — processing one job")
+    _phot_yield_started = None
+    _purge_stale_photometry_jobs("dequeue")
+    try:
+        job = _phot_queue.get(block=True, timeout=timeout)
+    except queue.Empty:
+        return False
+    _sync_phot_queue_state()
+    target_name = None
+    auid = None
+    ra_deg = None
+    dec_deg = None
+    if isinstance(job, dict):
+        fits_path = str(job.get("path") or "")
+        target_name = _normalize_target_override(job.get("target_name"))
+        auid = _normalize_target_override(job.get("auid"))
         try:
-            if fits_path:
-                _run_photometry_bg(
+            ra_deg = float(job["ra_deg"]) if job.get("ra_deg") is not None else None
+        except (TypeError, ValueError):
+            ra_deg = None
+        try:
+            dec_deg = float(job["dec_deg"]) if job.get("dec_deg") is not None else None
+        except (TypeError, ValueError):
+            dec_deg = None
+    else:
+        fits_path = str(job)
+    try:
+        if fits_path:
+            from src.photometry import astap_priority, ASTAP_BACKGROUND
+            with astap_priority(ASTAP_BACKGROUND):
+                outcome = _run_photometry_bg(
                     fits_path,
                     target_name=target_name or None,
                     auid=auid or None,
                     ra_deg=ra_deg,
                     dec_deg=dec_deg,
                 )
-        finally:
-            _phot_queue.task_done()
+            if isinstance(outcome, tuple) and len(outcome) == 2:
+                _record_photometry_outcome(fits_path, bool(outcome[0]), outcome[1])
+    finally:
+        _phot_queue.task_done()
+    return True
+
+
+def _phot_worker() -> None:
+    """Single daemon thread: process FITS files for photometry one at a time."""
+    _purge_stale_photometry_jobs("startup")
+    while True:
+        try:
+            _phot_worker_step(timeout=1.0)
+        except Exception as exc:  # never let the worker thread die
+            logger.error("Photometry worker iteration failed: %s", exc, exc_info=True)
+            time.sleep(1.0)
 
 # ── Schedule execution state ───────────────────────────────────────────────────
 
@@ -1281,7 +1797,7 @@ def _on_new_fits(info: dict) -> None:
         phot_enabled = _state["photometry"]["enabled"]
 
     if phot_enabled:
-        _enqueue_photometry(path)
+        _enqueue_watcher_photometry(path)
 
 
 def _maybe_aavso_submit(result: dict, cfg: dict) -> dict:
@@ -1627,7 +2143,11 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
     coordinates (issue #116). They override both stale config coords and FITS
     RA/DEC written from a drifted mount pointing, so empty-field recenter
     aims at the named target rather than Vega/Cygnus.
+
+    Returns ``(ok, reason)`` so the queue worker can dead-letter a frame
+    that keeps failing (Starfront 2026-09-26); callers may ignore it.
     """
+    outcome: tuple = (False, "pipeline returned no result")
     with _state_lock:
         _state["photometry"]["running"] = True
     try:
@@ -1668,7 +2188,8 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
         if (cfg.get("photometry", {}).get("survey_enabled", False)
                 and not _frame_has_target(fits_path, cfg)):
             _run_survey_only(fits_path, cfg)
-            return
+            outcome = (True, None)
+            return outcome
         # Prefer run_pipeline_ex so rejection stage/reason is auditable when the
         # frame fails after ASTAP (fallback WCS / comps / ZP) — issue #79.
         try:
@@ -1737,6 +2258,7 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                 # nights are auditable and can trigger recenter (issue #116).
                 _state["photometry"]["last_rejection"] = rejection
         if result:
+            outcome = (True, None)
             logger.info(
                 "Photometry: %s  mag=%.3f±%.3f  SNR=%.1f  quality=%s",
                 result["target_name"], result["magnitude"],
@@ -1805,6 +2327,9 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
                     )
                 _maybe_report_characterization()
         else:
+            outcome = (False, str((rejection or {}).get("reason_code")
+                                  or (rejection or {}).get("message")
+                                  or "pipeline returned no result")[:200])
             logger.warning("Photometry pipeline returned no result for %s",
                            os.path.basename(fits_path))
             _telemetry.event("photometry_failed", severity="warning",
@@ -1814,6 +2339,7 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
             if rejection:
                 _handle_empty_field_rejection(rejection, fits_path, cfg)
     except Exception as exc:
+        outcome = (False, f"crashed: {exc}"[:200])
         logger.error("Photometry pipeline crashed: %s", exc)
         _telemetry.event("photometry_failed", severity="error",
                          detail={"file": os.path.basename(fits_path),
@@ -1821,6 +2347,7 @@ def _run_photometry_bg(fits_path: str, target_name: str | None = None,
     finally:
         with _state_lock:
             _state["photometry"]["running"] = False
+    return outcome
 
 
 # ── Cloud communicator ─────────────────────────────────────────────────────────
@@ -3680,15 +4207,23 @@ def _poll_loop() -> None:
                     logger.info("Telescope connection restored")
                 _tel_connected_prev = True
             except Exception as exc:
-                with _state_lock:
-                    _tel_host = _state["server"]["address"] if _state["server"] else "?"
-                    _tel_port = _state["server"]["port"] if _state["server"] else 0
-                    _state["telescope"]["connected"] = False
-                    _state["telescope"]["error"] = _friendly_conn_error(
-                        "telescope", _tel_host, _tel_port, exc)
-                if _tel_connected_prev is True:
-                    logger.warning("Telescope connection lost: %s", exc)
-                _tel_connected_prev = False
+                from alpaca.telescope import is_transient_position_error
+                if is_transient_position_error(exc):
+                    # Seestar 1279 missing 'RA' key even after Telescope's own
+                    # retries: keep the last position and do not report a
+                    # connect failure (Starfront 2026-09-26, related #133).
+                    logger.warning("Telescope position read transient (not a "
+                                   "disconnect): %s", exc)
+                else:
+                    with _state_lock:
+                        _tel_host = _state["server"]["address"] if _state["server"] else "?"
+                        _tel_port = _state["server"]["port"] if _state["server"] else 0
+                        _state["telescope"]["connected"] = False
+                        _state["telescope"]["error"] = _friendly_conn_error(
+                            "telescope", _tel_host, _tel_port, exc)
+                    if _tel_connected_prev is True:
+                        logger.warning("Telescope connection lost: %s", exc)
+                    _tel_connected_prev = False
 
         if cam_enabled and _cam is not None:
             try:
@@ -5225,7 +5760,124 @@ def api_photometry():
             "history":     list(_state["photometry"]["history"]),
             "queued":      _state["photometry"].get("queued", 0),
         }
+    snap.update(_photometry_queue_report(include_items=False))
     return jsonify(snap)
+
+
+def _photometry_queue_report(include_items: bool = False) -> dict:
+    """Queue summary (+ optional items) and ASTAP slot state for API / MCP."""
+    out: dict = {}
+    try:
+        out["queue"] = _phot_queue.summary()
+    except Exception:
+        out["queue"] = {"size": _phot_queue.qsize(), "max": _PHOT_QUEUE_MAX}
+    dead = _photometry_dead_letter_list()
+    out["queue"]["dead_lettered"] = len(dead)
+    try:
+        from src.photometry import astap_status
+        out["astap"] = astap_status()
+    except Exception:
+        pass
+    if include_items:
+        now = time.time()
+        items = []
+        try:
+            entries = _phot_queue.items()
+        except Exception:
+            entries = []
+        for e in entries:
+            job = e.get("job")
+            items.append({
+                "file": os.path.basename(e.get("path") or ""),
+                "path": e.get("path"),
+                "priority": _PHOT_PRIO_LABELS.get(e.get("priority"), e.get("priority")),
+                "age_s": round(now - float(e.get("enqueued_at") or now), 1),
+                "target_name": job.get("target_name") if isinstance(job, dict) else None,
+            })
+        out["items"] = items
+        out["dead_letter"] = dead[:50]
+    return out
+
+
+def _queue_entry_matches(entry: dict, match: str) -> bool:
+    m = str(match or "").strip().lower()
+    if not m:
+        return False
+    job = entry.get("job")
+    target = job.get("target_name") if isinstance(job, dict) else ""
+    hay = " ".join([os.path.basename(entry.get("path") or ""), str(target or "")]).lower()
+    return m in hay or m.replace(" ", "_") in hay
+
+
+@app.route("/api/photometry/queue/prioritize", methods=["POST"])
+def api_photometry_queue_prioritize():
+    """Move jobs to the front: ``{"match": "SS Cyg"}`` (file name / target
+    substring) or, with no match, every science job of this session (coadds
+    and named-target captures still queued). Starfront 2026-09-26.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    match = str(data.get("match") or data.get("target_name") or "").strip()
+    _purge_stale_photometry_jobs("api")
+    entries = _phot_queue.items()
+    if match:
+        seqs = {e["seq"] for e in entries if _queue_entry_matches(e, match)}
+    else:
+        seqs = {e["seq"] for e in entries if e["priority"] == _PHOT_PRIO_SCIENCE}
+    hit = _phot_queue.prioritize(seqs) if seqs else []
+    if hit:
+        logger.info("Photometry queue: pinned %d job(s) to the front (match=%r)",
+                    len(hit), match or None)
+    _sync_phot_queue_state()
+    out = {"ok": True, "match": match or None, "prioritized": len(hit),
+           "files": [os.path.basename(e.get("path") or "") for e in hit][:50]}
+    out.update(_photometry_queue_report(include_items=True))
+    return jsonify(out)
+
+
+@app.route("/api/photometry/queue", methods=["GET"])
+def api_photometry_queue():
+    """Photometry queue contents in processing order (Starfront 2026-09-26)."""
+    return jsonify(_photometry_queue_report(include_items=True))
+
+
+@app.route("/api/photometry/queue/clear", methods=["POST"])
+def api_photometry_queue_clear():
+    """Purge stale photometry jobs, cancel matching ones, or clear all.
+
+    ``{}`` purges stale jobs (earlier night / queued or written more than
+    ``photometry.queue_max_age_hours`` ago / FITS gone / dead-lettered);
+    ``{"match": "HD 209458"}`` cancels queued jobs whose file or target
+    matches; ``{"stale_only": false}`` clears everything;
+    ``{"dead_letter": true}`` also forgets failure history (optionally only
+    for *match*) so those frames may be queued again.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    stale_only = data.get("stale_only", True)
+    if isinstance(stale_only, str):
+        stale_only = stale_only.strip().lower() not in ("0", "false", "no", "off")
+    match = str(data.get("match") or "").strip()
+    dead_cleared = 0
+    if data.get("dead_letter"):
+        dead_cleared = _clear_photometry_dead_letter(match)
+    if match:
+        # Targeted cancel: drop queued jobs whose file / target matches.
+        seqs = {e["seq"] for e in _phot_queue.items() if _queue_entry_matches(e, match)}
+        gone = _phot_queue.remove(seqs, {s_: "cancelled" for s_ in seqs}) if seqs else []
+        _purge_stale_photometry_jobs("api")
+    elif stale_only:
+        gone = _purge_stale_photometry_jobs("api")
+    else:
+        gone = _phot_queue.clear()
+        if gone:
+            logger.warning("Photometry queue cleared via API (%d job(s))", len(gone))
+            _telemetry.event("photometry_queue_cleared", severity="info",
+                             detail={"removed": len(gone)})
+    _sync_phot_queue_state()
+    out = {"ok": True, "stale_only": bool(stale_only), "match": match or None,
+           "removed": len(gone), "dead_letter_cleared": dead_cleared,
+           "removed_files": [os.path.basename(e.get("path") or "") for e in gone][:50]}
+    out.update(_photometry_queue_report(include_items=False))
+    return jsonify(out)
 
 
 @app.route("/api/photometry/enqueue", methods=["POST"])
@@ -5320,18 +5972,32 @@ def api_photometry_enqueue():
             "night": night,
             "tonight": tonight,
         }), 409
-    _enqueue_photometry(
+    enq_status = _enqueue_photometry(
         abs_path,
         target_name=override or None,
         auid=override_auid or None,
     )
     with _state_lock:
         queued = _state["photometry"].get("queued", 0)
+    if isinstance(enq_status, str) and enq_status.startswith(("refused", "dropped")):
+        return jsonify({
+            "ok": False,
+            "status": enq_status,
+            "error": (
+                "photometry queue full of higher-priority jobs"
+                if enq_status == "dropped_full" else
+                f"photometry enqueue refused ({enq_status})"
+            ),
+            "path": abs_path,
+            "queued": queued,
+        }), 409
     logger.info(
         "Photometry enqueue requested: %s (queued=%s override=%r auid=%r)",
         abs_path, queued, override or None, override_auid or None,
     )
     out = {"ok": True, "path": abs_path, "queued": queued}
+    if isinstance(enq_status, str):
+        out["status"] = enq_status
     if override:
         out["target_name"] = override
     if override_auid:
