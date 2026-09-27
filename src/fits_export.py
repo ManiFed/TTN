@@ -49,11 +49,24 @@ def export_enhanced_fits(
     os.makedirs(dest_dir, exist_ok=True)
 
     dest_path = os.path.join(dest_dir, os.path.basename(source_fits))
+    same_file = False
     try:
-        shutil.copy2(source_fits, dest_path)
-    except OSError as exc:
-        logger.error("Could not copy %s → %s: %s", source_fits, dest_path, exc)
-        return None
+        same_file = os.path.exists(dest_path) and os.path.samefile(source_fits, dest_path)
+    except OSError:
+        same_file = False
+    if same_file:
+        # Frame already lives in fits_export/<date>/ (manual expose, schedule,
+        # science coadd): enrich it in place. copy2 onto itself raised
+        # SameFileError, so the frame was never marked photometered and kept
+        # coming back (Starfront 2026-09-26).
+        logger.debug("FITS export: %s already in export dir — enriching in place",
+                     dest_path)
+    else:
+        try:
+            shutil.copy2(source_fits, dest_path)
+        except OSError as exc:
+            logger.error("Could not copy %s → %s: %s", source_fits, dest_path, exc)
+            return None
 
     try:
         with fits.open(dest_path, mode="update") as hdul:

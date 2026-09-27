@@ -121,17 +121,31 @@ class StalePurgeTest(_Base):
         old_file = _touch(os.path.join(self.myworks, "old.fit"), age_s=2 * 86400)
         expired = _touch(os.path.join(self.myworks, "expired.fit"))
         missing = os.path.join(self.myworks, "gone.fit")
-        prev = os.path.join(self.export, "2020-01-01", "SS Cyg_01.fits")
         now = time.time()
         for p, at in ((fresh, now), (old_file, now), (expired, now - 13 * 3600),
-                      (missing, now), (prev, now)):
+                      (missing, now)):
             self.q.put_nowait(p, priority=dash._PHOT_PRIO_WATCHER, key=p, enqueued_at=at)
         gone = dash._purge_stale_photometry_jobs("test")
-        self.assertEqual({e["path"] for e in gone}, {old_file, expired, missing, prev})
+        self.assertEqual({e["path"] for e in gone}, {old_file, expired, missing})
         self.assertEqual([e["path"] for e in self.q.items()], [fresh])
         reasons = self.q.summary()["last_purge"]["reasons"]
-        self.assertEqual(reasons, {"old_file": 1, "expired": 1, "missing": 1,
-                                   "previous_night": 1})
+        self.assertEqual(reasons, {"old_file": 1, "expired": 1, "missing": 1})
+
+    def test_frame_queued_before_utc_rollover_is_kept(self):
+        # Codex P1 on #145: queued at 23:59 UTC in fits_export/<yesterday>,
+        # still waiting (e.g. worker yielding to a live stack) after 00:00 UTC.
+        import datetime as _dt
+        y, m, d = map(int, dash._fits_export_night_utc().split("-"))
+        yesterday = (_dt.date(y, m, d) - _dt.timedelta(days=1)).isoformat()
+        path = _touch(os.path.join(self.export, yesterday, "SS_Cyg_coadd05_6eb74013.fits"))
+        self.q.put_nowait({"path": path, "target_name": "SS Cyg"},
+                          priority=dash._PHOT_PRIO_SCIENCE, key=path,
+                          enqueued_at=time.time() - 60)
+        self.assertEqual(dash._purge_stale_photometry_jobs("test"), [])
+        self.assertEqual(self.q.qsize(), 1)
+        # A fresh enqueue of that dated path is still refused (issue #123).
+        self.assertTrue(dash._is_previous_night_fits(path))
+        self.assertEqual(dash._photometry_job_stale_reason(path), "previous_night")
 
     def test_enqueue_purges_stale_backlog_so_tonight_fits_gets_in(self):
         self._backlog(49, enqueued_ago_s=3 * 86400)  # earlier nights, still on disk
@@ -141,16 +155,23 @@ class StalePurgeTest(_Base):
         with dash._state_lock:
             self.assertEqual(dash._state["photometry"]["queued"], 1)
 
-    def test_enqueue_refuses_fits_written_long_ago(self):
+    def test_watcher_refuses_fits_written_long_ago(self):
         old = _touch(os.path.join(self.myworks, "Light_old.fit"), age_s=2 * 86400)
-        self.assertEqual(dash._enqueue_photometry(old), "refused_stale")
+        self.assertEqual(dash._enqueue_watcher_photometry(old), "refused_stale")
         self.assertEqual(self.q.qsize(), 0)
+        fresh = _touch(os.path.join(self.myworks, "Light_new.fit"))
+        self.assertEqual(dash._enqueue_watcher_photometry(fresh), "queued")
+
+    def test_on_new_fits_routes_through_watcher_gate(self):
+        import inspect
+        src = inspect.getsource(dash._on_new_fits)
+        self.assertIn("_enqueue_watcher_photometry(path)", src)
 
     def test_untrusted_scope_clock_mtime_is_not_refused(self):
         # Seestar clock reset to years ago: mtime alone must not refuse.
         weird = _touch(os.path.join(self.myworks, "Light_clock.fit"),
                        age_s=400 * 86400)
-        self.assertEqual(dash._enqueue_photometry(weird), "queued")
+        self.assertEqual(dash._enqueue_watcher_photometry(weird), "queued")
         self.assertEqual(dash._purge_stale_photometry_jobs("test"), [])
 
     def test_watcher_duplicate_of_inflight_frame_is_merged(self):
@@ -166,7 +187,7 @@ class StalePurgeTest(_Base):
         old = _touch(os.path.join(self.myworks, "Light_old.fit"), age_s=2 * 86400)
         with patch.object(dash, "_load_config",
                           return_value={"photometry": {"queue_max_age_hours": 0}}):
-            self.assertEqual(dash._enqueue_photometry(old), "queued")
+            self.assertEqual(dash._enqueue_watcher_photometry(old), "queued")
             self.assertEqual(dash._purge_stale_photometry_jobs("test"), [])
 
 
@@ -209,6 +230,174 @@ class WorkerYieldTest(_Base):
              patch.object(dash, "_live_capture_busy", return_value=False):
             self.assertFalse(dash._phot_worker_step(timeout=0.01))
         run.assert_not_called()
+
+
+class DeadLetterTest(_Base):
+    def setUp(self):
+        super().setUp()
+        dash._phot_failures.clear()
+        self.addCleanup(dash._phot_failures.clear)
+
+    def test_repeatedly_failing_frame_is_dead_lettered_and_purged(self):
+        hd = _touch(os.path.join(self.tonight, "HD 209458 b_01_abc.fits"))
+        dash._enqueue_photometry(hd, target_name="HD 209458 b")
+        with patch.object(dash, "_run_photometry_bg",
+                          return_value=(False, "vsp_http_400")), \
+             patch.object(dash, "_live_capture_busy", return_value=False):
+            self.assertTrue(dash._phot_worker_step(timeout=0.01))
+            self.q.task_done()
+            # One failure: a retry is still allowed.
+            self.assertEqual(dash._enqueue_photometry(hd, target_name="HD 209458 b"),
+                             "queued")
+            self.assertTrue(dash._phot_worker_step(timeout=0.01))
+        self.assertEqual(dash._enqueue_photometry(hd, target_name="HD 209458 b"),
+                         "refused_dead_letter")
+        self.assertEqual(self.q.qsize(), 0)
+        dead = dash._photometry_dead_letter_list()
+        self.assertEqual([d["file"] for d in dead], ["HD 209458 b_01_abc.fits"])
+        self.assertEqual(dead[0]["reason"], "vsp_http_400")
+
+    def test_queued_entry_purged_once_dead_lettered(self):
+        hd = _touch(os.path.join(self.tonight, "HD 209458 b_02.fits"))
+        self.q.put_nowait(hd, priority=dash._PHOT_PRIO_CAPTURE, key=os.path.realpath(hd))
+        for _ in range(dash._PHOT_MAX_ATTEMPTS):
+            dash._record_photometry_outcome(hd, False, "fits copy no-op")
+        gone = dash._purge_stale_photometry_jobs("test")
+        self.assertEqual([e["path"] for e in gone], [hd])
+        self.assertEqual(self.q.summary()["last_purge"]["reasons"], {"dead_letter": 1})
+
+    def test_success_clears_failure_history_and_dead_letter_ages_out(self):
+        p = _touch(os.path.join(self.tonight, "SS Cyg_03.fits"))
+        dash._record_photometry_outcome(p, False, "x")
+        dash._record_photometry_outcome(p, True, None)
+        self.assertEqual(dash._phot_failures, {})
+        for _ in range(dash._PHOT_MAX_ATTEMPTS):
+            dash._record_photometry_outcome(p, False, "x")
+        dash._phot_failures[os.path.realpath(p)]["at"] = time.time() - 13 * 3600
+        self.assertEqual(dash._enqueue_photometry(p), "queued")
+
+    def test_run_photometry_bg_reports_outcome(self):
+        with patch("src.photometry.run_pipeline_ex",
+                   return_value=(None, {"stage": "catalog", "reason_code": "vsp_http_400",
+                                        "message": "AAVSO VSP returned HTTP 400"})), \
+             patch.object(dash, "_handle_empty_field_rejection"):
+            ok, reason = dash._run_photometry_bg("/tmp/hd.fits")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "vsp_http_400")
+
+    def test_api_clear_dead_letter_by_match_allows_requeue(self):
+        client = dash.app.test_client()
+        hd = _touch(os.path.join(self.tonight, "HD 209458 b_04.fits"))
+        for _ in range(dash._PHOT_MAX_ATTEMPTS):
+            dash._record_photometry_outcome(hd, False, "vsp_http_400")
+        body = client.get("/api/photometry/queue").get_json()
+        self.assertEqual(body["queue"]["dead_lettered"], 1)
+        self.assertEqual(body["dead_letter"][0]["file"], "HD 209458 b_04.fits")
+        body = client.post("/api/photometry/queue/clear",
+                           json={"match": "HD 209458", "dead_letter": True}).get_json()
+        self.assertEqual(body["dead_letter_cleared"], 1)
+        self.assertEqual(dash._enqueue_photometry(hd), "queued")
+
+
+class QueueOperatorControlsTest(_Base):
+    def test_cancel_by_match_and_prioritize_session_science(self):
+        client = dash.app.test_client()
+        hd = [_touch(os.path.join(self.tonight, f"HD 209458 b_{i}.fits")) for i in range(3)]
+        for p in hd:
+            dash._enqueue_photometry(p)
+        subs = self._backlog(2)
+        ss = _touch(os.path.join(self.tonight, "SS_Cyg_coadd01_93bac84.fits"))
+        dash._enqueue_photometry(ss)
+
+        body = client.post("/api/photometry/queue/clear",
+                           json={"match": "HD 209458"}).get_json()
+        self.assertEqual(body["removed"], 3)
+        self.assertEqual(self.q.qsize(), 3)
+
+        body = client.post("/api/photometry/queue/prioritize",
+                           json={"match": "light_001"}).get_json()
+        self.assertEqual(body["prioritized"], 1)
+        self.assertEqual(body["items"][0]["file"], "Light_001.fit")
+        self.assertEqual(body["items"][0]["priority"], "pinned")
+
+        body = client.post("/api/photometry/queue/prioritize", json={}).get_json()
+        self.assertEqual(body["files"], ["SS_Cyg_coadd01_93bac84.fits"])
+        self.assertEqual({i["file"] for i in body["items"][:2]},
+                         {"Light_001.fit", "SS_Cyg_coadd01_93bac84.fits"})
+        self.assertEqual(os.path.basename(subs[0]), body["items"][-1]["file"])
+
+    def test_mcp_prioritize_and_targeted_clear_tools(self):
+        import inspect
+        from telescope_mcp.tools import hardware
+        src = inspect.getsource(hardware).replace("\r\n", "\n")
+        self.assertIn("@server.tool()\n    def node_photometry_queue_prioritize(", src)
+        self.assertIn('"/api/photometry/queue/prioritize"', src)
+        self.assertIn('body["match"] = m', src)
+        self.assertIn('body["dead_letter"] = True', src)
+
+
+class SameFileExportTest(unittest.TestCase):
+    def test_export_of_frame_already_in_fits_export_enriches_in_place(self):
+        import numpy as np
+        from astropy.io import fits
+        from src import fits_export
+        with tempfile.TemporaryDirectory() as td:
+            export = os.path.join(td, "fits_export")
+            result = {"target_name": "HD 209458 b", "magnitude": 7.6,
+                      "uncertainty": 0.01, "snr": 50, "quality_flag": "good"}
+            src_dir = os.path.join(export, "2026-09-26")
+            os.makedirs(src_dir)
+            src = os.path.join(src_dir, "HD 209458 b_01.fits")
+            hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.float32))
+            hdu.header["DATE-OBS"] = "2026-09-26T03:00:00"
+            hdu.writeto(src)
+            with patch.object(fits_export, "_date_str_from_result",
+                              return_value="2026-09-26"):
+                out = fits_export.export_enhanced_fits(
+                    src, result, {"photometry": {}}, export_dir=export)
+            self.assertEqual(os.path.realpath(out), os.path.realpath(src))
+            self.assertTrue(dash._fits_already_photometered(src))
+
+
+class SeestarPositionReadTest(unittest.TestCase):
+    """Starfront 2026-09-26 (related #133): 1279 "The given key 'RA' was not
+    present in the dictionary" is a transient read, not a connect failure."""
+
+    def _err(self):
+        from alpaca.client import AlpacaError
+        return AlpacaError(
+            "rightascension → ErrorNumber 1279: The given key 'RA' was not "
+            "present in the dictionary.", code=1279)
+
+    def test_ra_read_retries_transient_missing_key(self):
+        from alpaca.telescope import Telescope
+        tel = Telescope("127.0.0.1", 1)
+        tel._c = MagicMock()
+        tel._c._get.side_effect = [self._err(), 20.36]
+        with patch("alpaca.telescope.time.sleep") as sleep:
+            self.assertAlmostEqual(tel.ra(), 20.36)
+        sleep.assert_called_once()
+
+    def test_other_errors_are_not_retried(self):
+        from alpaca.client import AlpacaError
+        from alpaca.telescope import Telescope, is_transient_position_error
+        tel = Telescope("127.0.0.1", 1)
+        tel._c = MagicMock()
+        tel._c._get.side_effect = AlpacaError("declination → ErrorNumber 1279: "
+                                              "capture is active", code=1279)
+        with patch("alpaca.telescope.time.sleep") as sleep:
+            with self.assertRaises(AlpacaError):
+                tel.dec()
+        sleep.assert_not_called()
+        self.assertTrue(is_transient_position_error(self._err()))
+
+    def test_poll_loop_does_not_mark_disconnected_on_transient(self):
+        import inspect
+        src = inspect.getsource(dash)
+        i = src.index("if is_transient_position_error(exc):")
+        block = src[i:i + 900]
+        self.assertLess(block.index("not a "), block.index('_state["telescope"]["connected"] = False'))
+        self.assertIn("else:", block)
 
 
 class AstapArbiterTest(unittest.TestCase):
@@ -309,12 +498,19 @@ class QueueApiTest(_Base):
         self.assertEqual(body["removed"], 1)
         self.assertEqual(body["queue"]["size"], 0)
 
-    def test_api_enqueue_reports_stale_refusal(self):
+    def test_api_enqueue_reports_full_queue_instead_of_ok(self):
         client = dash.app.test_client()
-        old = _touch(os.path.join(self.tonight, "old.fits"), age_s=2 * 86400)
-        resp = client.post("/api/photometry/enqueue", json={"path": old})
+        for i in range(dash._PHOT_QUEUE_MAX):
+            p = _touch(os.path.join(self.tonight, f"SS_Cyg_coadd{i:02d}_x.fits"))
+            self.q.put_nowait(p, priority=dash._PHOT_PRIO_SCIENCE, key=p)
+        frame = _touch(os.path.join(self.tonight, "Manual_01.fits"))
+        resp = client.post("/api/photometry/enqueue", json={"path": frame})
         self.assertEqual(resp.status_code, 409)
-        self.assertEqual(resp.get_json()["status"], "refused_stale")
+        self.assertEqual(resp.get_json()["status"], "dropped_full")
+        ok = client.post("/api/photometry/enqueue",
+                         json={"path": os.path.join(self.tonight, "SS_Cyg_coadd00_x.fits")})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.get_json()["status"], "merged")
 
     def test_mcp_tools_registered(self):
         import inspect

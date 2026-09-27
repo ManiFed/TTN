@@ -6,10 +6,25 @@ park, and tracking operations.
 """
 
 import logging
+import time
 
-from .client import AlpacaClient
+from .client import AlpacaClient, AlpacaError
 
 logger = logging.getLogger(__name__)
+
+# Seestar firmware sometimes answers GET rightascension/declination with
+# ErrorNumber 1279 "The given key 'RA' was not present in the dictionary"
+# (its position cache is mid-refresh). That is a transient read, not a lost
+# connection (Starfront 2026-09-26, related #133): retry after a short backoff.
+_POSITION_RETRY_DELAYS_S = (0.25, 0.75)
+
+
+def is_transient_position_error(exc: BaseException) -> bool:
+    """True for the Seestar 1279 missing-key position read (see above)."""
+    if not isinstance(exc, AlpacaError):
+        return False
+    return (getattr(exc, "code", 0) == 1279
+            and "not present in the dictionary" in str(exc).lower())
 
 
 class Telescope:
@@ -38,11 +53,23 @@ class Telescope:
     def is_tracking(self) -> bool:
         return bool(self._c._get("tracking"))
 
+    def _get_position(self, attribute: str) -> float:
+        for delay in _POSITION_RETRY_DELAYS_S:
+            try:
+                return float(self._c._get(attribute))
+            except AlpacaError as exc:
+                if not is_transient_position_error(exc):
+                    raise
+                logger.info("%s read hit transient Seestar 1279 (%s) — retrying in %.2fs",
+                            attribute, exc, delay)
+                time.sleep(delay)
+        return float(self._c._get(attribute))
+
     def ra(self) -> float:
-        return float(self._c._get("rightascension"))
+        return self._get_position("rightascension")
 
     def dec(self) -> float:
-        return float(self._c._get("declination"))
+        return self._get_position("declination")
 
     # --- commands ------------------------------------------------------------
 

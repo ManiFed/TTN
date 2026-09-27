@@ -95,23 +95,48 @@ def register(server, agent: AgentClient) -> None:
     def node_photometry_queue() -> dict:
         """Photometry queue in processing order: priority, age, target.
 
-        Science coadds / named-target frames run before watcher backlog;
-        also reports whether ASTAP is busy and who is waiting for it.
+        Pinned / science coadds / named-target frames run before watcher
+        backlog. Also lists dead-lettered frames (failed repeatedly, no
+        longer retried) and whether ASTAP is busy and who is waiting for it.
         """
         return agent.get("/api/photometry/queue")
 
     @server.tool()
     def node_photometry_queue_clear(stale_only: bool = True,
+                                    match: str = "",
+                                    dead_letter: bool = False,
                                     confirm: bool = False) -> dict:
-        """Purge stale photometry jobs (earlier night, expired, FITS gone).
+        """Purge stale photometry jobs, or cancel specific ones.
 
-        ``stale_only=false`` drops every queued job, including tonight's,
-        and requires confirm=true.
+        Default: drop stale jobs (earlier night, expired, FITS gone,
+        dead-lettered). ``match`` (file name or target substring, e.g.
+        ``HD 209458``) cancels just those queued jobs. ``dead_letter=true``
+        also forgets failure history so those frames can be queued again.
+        ``stale_only=false`` with no ``match`` drops every queued job,
+        including tonight's, and requires confirm=true.
         """
-        if not stale_only:
+        m = (match or "").strip()
+        if not stale_only and not m:
             require_confirmation(confirm, "clear the whole photometry queue")
-        return agent.post("/api/photometry/queue/clear",
-                          {"stale_only": bool(stale_only)}, timeout=30.0)
+        body: dict = {"stale_only": bool(stale_only)}
+        if m:
+            body["match"] = m
+        if dead_letter:
+            body["dead_letter"] = True
+        return agent.post("/api/photometry/queue/clear", body, timeout=30.0)
+
+    @server.tool()
+    def node_photometry_queue_prioritize(match: str = "") -> dict:
+        """Move photometry jobs to the front of the queue.
+
+        ``match`` (file name or target substring, e.g. ``SS Cyg`` or
+        ``SS_Cyg_coadd05``) pins those jobs; empty pins every science job
+        still queued this session (coadds and named-target captures).
+        """
+        body: dict = {}
+        if (match or "").strip():
+            body["match"] = match.strip()
+        return agent.post("/api/photometry/queue/prioritize", body, timeout=30.0)
 
     @server.tool()
     def node_aavso() -> dict:
