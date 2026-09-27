@@ -92,6 +92,28 @@ def register(server, agent: AgentClient) -> None:
         return agent.post("/api/photometry/enqueue", body, timeout=30.0)
 
     @server.tool()
+    def node_photometry_queue() -> dict:
+        """Photometry queue in processing order: priority, age, target.
+
+        Science coadds / named-target frames run before watcher backlog;
+        also reports whether ASTAP is busy and who is waiting for it.
+        """
+        return agent.get("/api/photometry/queue")
+
+    @server.tool()
+    def node_photometry_queue_clear(stale_only: bool = True,
+                                    confirm: bool = False) -> dict:
+        """Purge stale photometry jobs (earlier night, expired, FITS gone).
+
+        ``stale_only=false`` drops every queued job, including tonight's,
+        and requires confirm=true.
+        """
+        if not stale_only:
+            require_confirmation(confirm, "clear the whole photometry queue")
+        return agent.post("/api/photometry/queue/clear",
+                          {"stale_only": bool(stale_only)}, timeout=30.0)
+
+    @server.tool()
     def node_aavso() -> dict:
         """AAVSO export status on this node."""
         return agent.get("/api/aavso")

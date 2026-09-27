@@ -46,7 +46,9 @@ import math
 import os
 import subprocess
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from typing import Optional
 
 import numpy as np
@@ -1395,6 +1397,108 @@ class AstapResult:
         return f"AstapResult(ok={self.ok!r}, message={self.message!r})"
 
 
+# ── ASTAP arbitration (Starfront 2026-09-26) ─────────────────────────────────
+# NodeAgent runs ASTAP from two kinds of callers: the photometry worker
+# (background, one queued FITS after another) and auto-centering / live-stack
+# recentering (interactive, an operator or the imaging handoff is waiting).
+# With a deep photometry backlog the two ran ASTAP concurrently and centering
+# iterations timed out (Error 1279 during live stacking). Only one ASTAP
+# process runs at a time now, and interactive solves always go ahead of any
+# waiting background solve. Arbitration never fails a solve: if a slot cannot
+# be had within the wait budget the solve proceeds anyway (old behaviour).
+ASTAP_INTERACTIVE = "interactive"
+ASTAP_BACKGROUND = "background"
+_ASTAP_INTERACTIVE_WAIT_S = 120.0   # > one 90 s ASTAP run already in flight
+_ASTAP_BACKGROUND_WAIT_S = 600.0
+_astap_tls = threading.local()
+
+
+class _AstapArbiter:
+    """Single ASTAP slot; interactive callers jump queued background callers."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._busy = False
+        self._busy_priority: Optional[str] = None
+        self._interactive_waiting = 0
+
+    def _blocked(self, background: bool) -> bool:
+        return self._busy or (background and self._interactive_waiting > 0)
+
+    @contextmanager
+    def slot(self, priority: str = ASTAP_INTERACTIVE,
+             wait_s: Optional[float] = None):
+        background = priority == ASTAP_BACKGROUND
+        if wait_s is None:
+            wait_s = _ASTAP_BACKGROUND_WAIT_S if background else _ASTAP_INTERACTIVE_WAIT_S
+        acquired = False
+        with self._cond:
+            if not background:
+                self._interactive_waiting += 1
+            try:
+                deadline = time.monotonic() + max(0.0, float(wait_s))
+                while self._blocked(background):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._cond.wait(remaining)
+                if not self._busy:
+                    self._busy = True
+                    self._busy_priority = priority
+                    acquired = True
+            finally:
+                if not background:
+                    self._interactive_waiting -= 1
+                    # A background waiter may now be unblocked.
+                    self._cond.notify_all()
+        if not acquired:
+            logger.warning(
+                "ASTAP slot still busy after %.0fs (%s solve) — running "
+                "concurrently rather than failing", wait_s, priority,
+            )
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                with self._cond:
+                    self._busy = False
+                    self._busy_priority = None
+                    self._cond.notify_all()
+
+    def status(self) -> dict:
+        with self._cond:
+            return {
+                "busy": self._busy,
+                "busy_priority": self._busy_priority,
+                "interactive_waiting": self._interactive_waiting,
+            }
+
+
+_astap_arbiter = _AstapArbiter()
+
+
+@contextmanager
+def astap_priority(priority: str):
+    """Mark ASTAP solves made by this thread as *priority* for the block.
+
+    The photometry worker wraps each job in ``astap_priority("background")``;
+    auto-centering's ``solve_image_array`` uses ``"interactive"`` explicitly,
+    so a recenter launched from inside the photometry worker (SNR collapse)
+    still jumps the queue. Unmarked callers default to interactive.
+    """
+    prev = getattr(_astap_tls, "priority", None)
+    _astap_tls.priority = priority
+    try:
+        yield
+    finally:
+        _astap_tls.priority = prev
+
+
+def astap_status() -> dict:
+    """Snapshot of the ASTAP slot for status / MCP surfaces."""
+    return _astap_arbiter.status()
+
+
 def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
                astap_path: str, search_radius: float) -> AstapResult:
     """Call ASTAP CLI to plate-solve and write WCS back into the FITS file.
@@ -1402,7 +1506,19 @@ def _run_astap(fits_path: str, ra_deg: float, dec_deg: float,
     Returns an ``AstapResult`` — truthy on success, falsy on failure — whose
     ``.message`` carries the reason for a failure (missing binary, timeout,
     or ASTAP's own stderr/stdout such as "No solution found!").
+
+    Runs through the process-wide ASTAP slot (see ``_AstapArbiter``) so a
+    photometry backlog cannot contend with auto-centering.
     """
+    priority = getattr(_astap_tls, "priority", None) or ASTAP_INTERACTIVE
+    with _astap_arbiter.slot(priority):
+        return _run_astap_unlocked(fits_path, ra_deg, dec_deg,
+                                   astap_path, search_radius)
+
+
+def _run_astap_unlocked(fits_path: str, ra_deg: float, dec_deg: float,
+                        astap_path: str, search_radius: float) -> AstapResult:
+    """ASTAP CLI call proper; callers go through ``_run_astap``."""
     # ASTAP takes RA in decimal hours, SPD (South Polar Distance) in degrees
     ra_hours = ra_deg / 15.0
     spd      = 90.0 + dec_deg   # SPD = 90 + dec
