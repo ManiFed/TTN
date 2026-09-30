@@ -13,6 +13,7 @@
 #   build/binaries/astap        (macOS/Linux — placed by build.py download_astap)
 #   build/binaries/astap.exe    (Windows)
 
+import os
 import sys
 import glob as _glob
 from pathlib import Path
@@ -376,13 +377,18 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX rewrites Mach-O binaries, which invalidates code signatures.
+    upx=sys.platform != "darwin",
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,          # Keep console for log output; Windows Service wrapper hides it
     disable_windowed_traceback=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    # macOS Developer ID signing (hardened runtime + notarization). PyInstaller
+    # signs every embedded dylib/binary with this identity before packing them.
+    # Unset locally and in unsigned builds.
+    codesign_identity=os.environ.get("CODESIGN_IDENTITY") or None,
+    entitlements_file=str(ROOT / "build" / "macos" / "entitlements.plist")
+    if os.environ.get("CODESIGN_IDENTITY") else None,
     icon=str(ROOT / "build" / "icon.ico") if (ROOT / "build" / "icon.ico").exists() else None,
 )

@@ -81,6 +81,12 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pyinstaller
+      - name: Import Developer ID certificates
+        env:
+          MACOS_CERTS_P12_BASE64: ${{ secrets.MACOS_CERTS_P12_BASE64 }}
+          MACOS_CERTS_P12_PASSWORD: ${{ secrets.MACOS_CERTS_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: bash build/macos/ci_import_certs.sh
       - name: Build PyInstaller bundle
         run: python build/build.py --bundle-only --clean
       - uses: actions/upload-artifact@v4
@@ -100,9 +106,17 @@ jobs:
         with:
           name: node-agent-macos
           path: dist
-      - name: Assemble .pkg installer
+      - name: Import Developer ID certificates
+        env:
+          MACOS_CERTS_P12_BASE64: ${{ secrets.MACOS_CERTS_P12_BASE64 }}
+          MACOS_CERTS_P12_PASSWORD: ${{ secrets.MACOS_CERTS_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: bash build/macos/ci_import_certs.sh
+      - name: Assemble, sign and notarize .pkg installer
         env:
           VERSION: ${{ needs.resolve-version.outputs.version }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           chmod +x dist/TelescopeNetNode
           bash build/macos/build_dmg.sh
