@@ -98,6 +98,8 @@ jobs:
   assemble-and-release:
     needs: [resolve-version, node-agent-macos]
     runs-on: macos-14
+    # Apple's notary queue can take an hour or more for a new team's first submissions
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
