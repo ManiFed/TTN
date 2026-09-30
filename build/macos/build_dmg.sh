@@ -1,7 +1,7 @@
 #!/bin/bash
 # The Telescope Net Node Agent — macOS pkg / dmg builder
 #
-# Usage:  bash build/macos/build_dmg.sh [--sign "Developer ID: ..."]
+# Usage:  bash build/macos/build_dmg.sh [--sign "Developer ID Application: ..."]
 #
 # Prerequisites:
 #   PyInstaller bundle already built at dist/TelescopeNetNode
@@ -11,9 +11,18 @@
 # Outputs:
 #   dist/TelescopeNetNode-X.Y.Z-macOS.pkg   (GUI installer)
 #
-# Signing is optional. CI builds unsigned pkgs; the distribution XML must still
-# be self-contained so Installer.app can open them (no license/background
-# references to files that are not shipped under build/macos/resources/).
+# Signing + notarization (what stops Gatekeeper's "Apple could not verify..."
+# warning) is driven by environment variables, all optional:
+#   APP_SIGN_ID       "Developer ID Application: Name (TEAMID)" -- signs the .app
+#                     (also accepted as `--sign`)
+#   PKG_SIGN_ID       "Developer ID Installer: Name (TEAMID)"   -- signs the .pkg
+#   NOTARY_PROFILE    notarytool keychain profile (local use), OR
+#   APPLE_API_KEY_PATH / APPLE_API_KEY_ID / APPLE_API_ISSUER  (CI: App Store
+#                     Connect API key .p8) -- submits the .pkg and staples it
+# With none set the pkg is built unsigned; the distribution XML must still be
+# self-contained so Installer.app can open it (no license/background references
+# to files that are not shipped under build/macos/resources/).
+# See build/macos/SIGNING.md.
 
 set -e
 cd "$(dirname "$0")/../.."   # repo root
@@ -27,10 +36,12 @@ RESOURCES_DIR="${CONTENTS}/Resources"
 BUILD_DIR="build/macos"
 DIST_DIR="dist"
 
-SIGN_ID=""
+SIGN_ID="${APP_SIGN_ID:-}"
 if [ "$1" = "--sign" ]; then
     SIGN_ID="$2"
 fi
+PKG_SIGN_ID="${PKG_SIGN_ID:-}"
+ENTITLEMENTS="${BUILD_DIR}/entitlements.plist"
 
 echo "=== Building The Telescope Net Node Agent for macOS v${VERSION} ==="
 
@@ -92,14 +103,23 @@ cp "build/config.template.yaml" "${RESOURCES_DIR}/"
 # in /Applications and hand new members the one we are moving away from.
 
 # ── Code signing ───────────────────────────────────────────────────────────────
+# Hardened runtime + secure timestamp are both required for notarization. The
+# PyInstaller binary's embedded libraries were already signed at build time
+# (CODESIGN_IDENTITY in node_agent.spec); this signs the main executable and
+# the bundle around it. No --deep: Apple discourages it and it re-signs badly.
 if [ -n "${SIGN_ID}" ]; then
     echo "Code-signing with: ${SIGN_ID}"
-    codesign --deep --force --options runtime \
+    codesign --force --options runtime --timestamp \
+        --entitlements "${ENTITLEMENTS}" \
+        --sign "${SIGN_ID}" \
+        "${MACOS_DIR}/${APP_NAME}"
+    codesign --force --options runtime --timestamp \
+        --entitlements "${ENTITLEMENTS}" \
         --sign "${SIGN_ID}" \
         "${BUNDLE_DIR}"
-    codesign --verify --deep --strict "${BUNDLE_DIR}"
+    codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 else
-    echo "Skipping code signing (pass --sign 'Developer ID: ...' to sign)"
+    echo "Skipping code signing (set APP_SIGN_ID or pass --sign 'Developer ID Application: ...')"
 fi
 
 # ── Build component .pkg ───────────────────────────────────────────────────────
@@ -207,11 +227,45 @@ if errors:
 print(f"distribution.xml OK — {len(list(resources.iterdir()))} staged resource(s)")
 PY
 
+PRODUCTBUILD_SIGN=()
+if [ -n "${PKG_SIGN_ID}" ]; then
+    PRODUCTBUILD_SIGN=(--sign "${PKG_SIGN_ID}" --timestamp)
+fi
 productbuild \
     --distribution "${DIST_DIR}/distribution.xml" \
     --package-path "${DIST_DIR}" \
     --resources "${RESOURCES_STAGING}" \
+    ${PRODUCTBUILD_SIGN[@]+"${PRODUCTBUILD_SIGN[@]}"} \
     "${FINAL_PKG}"
+
+# ── Notarize + staple ──────────────────────────────────────────────────────────
+NOTARY_ARGS=()
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+    NOTARY_ARGS=(--keychain-profile "${NOTARY_PROFILE}")
+elif [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+    NOTARY_ARGS=(--key "${APPLE_API_KEY_PATH}" --key-id "${APPLE_API_KEY_ID}" --issuer "${APPLE_API_ISSUER}")
+fi
+
+if [ ${#NOTARY_ARGS[@]} -gt 0 ]; then
+    if [ -z "${PKG_SIGN_ID}" ] || [ -z "${SIGN_ID}" ]; then
+        echo "ERROR: notarization needs both APP_SIGN_ID and PKG_SIGN_ID."
+        exit 1
+    fi
+    echo "Submitting ${FINAL_PKG} for notarization (usually a few minutes)..."
+    NOTARY_OUT="$(xcrun notarytool submit "${FINAL_PKG}" "${NOTARY_ARGS[@]}" --wait 2>&1)" || true
+    echo "${NOTARY_OUT}"
+    SUB_ID="$(echo "${NOTARY_OUT}" | awk '/^ *id:/ {print $2; exit}')"
+    if ! echo "${NOTARY_OUT}" | grep -q "status: Accepted"; then
+        echo "ERROR: notarization was not accepted. Apple's log:"
+        [ -n "${SUB_ID}" ] && xcrun notarytool log "${SUB_ID}" "${NOTARY_ARGS[@]}" || true
+        exit 1
+    fi
+    xcrun stapler staple "${FINAL_PKG}"
+    xcrun stapler validate "${FINAL_PKG}"
+    spctl --assess --type install --verbose=2 "${FINAL_PKG}"
+else
+    echo "Skipping notarization (no NOTARY_PROFILE / APPLE_API_* credentials set)"
+fi
 
 # Clean up staging artifacts
 rm -rf "${PKG_STAGING}" "${SCRIPTS_STAGING}" "${RESOURCES_STAGING}" \
