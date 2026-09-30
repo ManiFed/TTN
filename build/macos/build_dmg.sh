@@ -251,15 +251,49 @@ if [ ${#NOTARY_ARGS[@]} -gt 0 ]; then
         echo "ERROR: notarization needs both APP_SIGN_ID and PKG_SIGN_ID."
         exit 1
     fi
-    echo "Submitting ${FINAL_PKG} for notarization (usually a few minutes)..."
-    NOTARY_OUT="$(xcrun notarytool submit "${FINAL_PKG}" "${NOTARY_ARGS[@]}" --wait 2>&1)" || true
-    echo "${NOTARY_OUT}"
-    SUB_ID="$(echo "${NOTARY_OUT}" | awk '/^ *id:/ {print $2; exit}')"
-    if ! echo "${NOTARY_OUT}" | grep -q "status: Accepted"; then
-        echo "ERROR: notarization was not accepted. Apple's log:"
-        [ -n "${SUB_ID}" ] && xcrun notarytool log "${SUB_ID}" "${NOTARY_ARGS[@]}" || true
+    echo "Submitting ${FINAL_PKG} for notarization..."
+    # Submit without --wait and poll instead. A first submission from a new team can sit "In Progress" for an hour
+    # or more, and a single dropped connection during a long --wait used to be reported as a rejection.
+    SUB_ID=""
+    for attempt in 1 2 3 4 5; do
+        SUBMIT_OUT="$(xcrun notarytool submit "${FINAL_PKG}" "${NOTARY_ARGS[@]}" --output-format json 2>&1)" || true
+        SUB_ID="$(echo "${SUBMIT_OUT}" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: pass')"
+        [ -n "${SUB_ID}" ] && break
+        echo "Submit attempt ${attempt} failed: ${SUBMIT_OUT}"
+        sleep 30
+    done
+    if [ -z "${SUB_ID}" ]; then
+        echo "ERROR: could not submit ${FINAL_PKG} for notarization."
         exit 1
     fi
+    echo "Notarization submission id: ${SUB_ID}"
+
+    NOTARY_TIMEOUT="${NOTARY_TIMEOUT_MINUTES:-180}"
+    DEADLINE=$(( $(date +%s) + NOTARY_TIMEOUT * 60 ))
+    STATUS=""
+    while :; do
+        INFO="$(xcrun notarytool info "${SUB_ID}" "${NOTARY_ARGS[@]}" --output-format json 2>&1)" || INFO=""
+        # A failed poll (network blip, Apple 5xx) is not a verdict: keep waiting.
+        STATUS="$(echo "${INFO}" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("status",""))
+except Exception: pass')"
+        case "${STATUS}" in
+            Accepted) echo "Notarization accepted."; break ;;
+            Invalid|Rejected)
+                echo "ERROR: Apple rejected the submission (${STATUS}). Their log:"
+                xcrun notarytool log "${SUB_ID}" "${NOTARY_ARGS[@]}" || true
+                exit 1 ;;
+        esac
+        if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+            echo "ERROR: notarization still '${STATUS:-unknown}' after ${NOTARY_TIMEOUT} min. Submission ${SUB_ID} is still with Apple;"
+            echo "check it with: xcrun notarytool info ${SUB_ID} <credentials>"
+            exit 1
+        fi
+        echo "$(date -u +%H:%M:%S) notarization status: ${STATUS:-unreachable, retrying}"
+        sleep 60
+    done
     xcrun stapler staple "${FINAL_PKG}"
     xcrun stapler validate "${FINAL_PKG}"
     spctl --assess --type install --verbose=2 "${FINAL_PKG}"
