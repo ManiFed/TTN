@@ -3434,6 +3434,43 @@ def _observer_site_from_disk() -> tuple:
     return lat, lon, elev
 
 
+def _public_site_time(raw: Any) -> Optional[dict]:
+    """Whitelist a site/time reading for API/status output.
+
+    Device/transport exception text stays in the node log; responses carry
+    only which properties failed (CodeQL: no exception text to clients).
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            return None if v is None else float(v)
+        except (TypeError, ValueError):
+            return None
+
+    utc = raw.get("utcdate")
+    out: dict = {
+        "utcdate": utc if isinstance(utc, str) else None,
+        "sitelatitude": _num(raw.get("sitelatitude")),
+        "sitelongitude": _num(raw.get("sitelongitude")),
+        "siteelevation": _num(raw.get("siteelevation")),
+        "node_utc": raw.get("node_utc") if isinstance(raw.get("node_utc"), str) else None,
+        "clock_offset_s": _num(raw.get("clock_offset_s")),
+        "read_failed": sorted(str(k) for k in (raw.get("errors") or {})),
+    }
+    if "sent" in raw or "put_errors" in raw:
+        sent = raw.get("sent") or {}
+        out["sent"] = {str(k): (v if isinstance(v, str) else _num(v))
+                       for k, v in sent.items()}
+        out["put_failed"] = sorted(str(k) for k in (raw.get("put_errors") or {}))
+        out["ok"] = bool(raw.get("ok"))
+    for key in ("reason", "synced_at"):
+        if isinstance(raw.get(key), str):
+            out[key] = raw[key]
+    return out
+
+
 def _sync_mount_site_time(reason: str) -> Optional[dict]:
     """Best-effort: push configured site + node UTC to the mount (issue #149).
 
@@ -3460,9 +3497,12 @@ def _sync_mount_site_time(reason: str) -> Optional[dict]:
         return None
     if not isinstance(result, dict):
         return None
+    for attr, msg in sorted((result.get("put_errors") or {}).items()):
+        logger.info("Mount site/time sync (%s): %s not applied: %s", reason, attr, msg)
     result = dict(result)
     result["reason"] = reason
     result["synced_at"] = datetime.now(timezone.utc).isoformat()
+    result = _public_site_time(result)
     with _state_lock:
         _state["telescope"]["site_time"] = copy.deepcopy(result)
     return result
@@ -5116,8 +5156,10 @@ def api_telescope_site_time():
     except Exception as exc:
         logger.warning("Mount site/time read failed: %s", exc)
         return jsonify({"error": "Unable to read mount site/time"}), 500
+    for attr, msg in sorted(((reading or {}).get("errors") or {}).items()):
+        logger.info("Mount site/time read: %s failed: %s", attr, msg)
     lat, lon, elev = _observer_site_from_disk()
-    reading = dict(reading)
+    reading = _public_site_time(reading) or {}
     reading["configured"] = {"latitude": lat, "longitude": lon, "elevation": elev}
     with _state_lock:
         reading["last_sync"] = copy.deepcopy(_state["telescope"].get("site_time"))

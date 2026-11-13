@@ -310,6 +310,25 @@ class DashboardWiringTest(unittest.TestCase):
         self.assertEqual(body["configured"]["latitude"], 31.3614)
         self.tel.sync_site_and_time.assert_not_called()
 
+    def test_routes_never_return_exception_text(self):
+        secret = "Traceback ... /Users/someone/secret/path"
+        self.tel.read_site_and_time.return_value = {
+            "utcdate": None, "sitelatitude": 31.36, "sitelongitude": -99.44,
+            "siteelevation": None, "clock_offset_s": None,
+            "errors": {"utcdate": secret, "siteelevation": secret}}
+        self.tel.sync_site_and_time.return_value = {
+            "ok": False, "sent": {"utcdate": "2026-11-13T03:00:00.000Z"},
+            "put_errors": {"utcdate": secret}, "errors": {"utcdate": secret}}
+        with patch.object(dash, "_tel", self.tel):
+            r1 = self.client.get("/api/telescope/site-time")
+            r2 = self.client.post("/api/telescope/site-time/sync")
+            r3 = self.client.get("/api/status")
+        for r in (r1, r2, r3):
+            self.assertNotIn("secret/path", r.get_data(as_text=True))
+        self.assertEqual(r1.get_json()["read_failed"], ["siteelevation", "utcdate"])
+        self.assertEqual(r2.get_json()["put_failed"], ["utcdate"])
+        self.assertFalse(r2.get_json()["ok"])
+
     def test_manual_sync_route(self):
         with patch.object(dash, "_tel", self.tel):
             r = self.client.post("/api/telescope/site-time/sync")
