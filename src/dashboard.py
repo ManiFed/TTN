@@ -106,6 +106,7 @@ _state: dict[str, Any] = {
         "busy":      False,
         "arm_state": None,      # CoverCalibrator cover state int, or None if unavailable
         "arm_busy":  False,
+        "site_time": None,      # last mount site/UTC sync + read-back (issue #149)
     },
     "camera": {
         "enabled":          False,
@@ -3404,6 +3405,109 @@ def _observer_lat_lon_from_disk() -> tuple:
     return lat, lon
 
 
+def _observer_site_from_disk() -> tuple:
+    """(lat, lon east-positive, elevation_m or None) from config.yaml.
+
+    Same keys and precedence as :func:`_observer_lat_lon_from_disk`
+    (``safety.observer`` then ``observatory``); elevation comes from
+    ``safety.observer.elevation`` or ``observatory.elevation``. No
+    IP-geolocation enrichment -- this runs on connect/slew paths.
+    """
+    lat, lon = _observer_lat_lon_from_disk()
+    elev = None
+    try:
+        with open("config.yaml") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except Exception:
+        cfg = {}
+    if isinstance(cfg, dict):
+        obs = (cfg.get("safety") or {}).get("observer") or {}
+        o2 = cfg.get("observatory") or {}
+        raw = obs.get("elevation")
+        if raw in (None, ""):
+            raw = o2.get("elevation")
+        if raw not in (None, ""):
+            try:
+                elev = float(raw)
+            except (TypeError, ValueError):
+                elev = None
+    return lat, lon, elev
+
+
+def _public_site_time(raw: Any) -> Optional[dict]:
+    """Whitelist a site/time reading for API/status output.
+
+    Device/transport exception text stays in the node log; responses carry
+    only which properties failed (CodeQL: no exception text to clients).
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            return None if v is None else float(v)
+        except (TypeError, ValueError):
+            return None
+
+    utc = raw.get("utcdate")
+    out: dict = {
+        "utcdate": utc if isinstance(utc, str) else None,
+        "sitelatitude": _num(raw.get("sitelatitude")),
+        "sitelongitude": _num(raw.get("sitelongitude")),
+        "siteelevation": _num(raw.get("siteelevation")),
+        "node_utc": raw.get("node_utc") if isinstance(raw.get("node_utc"), str) else None,
+        "clock_offset_s": _num(raw.get("clock_offset_s")),
+        "read_failed": sorted(str(k) for k in (raw.get("errors") or {})),
+    }
+    if "sent" in raw or "put_errors" in raw:
+        sent = raw.get("sent") or {}
+        out["sent"] = {str(k): (v if isinstance(v, str) else _num(v))
+                       for k, v in sent.items()}
+        out["put_failed"] = sorted(str(k) for k in (raw.get("put_errors") or {}))
+        out["ok"] = bool(raw.get("ok"))
+    for key in ("reason", "synced_at"):
+        if isinstance(raw.get(key), str):
+            out[key] = raw[key]
+    return out
+
+
+def _sync_mount_site_time(reason: str) -> Optional[dict]:
+    """Best-effort: push configured site + node UTC to the mount (issue #149).
+
+    The Seestar computes its own alt-az tracking rate from its clock and
+    site, which normally come from the phone app and are lost when it is
+    power-cycled (e.g. by the SwitchBot). With a wrong clock it keeps
+    reporting ``tracking: true`` while stars trail. Never raises; the result
+    (including read-back and clock offset) is stored under
+    ``_state["telescope"]["site_time"]`` for /api/status.
+    """
+    tel = _tel
+    if tel is None or not hasattr(tel, "sync_site_and_time"):
+        return None
+    lat, lon, elev = _observer_site_from_disk()
+    if lat == 0.0 and lon == 0.0:
+        logger.warning("Mount site/time sync (%s) skipped: observer lat/lon not "
+                       "configured", reason)
+        return None
+    try:
+        with _device_lock:
+            result = tel.sync_site_and_time(lat, lon, elev)
+    except Exception as exc:  # noqa: BLE001 - must never block the caller
+        logger.warning("Mount site/time sync (%s) failed: %s", reason, exc)
+        return None
+    if not isinstance(result, dict):
+        return None
+    for attr, msg in sorted((result.get("put_errors") or {}).items()):
+        logger.info("Mount site/time sync (%s): %s not applied: %s", reason, attr, msg)
+    result = dict(result)
+    result["reason"] = reason
+    result["synced_at"] = datetime.now(timezone.utc).isoformat()
+    result = _public_site_time(result)
+    with _state_lock:
+        _state["telescope"]["site_time"] = copy.deepcopy(result)
+    return result
+
+
 def _slew_rejection(ra_h: float, dec_d: float) -> Optional[str]:
     """Return a human-readable reason a RA/Dec slew should be refused, or None.
 
@@ -4763,6 +4867,8 @@ def _do_connect(host: str, port: int, set_as_default: bool = False) -> tuple[dic
                     logger.warning("Could not save telescope serial: %s", exc)
             if _safety_mgr is not None:
                 _safety_mgr.attach_telescope(_tel)
+            # Issue #149: the Seestar forgets its clock/site on power-off.
+            _sync_mount_site_time("connect")
         except Exception as exc:
             logger.error("Telescope connect failed: %s", exc)
             friendly = _friendly_conn_error("telescope", host, port, exc)
@@ -5035,6 +5141,43 @@ def api_arm_close():
     return jsonify({"ok": True})
 
 
+@app.route("/api/telescope/site-time")
+def api_telescope_site_time():
+    """Read-only: the mount's UTCDate / site lat, lon, elevation + clock offset.
+
+    ``clock_offset_s`` is device UTC minus node UTC (issue #149). ``configured``
+    is what a sync would send, for comparison. Never writes to the device.
+    """
+    if _tel is None:
+        return jsonify({"error": "Telescope not connected"}), 400
+    try:
+        with _device_lock:
+            reading = _tel.read_site_and_time()
+    except Exception as exc:
+        logger.warning("Mount site/time read failed: %s", exc)
+        return jsonify({"error": "Unable to read mount site/time"}), 500
+    for attr, msg in sorted(((reading or {}).get("errors") or {}).items()):
+        logger.info("Mount site/time read: %s failed: %s", attr, msg)
+    lat, lon, elev = _observer_site_from_disk()
+    reading = _public_site_time(reading) or {}
+    reading["configured"] = {"latitude": lat, "longitude": lon, "elevation": elev}
+    with _state_lock:
+        reading["last_sync"] = copy.deepcopy(_state["telescope"].get("site_time"))
+    return jsonify(reading)
+
+
+@app.route("/api/telescope/site-time/sync", methods=["POST"])
+def api_telescope_site_time_sync():
+    """Push configured site + node UTC to the mount now, then read it back."""
+    if _tel is None:
+        return jsonify({"error": "Telescope not connected"}), 400
+    result = _sync_mount_site_time("manual")
+    if result is None:
+        return jsonify({"error": "Mount site/time sync failed or observer "
+                                 "location not configured — see node_logs"}), 500
+    return jsonify(result)
+
+
 @app.route("/api/telescope/tracking", methods=["POST"])
 def api_tracking():
     if _tel is None:
@@ -5047,6 +5190,8 @@ def api_tracking():
     except Exception as exc:
         logger.exception("Set tracking failed")
         return jsonify({"error": "Unable to set telescope tracking"}), 500
+    if enabled:
+        _sync_mount_site_time("tracking_on")
     logger.info("Tracking %s", "enabled" if enabled else "disabled")
     return jsonify({"ok": True})
 
@@ -5108,6 +5253,7 @@ def api_slew():
             logger.warning("FORCED slew past horizon mask: %s", msg)
 
         logger.info("Slewing: Alt=%.1f°  Az=%.1f°", alt, az)
+        _sync_mount_site_time("slew")
         try:
             with _device_lock:
                 _tel.begin_slew_altaz(alt, az)
@@ -5158,6 +5304,7 @@ def api_slew():
             logger.warning("FORCED slew despite rejection: %s", rejection)
 
         logger.info("Slewing: RA=%.4f h  Dec=%.4f°", ra, dec)
+        _sync_mount_site_time("slew")
         try:
             with _device_lock:
                 _tel.begin_slew(ra, dec)
@@ -6981,9 +7128,11 @@ def _start_wait_seconds(start_str: str, now: Optional[time.struct_time] = None) 
 
 
 def _sched_prepare_mount() -> None:
-    """Best-effort unpark + tracking-on before a run, gated on safety."""
+    """Best-effort site/time sync + unpark + tracking-on before a run, gated on safety."""
     if _tel is None:
         return
+    # Issue #149: give the mount the right clock/site before anything moves.
+    _sync_mount_site_time("schedule_prep")
     if _safety_mgr is not None and not _safety_mgr.is_safe():
         logger.warning("Schedule: system unsafe at startup — not unparking")
         return
@@ -6995,6 +7144,7 @@ def _sched_prepare_mount() -> None:
             if not _tel.is_tracking():
                 logger.info("Schedule: enabling tracking")
                 _tel.set_tracking(True)
+                _sync_mount_site_time("tracking_on")
     except Exception as exc:
         if _is_below_horizon_device_error(exc):
             logger.warning("Schedule: mount preparation hit below-horizon "

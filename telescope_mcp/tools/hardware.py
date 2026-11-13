@@ -248,6 +248,31 @@ def register(server, agent: AgentClient) -> None:
         return agent.post("/api/telescope/tracking", {"enabled": bool(enabled)})
 
     @server.tool()
+    def node_mount_site_time() -> dict:
+        """Read-only: the mount's own clock and site, and how far off they are.
+
+        Returns the device's ``utcdate``, ``sitelatitude``, ``sitelongitude``
+        (east-positive) and ``siteelevation``, plus ``clock_offset_s`` (device
+        UTC minus this node's UTC; positive = mount clock ahead), the
+        configured site, and the last automatic sync. A Seestar that lost its
+        clock on a power cycle reports ``tracking: true`` but trails stars
+        (issue #149) -- a large offset or wrong site here is that failure.
+        Never moves or writes to the mount.
+        """
+        return agent.get("/api/telescope/site-time")
+
+    @server.tool()
+    def node_mount_sync_site_time() -> dict:
+        """Push the configured site and this node's UTC time to the mount now.
+
+        Sets SiteLatitude, SiteLongitude, SiteElevation (skipped if the driver
+        refuses it) and UTCDate, then reads them back with the clock offset.
+        This also runs automatically on connect, schedule start, before
+        slews and after tracking is enabled. It does not move the mount.
+        """
+        return agent.post("/api/telescope/site-time/sync", timeout=30.0)
+
+    @server.tool()
     def node_slew(ra_hours: float, dec_deg: float) -> dict:
         """Slew the telescope to given coordinates. RA in hours, Dec in degrees.
 
