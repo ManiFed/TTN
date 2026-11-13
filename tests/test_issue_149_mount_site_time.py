@@ -94,6 +94,32 @@ class ClockOffsetTest(unittest.TestCase):
         self.assertEqual(out["siteelevation"], 525.0)
         client._put.assert_not_called()  # read-only
 
+    def test_offset_not_inflated_by_slow_site_reads(self):
+        """Codex review on #150: node UTC is sampled at the utcdate GET."""
+        import alpaca.telescope as tmod
+        t0 = datetime(2026, 11, 13, 3, 0, 0, tzinfo=timezone.utc)
+        clock = {"t": t0}
+
+        class _FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["t"]
+
+        tel, client = _telescope_with_mock_client({"utcdate": "2026-11-13T03:00:00.000Z"})
+        base_get = client._get.side_effect
+
+        def _slow_get(attr, **kw):
+            v = base_get(attr, **kw)
+            if attr != "utcdate":
+                clock["t"] = clock["t"] + timedelta(seconds=10)  # each read "times out"
+            return v
+
+        client._get.side_effect = _slow_get
+        with patch.object(tmod, "datetime", _FakeDT):
+            out = tel.read_site_and_time()
+        self.assertEqual(out["clock_offset_s"], 0.0)
+        self.assertEqual(out["node_utc"], "2026-11-13T03:00:00.000Z")
+
     def test_read_tolerates_missing_properties(self):
         tel, _ = _telescope_with_mock_client(
             {"siteelevation": AlpacaError("not implemented", code=NOT_IMPLEMENTED)})

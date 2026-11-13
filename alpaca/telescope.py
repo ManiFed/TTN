@@ -144,13 +144,20 @@ class Telescope:
         out: dict = {"utcdate": None, "sitelatitude": None,
                      "sitelongitude": None, "siteelevation": None,
                      "errors": {}}
-        for attr in ("utcdate", "sitelatitude", "sitelongitude", "siteelevation"):
+        # Sample the node clock around the utcdate GET itself (request/response
+        # midpoint), so slow or timed-out site reads never inflate the offset.
+        before = datetime.now(timezone.utc)
+        try:
+            out["utcdate"] = self._c._get("utcdate")
+        except Exception as exc:  # noqa: BLE001 - read is diagnostic only
+            out["errors"]["utcdate"] = str(exc)
+        after = datetime.now(timezone.utc)
+        node_now = before + (after - before) / 2
+        for attr in ("sitelatitude", "sitelongitude", "siteelevation"):
             try:
-                val = self._c._get(attr)
-                out[attr] = val if attr == "utcdate" else float(val)
+                out[attr] = float(self._c._get(attr))
             except Exception as exc:  # noqa: BLE001 - read is diagnostic only
                 out["errors"][attr] = str(exc)
-        node_now = datetime.now(timezone.utc)
         out["node_utc"] = format_utc_iso(node_now)
         out["clock_offset_s"] = clock_offset_seconds(out["utcdate"], node_now)
         return out
