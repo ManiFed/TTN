@@ -7,8 +7,10 @@ park, and tracking operations.
 
 import logging
 import time
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from .client import AlpacaClient, AlpacaError
+from .client import AlpacaClient, AlpacaError, NOT_IMPLEMENTED
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,70 @@ def is_transient_position_error(exc: BaseException) -> bool:
         return False
     return (getattr(exc, "code", 0) == 1279
             and "not present in the dictionary" in str(exc).lower())
+
+
+# ASCOM error numbers a driver uses when a site property is read-only or the
+# value is refused. SiteElevation in particular is not settable on every
+# Seestar firmware; that must never fail the sync (issue #149).
+_NOT_SETTABLE_CODES = (NOT_IMPLEMENTED, 0x401, 0x402, 0x40B)
+
+
+def format_utc_iso(dt: Optional[datetime] = None) -> str:
+    """ISO 8601 UTC with millisecond precision and a ``Z`` suffix.
+
+    This is the form the ALPACA spec gives for ``UTCDate``
+    (e.g. ``2026-11-13T03:04:05.678Z``).
+    """
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def parse_utc_iso(value: Any) -> Optional[datetime]:
+    """Parse a device ``UTCDate`` string into an aware UTC datetime.
+
+    Tolerates a ``Z`` or explicit offset, no zone at all (treated as UTC),
+    and 0-7 fractional-second digits (.NET drivers emit 7). None if unparsable.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    # Normalise the fractional part to 6 digits for fromisoformat on 3.10.
+    if "." in text:
+        head, _, rest = text.partition(".")
+        digits = ""
+        i = 0
+        while i < len(rest) and rest[i].isdigit():
+            digits += rest[i]
+            i += 1
+        text = head + "." + (digits[:6].ljust(6, "0")) + rest[i:]
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def clock_offset_seconds(device_utc: Any, node_now: Optional[datetime] = None) -> Optional[float]:
+    """Device clock minus node clock, in seconds (positive = device ahead).
+
+    None when the device value cannot be parsed.
+    """
+    dev = parse_utc_iso(device_utc)
+    if dev is None:
+        return None
+    if node_now is None:
+        node_now = datetime.now(timezone.utc)
+    elif node_now.tzinfo is None:
+        node_now = node_now.replace(tzinfo=timezone.utc)
+    return round((dev - node_now).total_seconds(), 3)
 
 
 class Telescope:
@@ -64,6 +130,81 @@ class Telescope:
                             attribute, exc, delay)
                 time.sleep(delay)
         return float(self._c._get(attribute))
+
+    def read_site_and_time(self) -> dict:
+        """Read-only: the mount's own idea of where and when it is.
+
+        Returns ``utcdate``, ``sitelatitude``, ``sitelongitude`` and
+        ``siteelevation`` straight from the device (None for any that fail
+        to read, with the reason under ``errors``), plus ``clock_offset_s``
+        = device UTC minus this node's UTC. A Seestar that lost its clock on
+        a power cycle tracks at the wrong rate while still reporting
+        ``tracking: true`` (issue #149) -- this is how to see that.
+        """
+        out: dict = {"utcdate": None, "sitelatitude": None,
+                     "sitelongitude": None, "siteelevation": None,
+                     "errors": {}}
+        for attr in ("utcdate", "sitelatitude", "sitelongitude", "siteelevation"):
+            try:
+                val = self._c._get(attr)
+                out[attr] = val if attr == "utcdate" else float(val)
+            except Exception as exc:  # noqa: BLE001 - read is diagnostic only
+                out["errors"][attr] = str(exc)
+        node_now = datetime.now(timezone.utc)
+        out["node_utc"] = format_utc_iso(node_now)
+        out["clock_offset_s"] = clock_offset_seconds(out["utcdate"], node_now)
+        return out
+
+    def sync_site_and_time(self, lat: float, lon: float,
+                           elev_m: Optional[float] = None,
+                           now: Optional[datetime] = None) -> dict:
+        """Push site latitude/longitude/elevation and UTC time to the mount.
+
+        ``lon`` is east-positive (ASCOM convention; Texas is negative).
+        Every PUT is fail-soft: a refusal is logged and recorded under
+        ``errors`` but never raised, so a driver that does not implement a
+        setter cannot block connect/slew/tracking. ``siteelevation`` refusals
+        with a not-settable/not-implemented code are expected and logged at
+        INFO. The values are read back afterwards and returned
+        (see :meth:`read_site_and_time`), along with ``sent`` and ``ok``.
+        """
+        sent: dict = {}
+        errors: dict = {}
+
+        def _put(action: str, key: str, value: Any, optional: bool = False) -> None:
+            sent[action] = value
+            try:
+                self._c._put(action, **{key: value})
+            except AlpacaError as exc:
+                errors[action] = str(exc)
+                if optional and getattr(exc, "code", 0) in _NOT_SETTABLE_CODES:
+                    logger.info("Mount %s not settable (%s) - skipped", action, exc)
+                else:
+                    logger.warning("Mount %s sync failed: %s", action, exc)
+            except Exception as exc:  # noqa: BLE001 - transport errors fail soft too
+                errors[action] = str(exc)
+                logger.warning("Mount %s sync failed: %s", action, exc)
+
+        _put("sitelatitude", "SiteLatitude", float(lat))
+        _put("sitelongitude", "SiteLongitude", float(lon))
+        if elev_m is not None:
+            _put("siteelevation", "SiteElevation", float(elev_m), optional=True)
+        # Time last, so it is as fresh as possible when the mount applies it.
+        _put("utcdate", "UTCDate", format_utc_iso(now))
+
+        readback = self.read_site_and_time()
+        readback["sent"] = sent
+        readback["put_errors"] = errors
+        critical = [a for a in ("sitelatitude", "sitelongitude", "utcdate") if a in errors]
+        readback["ok"] = not critical
+        logger.info(
+            "Mount site/time sync: lat=%.4f lon=%.4f elev=%s utc=%s -> device utc=%s "
+            "offset=%ss%s",
+            float(lat), float(lon), elev_m, sent.get("utcdate"),
+            readback.get("utcdate"), readback.get("clock_offset_s"),
+            f" (failed: {', '.join(sorted(errors))})" if errors else "",
+        )
+        return readback
 
     def ra(self) -> float:
         return self._get_position("rightascension")
